@@ -13,6 +13,13 @@ DEFAULTS: dict[str, Any] = {
         "search_num": 20,
         "quality": 4,
     },
+    "box": {
+        "only_admin": False,
+        "box_blacklist": [],
+        "increase_box": False,
+        "auto_box_groups": [],
+        "avatar_api_url": "https://q4.qlogo.cn/headimg_dl?dst_uin={user_id}&spec=640",
+    },
     "reg_time": {
         "qq_reg_time_api_url": "https://api.s01s.cn/API/zcsj/",
         "qq_reg_time_api_key": "",
@@ -44,3 +51,8 @@ def cfg_api_urls() -> dict[str, Any]:
 def cfg_music() -> dict[str, Any]:
     """获取点歌配置。"""
     return get_config().get("music", {})
+
+
+def cfg_box() -> dict[str, Any]:
+    """获取开盒配置。"""
+    return get_config().get("box", {})
