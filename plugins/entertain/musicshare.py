@@ -9,11 +9,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from graiax import silkcoder
 from nonebot import logger
 from nonebot.adapters import Bot, Event
-from nonebot.exception import FinishedException
 from nonebot.matcher import Matcher
 from nonebot.params import RegexGroup
+from PIL import Image, ImageDraw, ImageFont
 
 from ...chat.tools import ToolContext, ToolError, ToolRuntime, tool
 from ...permission import PermLevel, PermScene
@@ -177,13 +178,8 @@ async def _get_song_url_api(platform: Platform, song: Song) -> str | None:
     return str(result.get("url") or "") if isinstance(result, dict) else None
 
 
-async def _convert_audio_to_silk(audio_url: str) -> bytes | None:
-    """下载音频并尝试转换为 silk。"""
-    try:
-        from graiax import silkcoder
-    except Exception:
-        return None
-
+async def _convert_audio_to_silk(audio_url: str) -> bytes:
+    """下载音频并转换为 silk。"""
     client = await get_shared_async_client()
     response = await client.get(audio_url)
     response.raise_for_status()
@@ -197,30 +193,13 @@ async def _convert_audio_to_silk(audio_url: str) -> bytes | None:
     try:
         await silkcoder.async_encode(str(input_path), str(output_path))
         return output_path.read_bytes()
-    except Exception:
-        logger.opt(exception=True).warning("[musicshare] 音频 silk 转换失败")
-        return None
     finally:
         input_path.unlink(missing_ok=True)
         output_path.unlink(missing_ok=True)
 
 
-def _format_song_list(platform: Platform, keyword: str, songs: list[Song]) -> str:
-    """构造文本搜索结果。"""
-    lines = [f"搜索结果：{keyword}", f"来源：{_platform_name_cn(platform)}"]
-    for index, song in enumerate(songs[:20], 1):
-        lines.append(f"{index}. {song.song} - {song.singer}")
-    lines.append("发送 #序号 播放，例如 #1")
-    return "\n".join(lines)
-
-
 def _draw_music_list(platform: Platform, keyword: str, songs: list[Song]) -> bytes:
     """绘制搜索结果图片。"""
-    try:
-        from PIL import Image, ImageDraw, ImageFont
-    except Exception as exc:
-        raise RuntimeError("Pillow 未安装") from exc
-
     width = 900
     row_height = 70
     count = min(len(songs), 20)
@@ -291,13 +270,8 @@ async def _handle_search(matcher: Matcher, bot: Bot, event: Event, groups: tuple
         await matcher.finish("无法获取用户 ID")
     _cache_set(user_id, (platform, songs))
 
-    try:
-        image = _draw_music_list(platform, keyword, songs)
-        await matcher.finish(build_message(bot, build_message_segment(bot, "image", image)))
-    except FinishedException:
-        raise
-    except Exception:
-        await matcher.finish(_format_song_list(platform, keyword, songs))
+    image = _draw_music_list(platform, keyword, songs)
+    await matcher.finish(build_message(bot, build_message_segment(bot, "image", image)))
 
 
 @select_matcher.handle()
@@ -320,20 +294,12 @@ async def _send_song(matcher: Matcher, bot: Bot, platform: Platform, song: Song)
     audio_url = await _get_song_url_api(platform, song)
     if not audio_url:
         await matcher.finish(f"播放失败：{song.song} - {song.singer}")
-    try:
-        if is_qq_official(bot):
-            silk_data = await _convert_audio_to_silk(audio_url)
-            if not silk_data:
-                await matcher.finish(f"播放失败：{song.song} - {song.singer}")
-            segment = build_message_segment(bot, "record", silk_data)
-        else:
-            segment = build_message_segment(bot, "record", audio_url)
-        await matcher.finish(build_message(bot, segment))
-    except FinishedException:
-        raise
-    except Exception:
-        logger.opt(exception=True).warning("[musicshare] 发送歌曲失败")
-        await matcher.finish(f"播放失败：{song.song} - {song.singer}")
+    if is_qq_official(bot):
+        silk_data = await _convert_audio_to_silk(audio_url)
+        segment = build_message_segment(bot, "record", silk_data)
+    else:
+        segment = build_message_segment(bot, "record", audio_url)
+    await matcher.finish(build_message(bot, segment))
 
 
 @tool(
@@ -371,8 +337,6 @@ async def play_music_tool(
         bot = rt.require_bot()
         if is_qq_official(bot):
             silk_data = await _convert_audio_to_silk(audio_url)
-            if not silk_data:
-                raise ToolError("音频转换失败", code="conversion_failed")
             segment = build_message_segment(bot, "record", silk_data)
         else:
             segment = build_message_segment(bot, "record", audio_url)

@@ -11,6 +11,7 @@ from nonebot import logger, on_notice
 from nonebot.adapters import Bot, Event
 from nonebot.matcher import Matcher
 from nonebot.params import RegexGroup
+from PIL import Image
 
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
@@ -122,21 +123,12 @@ async def _do_box(bot: Bot, *, target_id: str, group_id: str | None):
 
     avatar = await _get_avatar_bytes(target_id)
     if not avatar:
-        try:
-            from PIL import Image
-
-            buffer = BytesIO()
-            Image.new("RGB", (640, 640), (255, 255, 255)).save(buffer, format="PNG")
-            avatar = buffer.getvalue()
-        except Exception:
-            avatar = b""
+        buffer = BytesIO()
+        Image.new("RGB", (640, 640), (255, 255, 255)).save(buffer, format="PNG")
+        avatar = buffer.getvalue()
 
     lines = _transform_info(stranger_info, member_info)
-    try:
-        image_bytes = create_image(avatar, lines)
-    except Exception as exc:
-        logger.opt(exception=True).warning("[box] 生成开盒图片失败")
-        return build_message(bot, build_message_segment(bot, "text", "\n".join(lines) or f"QQ号：{target_id}\n图片生成失败：{exc}"))
+    image_bytes = create_image(avatar, lines)
     return build_message(bot, build_message_segment(bot, "image", image_bytes))
 
 

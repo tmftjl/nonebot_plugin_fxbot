@@ -1,0 +1,10 @@
+nonebot2
+nonebot-adapter-onebot
+pydantic
+sqlmodel
+sqlalchemy
+aiosqlite
+httpx
+fastapi
+Pillow>=9.2
+graiax-silkcoder>=0.3.0

@@ -6,25 +6,13 @@ import io
 import random
 from io import BytesIO
 
+from PIL import Image, ImageDraw, ImageFont
 
-def _load_default_font():
-    """加载 Pillow 默认字体。"""
-    try:
-        from PIL import ImageFont
-
-        return ImageFont.load_default()
-    except Exception:
-        return None
+FONT = ImageFont.load_default()
 
 
 def create_image(avatar: bytes, reply: list[str]) -> bytes:
     """生成开盒信息图片。"""
-    try:
-        from PIL import Image, ImageDraw
-    except Exception as exc:
-        raise RuntimeError("Pillow 未安装，无法生成开盒图片") from exc
-
-    font = _load_default_font()
     text = "\n".join(reply)
     lines = text.splitlines() or ["无信息"]
     row_height = 28
@@ -54,7 +42,7 @@ def create_image(avatar: bytes, reply: list[str]) -> bytes:
             random.randint(0, 128),
             255,
         )
-        draw.text((x, y), line, font=font, fill=color)
+        draw.text((x, y), line, font=FONT, fill=color)
         y += row_height
 
     border_color = (

@@ -12,6 +12,7 @@ from typing import Any
 from nonebot import logger
 from nonebot.adapters import Bot, Event
 from nonebot.matcher import Matcher
+from PIL import Image
 
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
@@ -67,31 +68,22 @@ async def _fetch_bytes_from_source(src: str | bytes) -> bytes | None:
 
 async def _encode_images_to_b64(images: Iterable[bytes]) -> list[str]:
     """将图片转换为 WEBP 并压缩。"""
-    try:
-        from PIL import Image
-    except Exception as exc:
-        raise RuntimeError("Pillow 未安装，无法压缩图片") from exc
-
     encoded: list[str] = []
     max_size = 2 * 1024 * 1024
     for image_bytes in images:
-        try:
-            with Image.open(BytesIO(image_bytes)) as image:
-                if image.mode != "RGB":
-                    image = image.convert("RGB")
-                buffer = BytesIO()
-                quality = 100
-                while quality > 10:
-                    buffer.seek(0)
-                    buffer.truncate()
-                    image.save(buffer, format="WEBP", quality=quality)
-                    if buffer.tell() < max_size:
-                        break
-                    quality -= 5
-                encoded.append(base64.b64encode(buffer.getvalue()).decode("utf-8"))
-        except Exception:
-            logger.opt(exception=True).warning("[waves_analyze] 图片压缩失败，使用原图")
-            encoded.append(base64.b64encode(image_bytes).decode("utf-8"))
+        with Image.open(BytesIO(image_bytes)) as image:
+            if image.mode != "RGB":
+                image = image.convert("RGB")
+            buffer = BytesIO()
+            quality = 100
+            while quality > 10:
+                buffer.seek(0)
+                buffer.truncate()
+                image.save(buffer, format="WEBP", quality=quality)
+                if buffer.tell() < max_size:
+                    break
+                quality -= 5
+            encoded.append(base64.b64encode(buffer.getvalue()).decode("utf-8"))
     return encoded
 
 
@@ -189,10 +181,7 @@ async def _handle_waves_analyze(matcher: Matcher, bot: Bot, event: Event) -> Non
     if not image_bytes:
         await matcher.finish("未能读取到有效的图片数据")
 
-    try:
-        images_b64 = await _encode_images_to_b64(image_bytes)
-    except RuntimeError as exc:
-        await matcher.finish(str(exc))
+    images_b64 = await _encode_images_to_b64(image_bytes)
     result_image, tip = await _post_score(images_b64, command_str)
     if not result_image:
         await matcher.finish(f"分析失败: {tip}" if tip else "分析失败，请重试")
