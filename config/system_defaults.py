@@ -1,0 +1,1 @@
+"""Global default config values."""

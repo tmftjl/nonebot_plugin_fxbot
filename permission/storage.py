@@ -1,0 +1,1 @@
+"""Runtime JSON permission storage."""
