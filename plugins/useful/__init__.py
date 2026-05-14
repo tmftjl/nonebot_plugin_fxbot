@@ -16,6 +16,7 @@ from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
 from ...utils.http import get_shared_async_client
 from .config import cfg_taffy
+from . import waves_analyze as waves_analyze
 
 P = Plugin("useful", display_name="实用工具", enabled=True, level=PermLevel.LOW, scene=PermScene.ALL)
 

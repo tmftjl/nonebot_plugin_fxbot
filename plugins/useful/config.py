@@ -12,6 +12,10 @@ DEFAULTS: dict[str, Any] = {
         "username": "",
         "password": "",
     },
+    "waves_analyze": {
+        "api_url": "https://scoreecho.loping151.site/score",
+        "token": "f3e6d1d382925f0c63bd296e3e92a314",
+    },
 }
 
 REG = get_manager().register("useful", DEFAULTS, clean_extra=True)
@@ -25,3 +29,8 @@ def get_config() -> dict[str, Any]:
 def cfg_taffy() -> dict[str, Any]:
     """获取 Taffy 查询配置。"""
     return get_config().get("taffy", {})
+
+
+def cfg_waves_analyze() -> dict[str, Any]:
+    """获取鸣潮评分配置。"""
+    return get_config().get("waves_analyze", {})
