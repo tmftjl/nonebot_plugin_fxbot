@@ -13,6 +13,7 @@ from nonebot.params import RegexGroup
 from ...chat.tools import ToolContext, ToolRuntime, tool
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
+from . import banwords as banwords
 
 P = Plugin("group_admin", display_name="群管", enabled=True, level=PermLevel.ADMIN, scene=PermScene.GROUP)
 
