@@ -214,3 +214,38 @@ async def _handle_reg_time(matcher: Matcher, event: Event, groups: tuple = Regex
     if not text:
         await matcher.finish("查询失败，请检查账号有效性或 API 配置")
     await matcher.finish(_build_registration_message(text, qq))
+
+
+doro_cmd = P.on_regex(
+    r"^#?(?:抽取|随机)?(?:今日)?doro结局$",
+    name="draw",
+    display_name="doro结局",
+    priority=5,
+    block=True,
+    level=PermLevel.LOW,
+    scene=PermScene.ALL,
+)
+
+
+@doro_cmd.handle()
+async def _handle_doro(matcher: Matcher, bot: Bot) -> None:
+    """抽取 Doro 结局。"""
+    url = str(cfg_api_urls().get("doro_api", "")).strip()
+    if not url:
+        await matcher.finish("未配置 doro 接口")
+    try:
+        client = await get_shared_async_client()
+        response = await client.get(url)
+        response.raise_for_status()
+        data = response.json()
+    except Exception:
+        logger.opt(exception=True).warning("[entertain] 获取 doro 结局失败")
+        await matcher.finish("获取 doro 结局失败，请稍后重试")
+
+    title = str(data.get("title", "") or "")
+    desc = str(data.get("description", "") or "")
+    image = data.get("image")
+    parts = [build_message_segment(bot, "text", f"今日 doro 结局：\n\n{title}\n\n{desc}\n")]
+    if image:
+        parts.append(build_message_segment(bot, "image", str(image)))
+    await matcher.finish(build_message(bot, *parts))
