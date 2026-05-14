@@ -209,6 +209,54 @@ async def _mute_all(bot: Bot, group_id: str, *, operator_id: str, enable: bool) 
         return ServiceResult(False, f"操作失败: {exc}")
 
 
+async def _set_admin(bot: Bot, group_id: str, user_id: int, *, operator_id: str, enable: bool) -> ServiceResult:
+    """设置或取消管理员。"""
+    guard = await _guard(bot, group_id, operator_id, target_id=user_id, op_name="设置管理员")
+    if not guard.success:
+        return guard
+    try:
+        operator_info = await bot.get_group_member_info(group_id=int(group_id), user_id=int(operator_id))
+        if operator_info.get("role") != "owner":
+            return ServiceResult(False, "仅群主可操作")
+    except Exception:
+        return ServiceResult(False, "操作者权限获取失败")
+    try:
+        await bot.set_group_admin(group_id=int(group_id), user_id=user_id, enable=enable)
+        return ServiceResult(True, "操作成功")
+    except Exception as exc:
+        return ServiceResult(False, f"操作失败: {exc}")
+
+
+async def _recall_message(bot: Bot, group_id: str, message_id: int, *, operator_id: str) -> ServiceResult:
+    """撤回消息。"""
+    guard = await _guard(bot, group_id, operator_id, op_name="撤回")
+    if not guard.success:
+        return guard
+    try:
+        await bot.delete_msg(message_id=message_id)
+        return ServiceResult(True, "已撤回")
+    except Exception as exc:
+        return ServiceResult(False, f"操作失败: {exc}")
+
+
+async def _set_essence(bot: Bot, group_id: str, message_id: int, *, operator_id: str, enable: bool) -> ServiceResult:
+    """设置或取消精华消息。"""
+    guard = await _guard(bot, group_id, operator_id, op_name="设置精华")
+    if not guard.success:
+        return guard
+    try:
+        api_name = "set_essence_msg" if enable else "delete_essence_msg"
+        if hasattr(bot, api_name):
+            await getattr(bot, api_name)(message_id=message_id)
+        elif hasattr(bot, "call_api"):
+            await bot.call_api(api_name, message_id=message_id)
+        else:
+            return ServiceResult(False, "当前适配器不支持精华消息")
+        return ServiceResult(True, "操作成功")
+    except Exception as exc:
+        return ServiceResult(False, f"操作失败: {exc}")
+
+
 async def _set_title(
     bot: Bot,
     group_id: str,
@@ -469,6 +517,132 @@ async def _handle_remove_title(matcher: Matcher, bot: Bot, event: Event) -> None
         await matcher.finish("请在群聊中使用")
     target_id = _extract_target_id(event) or int(_uid(event))
     result = await _set_title(bot, group_id, target_id, "", operator_id=_uid(event))
+    await matcher.finish(("✅ " if result.success else "❌ ") + result.message)
+
+
+def _reply_message_id(event: Event) -> int | None:
+    """从回复消息中提取 message_id。"""
+    reply = getattr(event, "reply", None)
+    message_id = getattr(reply, "message_id", None) if reply is not None else None
+    try:
+        return int(message_id) if message_id is not None else None
+    except Exception:
+        return None
+
+
+set_admin_cmd = P.on_regex(
+    r"^#设置管理\s*(.+)",
+    name="set_admin",
+    display_name="设置管理员",
+    priority=5,
+    block=True,
+    level=PermLevel.OWNER,
+    scene=PermScene.GROUP,
+)
+
+unset_admin_cmd = P.on_regex(
+    r"^#取消管理\s*(.+)",
+    name="unset_admin",
+    display_name="取消管理员",
+    priority=5,
+    block=True,
+    level=PermLevel.OWNER,
+    scene=PermScene.GROUP,
+)
+
+recall_msg_cmd = P.on_regex(
+    r"^#撤回$",
+    name="recall_msg",
+    display_name="撤回消息",
+    priority=5,
+    block=True,
+    level=PermLevel.ADMIN,
+    scene=PermScene.GROUP,
+)
+
+set_essence_cmd = P.on_regex(
+    r"^#(?:设置精华|设精)$",
+    name="set_essence",
+    display_name="设置精华",
+    priority=5,
+    block=True,
+    level=PermLevel.ADMIN,
+    scene=PermScene.GROUP,
+)
+
+unset_essence_cmd = P.on_regex(
+    r"^#取消精华$",
+    name="unset_essence",
+    display_name="取消精华",
+    priority=5,
+    block=True,
+    level=PermLevel.ADMIN,
+    scene=PermScene.GROUP,
+)
+
+
+@set_admin_cmd.handle()
+async def _handle_set_admin(matcher: Matcher, bot: Bot, event: Event) -> None:
+    """处理设置管理员命令。"""
+    group_id = _gid(event)
+    if not group_id:
+        await matcher.finish("请在群聊中使用")
+    target_id = _extract_target_id(event)
+    if target_id is None:
+        await matcher.finish("请 @ 目标成员或提供 QQ 号")
+    result = await _set_admin(bot, group_id, target_id, operator_id=_uid(event), enable=True)
+    await matcher.finish(("✅ " if result.success else "❌ ") + result.message)
+
+
+@unset_admin_cmd.handle()
+async def _handle_unset_admin(matcher: Matcher, bot: Bot, event: Event) -> None:
+    """处理取消管理员命令。"""
+    group_id = _gid(event)
+    if not group_id:
+        await matcher.finish("请在群聊中使用")
+    target_id = _extract_target_id(event)
+    if target_id is None:
+        await matcher.finish("请 @ 目标成员或提供 QQ 号")
+    result = await _set_admin(bot, group_id, target_id, operator_id=_uid(event), enable=False)
+    await matcher.finish(("✅ " if result.success else "❌ ") + result.message)
+
+
+@recall_msg_cmd.handle()
+async def _handle_recall_msg(matcher: Matcher, bot: Bot, event: Event) -> None:
+    """处理撤回消息命令。"""
+    group_id = _gid(event)
+    if not group_id:
+        await matcher.finish("请在群聊中使用")
+    message_id = _reply_message_id(event)
+    if message_id is None:
+        await matcher.finish("请回复要撤回的消息后再使用该命令")
+    result = await _recall_message(bot, group_id, message_id, operator_id=_uid(event))
+    await matcher.finish(("✅ " if result.success else "❌ ") + result.message)
+
+
+@set_essence_cmd.handle()
+async def _handle_set_essence(matcher: Matcher, bot: Bot, event: Event) -> None:
+    """处理设置精华命令。"""
+    group_id = _gid(event)
+    if not group_id:
+        await matcher.finish("请在群聊中使用")
+    message_id = _reply_message_id(event)
+    if message_id is None:
+        await matcher.finish("请回复目标消息后再使用")
+    result = await _set_essence(bot, group_id, message_id, operator_id=_uid(event), enable=True)
+    await matcher.finish(("✅ " if result.success else "❌ ") + result.message)
+
+
+@unset_essence_cmd.handle()
+async def _handle_unset_essence(matcher: Matcher, bot: Bot, event: Event) -> None:
+    """处理取消精华命令。"""
+    group_id = _gid(event)
+    if not group_id:
+        await matcher.finish("请在群聊中使用")
+    message_id = _reply_message_id(event)
+    if message_id is None:
+        await matcher.finish("请回复目标消息后再使用")
+    result = await _set_essence(bot, group_id, message_id, operator_id=_uid(event), enable=False)
     await matcher.finish(("✅ " if result.success else "❌ ") + result.message)
 
 
