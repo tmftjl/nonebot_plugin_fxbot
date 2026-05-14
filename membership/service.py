@@ -90,6 +90,13 @@ class MembershipService:
             await session.refresh(group)
             return group
 
+    async def list_groups(self) -> list[MembershipGroup]:
+        """列出所有会员群。"""
+        maker = get_session_maker()
+        async with maker() as session:
+            result = await session.execute(select(MembershipGroup))
+            return list(result.scalars().all())
+
     async def extend_group(
         self,
         group_id: str,

@@ -26,6 +26,8 @@ class MembershipGroup(BaseIDModel, table=True):
     expires_at: datetime | None = Field(default=None, nullable=True)
     managed_by_bot: str | None = Field(default=None, nullable=True)
     remark: str | None = Field(default=None, nullable=True)
+    last_reminder_on: str | None = Field(default=None, nullable=True)
+    expired_at: datetime | None = Field(default=None, nullable=True)
     created_at: datetime = Field(default_factory=utc_now, nullable=False)
     updated_at: datetime = Field(default_factory=utc_now, nullable=False)
 

@@ -48,6 +48,13 @@ async def init() -> None:
     _import_startup_module("chat.router")
 
     try:
+        from .membership.tasks import setup_membership_tasks
+
+        setup_membership_tasks()
+    except Exception:
+        logger.opt(exception=True).warning("[FxBot] 会员定时任务注册失败，核心功能继续启动")
+
+    try:
         from .console.server import mount_console
     except ImportError:
         mount_console = None

@@ -9,6 +9,10 @@ SYSTEM_DEFAULTS = {
         "cache_ttl_seconds": 60,
         "expire_notice_days": [7, 3, 1],
         "auto_leave_expired_groups": False,
+        "enable_scheduler": True,
+        "schedule_time": "12:00",
+        "batch_delay_seconds": 0,
+        "contact_info": "",
     },
     "console": {
         "enabled": True,
