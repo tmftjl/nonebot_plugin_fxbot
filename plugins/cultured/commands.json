@@ -1,0 +1,39 @@
+{
+  "api_commands": [
+    {
+      "name": "jk",
+      "url": "https://api.suyanw.cn/api/jk.php",
+      "method": "direct",
+      "regex": "",
+      "response_text": null
+    },
+    {
+      "name": "黑丝",
+      "url": "https://api.suyanw.cn/api/hs.php",
+      "method": "direct",
+      "regex": "",
+      "response_text": "黑丝来咯"
+    },
+    {
+      "name": "白丝",
+      "url": "https://v2.api-m.com/api/baisi",
+      "method": "get_text",
+      "regex": "",
+      "response_text": "白丝来咯~"
+    },
+    {
+      "name": "cos",
+      "url": "https://api.suyanw.cn/api/cos.php?type=json",
+      "method": "get_text",
+      "regex": "",
+      "response_text": "COS 来咯~"
+    },
+    {
+      "name": "腿",
+      "url": "https://api.suyanw.cn/api/meitui.php",
+      "method": "get_text_regex",
+      "regex": "https?://[^ ]+",
+      "response_text": "美腿来咯~"
+    }
+  ]
+}
