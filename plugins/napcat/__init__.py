@@ -10,6 +10,7 @@ from nonebot.matcher import Matcher
 from ...chat.tools import ToolContext, ToolRuntime, tool
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
+from . import image_display as image_display
 
 P = Plugin("napcat", display_name="NapCat", enabled=True, level=PermLevel.LOW, scene=PermScene.ALL)
 

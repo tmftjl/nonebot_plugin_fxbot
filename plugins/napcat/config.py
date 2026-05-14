@@ -1,0 +1,38 @@
+"""NapCat 插件配置。"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from ...config import get_manager
+
+DEFAULTS: dict[str, Any] = {
+    "image_display": {
+        "enabled": True,
+        "type": 2,
+        "text": "Ciallo~",
+        "list": [
+            "你干嘛~",
+            "我喜欢你",
+            "[图片]",
+        ],
+        "api": "https://v1.hitokoto.cn/?encode=text",
+    },
+}
+
+REG = get_manager().register("napcat", DEFAULTS, clean_extra=True)
+
+
+def get_config() -> dict[str, Any]:
+    """获取 NapCat 完整配置。"""
+    return REG.load()
+
+
+def save_config(cfg: dict[str, Any]) -> None:
+    """保存 NapCat 配置。"""
+    REG.save(cfg)
+
+
+def cfg_image_display() -> dict[str, Any]:
+    """获取图片外显配置。"""
+    return get_config().get("image_display", {})
