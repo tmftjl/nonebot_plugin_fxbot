@@ -7,6 +7,12 @@ from typing import Any
 from ...config import get_manager
 
 DEFAULTS: dict[str, Any] = {
+    "music": {
+        "api_base": "https://api.vkeys.cn",
+        "provider_default": "tencent",
+        "search_num": 20,
+        "quality": 4,
+    },
     "reg_time": {
         "qq_reg_time_api_url": "https://api.s01s.cn/API/zcsj/",
         "qq_reg_time_api_key": "",
@@ -32,3 +38,8 @@ def cfg_reg_time() -> dict[str, Any]:
 def cfg_api_urls() -> dict[str, Any]:
     """获取娱乐插件 API 地址配置。"""
     return get_config().get("api_urls", {})
+
+
+def cfg_music() -> dict[str, Any]:
+    """获取点歌配置。"""
+    return get_config().get("music", {})
