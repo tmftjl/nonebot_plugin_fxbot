@@ -19,6 +19,7 @@ from ...utils.compat import build_message, build_message_segment
 from ...utils.http import get_shared_async_client
 from .config import cfg_api_urls, cfg_reg_time
 from . import musicshare as musicshare
+from . import welcome as welcome
 
 P = Plugin("entertain", display_name="娱乐", enabled=True, level=PermLevel.LOW, scene=PermScene.ALL)
 
