@@ -20,3 +20,11 @@ __plugin_meta__ = PluginMetadata(
 async def _fxbot_startup() -> None:
     """在 NoneBot 启动阶段初始化框架底座。"""
     await bootstrap.init()
+
+
+@get_driver().on_shutdown
+async def _fxbot_shutdown() -> None:
+    """在 NoneBot 关闭阶段释放共享资源。"""
+    from .utils.http import close_shared_async_client
+
+    await close_shared_async_client()
