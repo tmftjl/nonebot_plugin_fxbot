@@ -1,1 +1,30 @@
-"""Global default config values."""
+"""全局默认配置。"""
+
+from __future__ import annotations
+
+SYSTEM_DEFAULTS = {
+    "membership": {
+        "enabled": True,
+        "renew_commands": ["续费", "fxbot续费", "查到期", "fxbot查到期", "控制台登录"],
+        "cache_ttl_seconds": 60,
+        "expire_notice_days": [7, 3, 1],
+        "auto_leave_expired_groups": False,
+    },
+    "console": {
+        "enabled": True,
+        "mount_path": "/fxbot",
+        "token": "",
+    },
+    "chat": {
+        "enabled": True,
+        "command_prefixes": ["#", "/", "."],
+        "group_requires_mention": True,
+        "provider": "",
+        "providers": {},
+        "max_history": 20,
+        "max_tool_rounds": 3,
+    },
+    "permission": {
+        "bot_admins": [],
+    },
+}
