@@ -3,13 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-import tempfile
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Literal
 
-from graiax import silkcoder
 from nonebot import logger
 from nonebot.adapters import Bot, Event
 from nonebot.matcher import Matcher
@@ -19,7 +16,7 @@ from PIL import Image, ImageDraw, ImageFont
 from ...chat.tools import ToolContext, ToolError, ToolRuntime, tool
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
-from ...utils.compat import build_message, build_message_segment, is_qq_official
+from ...utils.compat import build_message, build_message_segment
 from ...utils.http import get_shared_async_client
 from .config import cfg_music
 
@@ -178,26 +175,6 @@ async def _get_song_url_api(platform: Platform, song: Song) -> str | None:
     return str(result.get("url") or "") if isinstance(result, dict) else None
 
 
-async def _convert_audio_to_silk(audio_url: str) -> bytes:
-    """下载音频并转换为 silk。"""
-    client = await get_shared_async_client()
-    response = await client.get(audio_url)
-    response.raise_for_status()
-
-    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as input_file:
-        input_file.write(response.content)
-        input_path = Path(input_file.name)
-    with tempfile.NamedTemporaryFile(suffix=".silk", delete=False) as output_file:
-        output_path = Path(output_file.name)
-
-    try:
-        await silkcoder.async_encode(str(input_path), str(output_path))
-        return output_path.read_bytes()
-    finally:
-        input_path.unlink(missing_ok=True)
-        output_path.unlink(missing_ok=True)
-
-
 def _draw_music_list(platform: Platform, keyword: str, songs: list[Song]) -> bytes:
     """绘制搜索结果图片。"""
     width = 900
@@ -294,11 +271,7 @@ async def _send_song(matcher: Matcher, bot: Bot, platform: Platform, song: Song)
     audio_url = await _get_song_url_api(platform, song)
     if not audio_url:
         await matcher.finish(f"播放失败：{song.song} - {song.singer}")
-    if is_qq_official(bot):
-        silk_data = await _convert_audio_to_silk(audio_url)
-        segment = build_message_segment(bot, "record", silk_data)
-    else:
-        segment = build_message_segment(bot, "record", audio_url)
+    segment = build_message_segment(bot, "record", audio_url)
     await matcher.finish(build_message(bot, segment))
 
 
@@ -335,11 +308,7 @@ async def play_music_tool(
             raise ToolError(f"无法获取歌曲播放链接：{song.song}", code="url_unavailable")
 
         bot = rt.require_bot()
-        if is_qq_official(bot):
-            silk_data = await _convert_audio_to_silk(audio_url)
-            segment = build_message_segment(bot, "record", silk_data)
-        else:
-            segment = build_message_segment(bot, "record", audio_url)
+        segment = build_message_segment(bot, "record", audio_url)
 
         if ctx.group_id:
             await bot.send_group_msg(group_id=int(ctx.group_id), message=segment)

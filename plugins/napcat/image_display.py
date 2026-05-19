@@ -11,7 +11,7 @@ from nonebot.matcher import Matcher
 
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
-from ...utils.compat import has_onebot_v11
+from ...utils.compat import get_onebot_v11_message_segment_class
 from ...utils.http import get_shared_async_client
 from .config import cfg_image_display, get_config, save_config
 
@@ -20,17 +20,6 @@ P = Plugin("napcat", display_name="NapCat", enabled=True, level=PermLevel.LOW, s
 _hitokoto_cache = "Ciallo~"
 _original_image: Any = None
 _patched = False
-
-
-def _message_segment_class():
-    """获取 OneBot V11 MessageSegment 类。"""
-    if not has_onebot_v11():
-        return None
-    try:
-        from nonebot.adapters.onebot.v11 import MessageSegment
-    except Exception:
-        return None
-    return MessageSegment
 
 
 async def _fetch_hitokoto(api_url: str) -> str:
@@ -68,7 +57,7 @@ def enable_image_summary() -> bool:
     """启用 OneBot V11 图片外显补丁。"""
     global _original_image, _patched
 
-    message_segment = _message_segment_class()
+    message_segment = get_onebot_v11_message_segment_class()
     if message_segment is None:
         logger.debug("[NapCat] OneBot V11 未安装，跳过图片外显补丁")
         return False
@@ -93,7 +82,7 @@ def disable_image_summary() -> bool:
     """关闭 OneBot V11 图片外显补丁。"""
     global _patched
 
-    message_segment = _message_segment_class()
+    message_segment = get_onebot_v11_message_segment_class()
     if message_segment is None or _original_image is None:
         return False
     if _patched:

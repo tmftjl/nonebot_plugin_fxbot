@@ -37,6 +37,17 @@ def is_qq_official(bot: Bot) -> bool:
     return has_qq_official() and _adapter_module(bot).startswith("nonebot.adapters.qq")
 
 
+def get_onebot_v11_message_segment_class():
+    """获取 OneBot V11 MessageSegment 类。"""
+    if not has_onebot_v11():
+        return None
+    try:
+        from nonebot.adapters.onebot.v11 import MessageSegment
+    except Exception:
+        return None
+    return MessageSegment
+
+
 def _image_bytes(data: Any) -> bytes:
     """将本地图片输入转换为字节。"""
     if isinstance(data, bytes):

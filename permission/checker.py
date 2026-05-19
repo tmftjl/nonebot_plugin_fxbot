@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from nonebot import get_driver
+from nonebot.adapters import Bot, Event
 from nonebot.permission import Permission
 
 from .policy import PolicyChain
@@ -119,7 +120,7 @@ class PermissionChecker:
             return parts[0], None
         return None, None
 
-    async def check(self, feature: str, bot: Any, event: Any) -> bool:
+    async def check(self, feature: str, bot: Bot, event: Event) -> bool:
         """检查指定 feature 是否允许当前事件调用。"""
         config = get_storage().load()
         if not config:
@@ -152,7 +153,7 @@ _global_checker = PermissionChecker()
 def permission_for(feature: str, *, category: str = "sub") -> Permission:
     """构造 NoneBot Permission。"""
 
-    async def _checker(bot: Any, event: Any) -> bool:
+    async def _checker(bot: Bot, event: Event) -> bool:
         if category != "sub":
             return True
         return await _global_checker.check(feature, bot, event)

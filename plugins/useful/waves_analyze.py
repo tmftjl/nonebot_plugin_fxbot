@@ -16,7 +16,7 @@ from PIL import Image
 
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
-from ...utils.compat import build_message, build_message_segment, is_qq_official
+from ...utils.compat import build_message, build_message_segment
 from ...utils.http import get_shared_async_client
 from .config import cfg_waves_analyze
 
@@ -172,8 +172,6 @@ async def _handle_waves_analyze(matcher: Matcher, bot: Bot, event: Event) -> Non
 
     image_sources = await _get_images_from_event_or_reply(bot, event)
     if not image_sources:
-        if is_qq_official(bot):
-            await matcher.finish("未获取到图片，请发送带图片的消息")
         await matcher.finish("未获取到图片，请发送带图片的消息或回复/引用带图消息")
 
     results = await asyncio.gather(*[asyncio.create_task(_fetch_bytes_from_source(source)) for source in image_sources])

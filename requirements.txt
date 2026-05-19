@@ -1,4 +1,4 @@
-nonebot2
+nonebot2[fastapi,httpx]
 nonebot-adapter-onebot
 pydantic
 sqlmodel
@@ -7,4 +7,3 @@ aiosqlite
 httpx
 fastapi
 Pillow>=9.2
-graiax-silkcoder>=0.3.0
