@@ -97,6 +97,24 @@ class MembershipService:
             result = await session.execute(select(MembershipGroup))
             return list(result.scalars().all())
 
+    async def list_codes(self) -> list[RenewCode]:
+        """列出所有续费码。"""
+        maker = get_session_maker()
+        async with maker() as session:
+            result = await session.execute(select(RenewCode))
+            return list(result.scalars().all())
+
+    async def delete_group(self, group_id: str) -> bool:
+        """删除会员群记录。"""
+        maker = get_session_maker()
+        async with maker() as session:
+            group = await self.get_group(group_id, session=session)
+            if group is None:
+                return False
+            await session.delete(group)
+            await session.commit()
+            return True
+
     async def extend_group(
         self,
         group_id: str,

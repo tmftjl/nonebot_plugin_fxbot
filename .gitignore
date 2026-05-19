@@ -2,3 +2,22 @@ __pycache__/
 temp/
 .agents/
 .claude/
+
+# Python
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Runtime data and local config
+data/
+.env
+.env.*
+
+# Frontend
+node_modules/
+console/web/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*

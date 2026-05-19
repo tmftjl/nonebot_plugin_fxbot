@@ -1,0 +1,391 @@
+/* FxBot 控制台主题样式 */
+
+/* ==================== CSS变量 ==================== */
+:root {
+  /* 蓝色主题配色 */
+  --color-primary: #3b82f6;
+  --color-primary-light: #60a5fa;
+  --color-primary-dark: #2563eb;
+  --color-success: #10b981;
+  --color-warning: #f59e0b;
+  --color-danger: #ef4444;
+  --color-info: #06b6d4;
+
+  --color-bg: #f8fafc;
+  --color-bg-secondary: #ffffff;
+  --color-bg-tertiary: #f1f5f9;
+  --color-bg-card: rgba(255, 255, 255, 0.95);
+
+  --color-text: #1e293b;
+  --color-text-secondary: #64748b;
+  --color-text-tertiary: #94a3b8;
+
+  --color-border: #e2e8f0;
+  --color-border-light: #f1f5f9;
+  --color-border-lighter: #f8fafc;
+
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.06);
+  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.05), 0 2px 4px rgba(0, 0, 0, 0.03);
+  --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.08), 0 4px 6px rgba(0, 0, 0, 0.03);
+  --shadow-xl: 0 20px 25px rgba(0, 0, 0, 0.1), 0 10px 10px rgba(0, 0, 0, 0.02);
+  --shadow-glow: 0 0 30px rgba(59, 130, 246, 0.25);
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+
+  --transition-fast: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+  --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-slow: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* 暗色主题 */
+html.dark {
+  --color-bg: #0f172a;
+  --color-bg-secondary: rgba(30, 41, 59, 0.95);
+  --color-bg-tertiary: #1e293b;
+  --color-bg-card: rgba(30, 41, 59, 0.8);
+
+  --color-text: #f1f5f9;
+  --color-text-secondary: #cbd5e1;
+  --color-text-tertiary: #94a3b8;
+
+  --color-border: #334155;
+  --color-border-light: #475569;
+  --color-border-lighter: #64748b;
+
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.5), 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.4), 0 2px 4px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.5), 0 4px 6px rgba(0, 0, 0, 0.4);
+  --shadow-xl: 0 20px 25px rgba(0, 0, 0, 0.6), 0 10px 10px rgba(0, 0, 0, 0.5);
+  --shadow-glow: 0 0 40px rgba(59, 130, 246, 0.4);
+}
+
+/* ==================== 全局样式覆盖 ==================== */
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+/* ==================== Element Plus 主题覆盖 ==================== */
+.el-header {
+  background: var(--color-bg-card) !important;
+  backdrop-filter: blur(20px);
+  border-bottom: 1px solid var(--color-border);
+  box-shadow: var(--shadow-sm);
+  position: relative;
+}
+
+.el-header::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--color-primary), var(--color-info));
+  background-size: 200% 100%;
+  animation: gradientShift 3s ease infinite;
+}
+
+@keyframes gradientShift {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+
+.el-aside {
+  background: var(--color-bg-card) !important;
+  backdrop-filter: blur(20px);
+  border-right: 1px solid var(--color-border);
+  position: relative;
+}
+
+.el-aside::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 3px;
+  height: 100%;
+  background: linear-gradient(180deg, var(--color-primary), var(--color-info));
+  opacity: 0.2;
+}
+
+.el-menu {
+  background-color: transparent !important;
+  border-right: none !important;
+}
+
+.el-menu-item, .el-sub-menu__title {
+  border-radius: var(--radius-md);
+  margin: 4px 8px;
+  transition: var(--transition);
+  position: relative;
+  overflow: hidden;
+}
+
+.el-menu-item::before, .el-sub-menu__title::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 4px;
+  height: 0;
+  background: var(--color-primary);
+  transition: var(--transition);
+  border-radius: 0 4px 4px 0;
+}
+
+.el-menu-item:hover::before, .el-sub-menu__title:hover::before {
+  height: 60%;
+}
+
+.el-menu-item.is-active {
+  background: linear-gradient(135deg, var(--color-primary), var(--color-primary-light)) !important;
+  color: white !important;
+  box-shadow: var(--shadow-glow);
+}
+
+.el-menu-item.is-active::before {
+  height: 100%;
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.el-main {
+  background: var(--color-bg) !important;
+  padding: 24px;
+}
+
+/* ==================== 卡片样式 ==================== */
+.el-card {
+  background: var(--color-bg-card);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  transition: var(--transition);
+}
+
+.el-card:hover {
+  box-shadow: var(--shadow-md);
+}
+
+/* ==================== 按钮样式 ==================== */
+.el-button--primary {
+  background: linear-gradient(135deg, var(--color-primary), var(--color-primary-light));
+  border: none;
+  box-shadow: var(--shadow-sm);
+}
+
+.el-button--primary:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-lg), var(--shadow-glow);
+}
+
+.el-button {
+  border-radius: var(--radius-md);
+  transition: var(--transition);
+}
+
+/* ==================== 表格样式 ==================== */
+.el-table {
+  background-color: var(--color-bg-card);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+}
+
+.el-table thead {
+  background: linear-gradient(135deg, var(--color-bg-tertiary), var(--color-border-light));
+}
+
+.el-table th {
+  background-color: transparent !important;
+  color: var(--color-text);
+  font-weight: 700;
+}
+
+.el-table tr:hover > td {
+  background-color: var(--color-bg-tertiary) !important;
+}
+
+/* ==================== 标签样式 ==================== */
+.el-tag {
+  border-radius: var(--radius-md);
+  font-weight: 600;
+}
+
+.el-tag--success {
+  background: rgba(16, 185, 129, 0.15);
+  color: var(--color-success);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.el-tag--warning {
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--color-warning);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.el-tag--danger {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--color-danger);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+/* ==================== 输入框样式 ==================== */
+.el-input__wrapper {
+  background-color: var(--color-bg-tertiary);
+  border-radius: var(--radius-md);
+  box-shadow: none;
+  border: 1px solid var(--color-border);
+  transition: var(--transition);
+}
+
+.el-input__wrapper:hover {
+  border-color: var(--color-primary);
+}
+
+.el-input__wrapper.is-focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+/* ==================== 对话框样式 ==================== */
+/* 弹窗主体：更圆润，去掉边框，强化阴影 */
+.el-dialog {
+  background: #ffffff;
+  border-radius: 16px;
+  box-shadow: 0 12px 32px 4px rgba(0, 0, 0, 0.08), 0 8px 20px rgba(0, 0, 0, 0.04);
+  border: none;
+  overflow: hidden;
+}
+
+.el-dialog__header {
+  text-align: center;
+  padding: 16px 16px 0; 
+  background: transparent;
+  border-bottom: none;
+  margin-right: 0;
+}
+
+/* 标题文字优化 */
+.el-dialog__title {
+  font-size: 18px;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+/* 隐藏关闭按钮 (X号) */
+.el-dialog__headerbtn {
+  display: none;
+}
+
+/* 内容区域：更加紧凑 */
+.el-dialog__body {
+  padding: 12px 16px;
+}
+
+/* 底部：缩小内边距 */
+.el-dialog__footer {
+  padding: 0 16px 16px;
+  background: transparent;
+  border-top: none;
+  text-align: right;
+}
+/* ==================== 统计卡片 ==================== */
+.stat-card {
+  background: var(--color-bg-card);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  transition: var(--transition);
+  cursor: pointer;
+}
+
+.stat-card:hover {
+  transform: translateY(-4px);
+  box-shadow: var(--shadow-lg);
+  border-color: var(--color-primary);
+}
+
+/* ==================== 页面标题 ==================== */
+.page-title {
+  font-size: 28px;
+  font-weight: 800;
+  margin-bottom: 24px;
+  background: linear-gradient(135deg, var(--color-primary), var(--color-info));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* ==================== 动画 ==================== */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateX(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* ==================== 自定义滚动条 ==================== */
+::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: transparent;
+}
+
+* {
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* IE and Edge */
+}
+
+/* ==================== 通用工具类 ==================== */
+.gradient-text {
+  background: linear-gradient(135deg, var(--color-primary), var(--color-info));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.glass-card {
+  background: var(--color-bg-card);
+  backdrop-filter: blur(20px);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+}

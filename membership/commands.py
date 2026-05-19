@@ -6,8 +6,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 from nonebot.adapters import Event
+from nonebot import get_driver
 from nonebot.matcher import Matcher
 
+from ..config import get_manager as get_config_manager
 from ..console.auth import rotate_console_token
 from ..permission import PermLevel, PermScene
 from ..plugin import Plugin
@@ -141,4 +143,9 @@ async def _handle_expiry(matcher: Matcher, event: Event) -> None:
 async def _handle_console_login(matcher: Matcher) -> None:
     """处理控制台登录命令。"""
     token = rotate_console_token()
-    await matcher.finish(f"控制台 token：{token}")
+    cfg = get_config_manager().get_system()
+    console_cfg = cfg.get("console") if isinstance(cfg.get("console"), dict) else {}
+    path = str(console_cfg.get("mount_path") or "/fxbot")
+    host = str(get_driver().config.host)
+    port = int(get_driver().config.port)
+    await matcher.finish(f"控制台地址：http://{host}:{port}{path}?token={token}")

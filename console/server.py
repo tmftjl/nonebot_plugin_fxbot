@@ -11,7 +11,7 @@ from nonebot import get_app, logger
 
 from ..config import get_manager
 
-from .routes import bots, config, membership, permissions
+from .routes import bots, config, membership, meta, permissions
 
 _mounted = False
 
@@ -42,6 +42,7 @@ def mount_console() -> None:
     router.include_router(permissions.router)
     router.include_router(config.router)
     router.include_router(bots.router)
+    router.include_router(meta.router)
 
     @router.get("/health")
     async def health() -> dict[str, bool]:
@@ -50,17 +51,18 @@ def mount_console() -> None:
 
     dist_dir = Path(__file__).parent / "web" / "dist"
     index_file = dist_dir / "index.html"
-    if index_file.exists():
+    has_frontend = index_file.exists()
+    if has_frontend:
 
         @router.get("")
         async def index() -> FileResponse:
             """返回控制台首页。"""
             return FileResponse(index_file, media_type="text/html")
-
-        app.mount(f"{prefix}/assets", StaticFiles(directory=str(dist_dir)), name="fxbot_console_assets")
     else:
         logger.warning("[FxBot] 控制台前端 dist 不存在，仅挂载 API，不执行前端构建")
 
     app.include_router(router)
+    if has_frontend:
+        app.mount(prefix, StaticFiles(directory=str(dist_dir), html=True), name="fxbot_console")
     _mounted = True
     logger.info(f"[FxBot] 控制台已挂载: {prefix}")
