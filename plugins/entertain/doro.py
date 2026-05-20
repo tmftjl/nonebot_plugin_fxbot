@@ -28,7 +28,7 @@ doro_cmd = P.on_regex(
 @doro_cmd.handle()
 async def _handle_doro(matcher: Matcher, bot: Bot) -> None:
     """抽取 Doro 结局。"""
-    url = str(cfg_api_urls().get("doro_api") or "").strip()
+    url = str(cfg_api_urls()["doro_api"]).strip()
     if not url:
         await matcher.finish("未配置 doro 接口")
     try:

@@ -53,7 +53,7 @@ taffy_cmd = P.on_regex(
 async def _handle_taffy(matcher: Matcher, groups: tuple = RegexGroup()) -> None:
     """查询 Taffy 流量统计。"""
     cfg = cfg_taffy()
-    api_url = str(cfg.get("api_url") or "").strip()
+    api_url = str(cfg["api_url"]).strip()
     if not api_url:
         await matcher.finish("未配置 Taffy API 地址")
 
@@ -63,8 +63,8 @@ async def _handle_taffy(matcher: Matcher, groups: tuple = RegexGroup()) -> None:
         url += ("&" if "?" in url else "?") + urlencode({"user": query_user})
 
     headers = {"User-Agent": "NoneBot FxBot Useful"}
-    username = str(cfg.get("username") or "").strip()
-    password = str(cfg.get("password") or "").strip()
+    username = str(cfg["username"]).strip()
+    password = str(cfg["password"]).strip()
     if username and password:
         token = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
         headers["Authorization"] = f"Basic {token}"

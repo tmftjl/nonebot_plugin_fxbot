@@ -15,16 +15,16 @@ from .register import get_provider_class, provider_registry
 def _provider_configs() -> dict[str, dict[str, Any]]:
     """读取系统配置中的 Provider 配置。"""
     cfg = get_config_manager().get_system()
-    chat_cfg = cfg.get("chat") if isinstance(cfg.get("chat"), dict) else {}
-    providers = chat_cfg.get("providers") if isinstance(chat_cfg.get("providers"), dict) else {}
+    chat_cfg = cfg["chat"]
+    providers = chat_cfg["providers"]
     return {str(k): v for k, v in providers.items() if isinstance(v, dict)}
 
 
 def _default_provider_name() -> str:
     """读取默认对话 Provider 名称。"""
     cfg = get_config_manager().get_system()
-    chat_cfg = cfg.get("chat") if isinstance(cfg.get("chat"), dict) else {}
-    return str(chat_cfg.get("provider") or "")
+    chat_cfg = cfg["chat"]
+    return str(chat_cfg["provider"] or "")
 
 
 class ProviderManager:
@@ -86,15 +86,15 @@ class ProviderManager:
             return provider_name, configs[provider_name]
 
         for candidate, config in configs.items():
-            if str(config.get("provider_type", "chat")) == capability:
+            if str(config["provider_type"]) == capability:
                 return candidate, config
 
         raise ValueError(f"未找到 {capability} Provider 配置: {name or '<default>'}")
 
     def _create_provider(self, name: str, config: dict[str, Any]) -> BaseProvider:
         """创建 Provider 实例。"""
-        api_type = str(config.get("type") or "openai")
-        capability_type = str(config.get("provider_type") or "chat")
+        api_type = str(config["type"])
+        capability_type = str(config["provider_type"])
         provider_type = f"{api_type}_{capability_type}"
 
         try:
@@ -127,7 +127,7 @@ class ProviderManager:
         return [
             name
             for name, config in _provider_configs().items()
-            if str(config.get("provider_type", "chat")) == provider_type
+            if str(config["provider_type"]) == provider_type
         ]
 
     def get_api_config(self, name: str) -> dict[str, Any] | None:

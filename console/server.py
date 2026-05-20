@@ -19,8 +19,8 @@ _mounted = False
 def _mount_path() -> str:
     """读取控制台挂载路径。"""
     cfg = get_manager().get_system()
-    console_cfg = cfg.get("console") if isinstance(cfg.get("console"), dict) else {}
-    path = str(console_cfg.get("mount_path") or "/fxbot").strip()
+    console_cfg = cfg["console"]
+    path = str(console_cfg["mount_path"]).strip()
     return path if path.startswith("/") else f"/{path}"
 
 
@@ -31,8 +31,8 @@ def mount_console() -> None:
         return
 
     cfg = get_manager().get_system()
-    console_cfg = cfg.get("console") if isinstance(cfg.get("console"), dict) else {}
-    if not bool(console_cfg.get("enabled", True)):
+    console_cfg = cfg["console"]
+    if not bool(console_cfg["enabled"]):
         return
 
     app = get_app()

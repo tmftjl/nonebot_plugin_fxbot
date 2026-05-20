@@ -56,8 +56,8 @@ def _uid(event: Event) -> str:
 async def _query_registration_time(qq: str) -> str | None:
     """调用注册时间接口。"""
     cfg = cfg_reg_time()
-    api_url = str(cfg.get("qq_reg_time_api_url") or "").strip()
-    api_key = str(cfg.get("qq_reg_time_api_key") or "").strip()
+    api_url = str(cfg["qq_reg_time_api_url"]).strip()
+    api_key = str(cfg["qq_reg_time_api_key"]).strip()
     if not api_url or not api_key:
         return None
     client = await get_shared_async_client()

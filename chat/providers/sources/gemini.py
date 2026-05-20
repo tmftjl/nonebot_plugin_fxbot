@@ -22,10 +22,10 @@ class GeminiProvider(ChatProvider):
 
     def __init__(self, provider_id: str, config: dict[str, Any]) -> None:
         super().__init__(provider_id, config)
-        self.api_key = config.get("api_key")
-        self.base_url = config.get("base_url")
-        self.timeout = config.get("timeout", 120)
-        self.model_name = str(config.get("model") or "gemini-2.0-flash")
+        self.api_key = config["api_key"]
+        self.base_url = config["base_url"]
+        self.timeout = float(config["timeout"])
+        self.model_name = str(config["model"])
         self._init_client()
 
     def _init_client(self) -> None:
@@ -253,14 +253,14 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
 
     def __init__(self, provider_id: str, config: dict[str, Any]) -> None:
         super().__init__(provider_id, config)
-        http_options = types.HttpOptions(timeout=config.get("timeout", 120) * 1000)
-        if config.get("base_url"):
-            http_options.base_url = config.get("base_url")
+        http_options = types.HttpOptions(timeout=float(config["timeout"]) * 1000)
+        if config["base_url"]:
+            http_options.base_url = config["base_url"]
         self.client = genai.Client(
-            api_key=config.get("api_key"),
+            api_key=config["api_key"],
             http_options=http_options,
         ).aio
-        self.model_name = str(config.get("model") or "text-embedding-004")
+        self.model_name = str(config["model"])
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         """批量获取文本嵌入向量。"""
@@ -272,12 +272,5 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
             raise
 
     def get_dimension(self) -> int:
-        """根据模型名返回默认向量维度。"""
-        if "embedding_dim" in self.config:
-            return int(self.config["embedding_dim"])
-        if "text-embedding-004" in self.model_name:
-            return 768
-        if "gemini-embedding-001" in self.model_name:
-            return 3072
-        logger.warning(f"[{self.provider_id}] 未知模型 {self.model_name}，默认维度按 768 处理")
-        return 768
+        """读取配置中的向量维度。"""
+        return int(self.config["embedding_dim"])

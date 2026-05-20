@@ -5,20 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from ...config import get_manager
-
-DEFAULTS: dict[str, Any] = {
-    "image_display": {
-        "enabled": True,
-        "type": 2,
-        "text": "Ciallo~",
-        "list": [
-            "你干嘛~",
-            "我喜欢你",
-            "[图片]",
-        ],
-        "api": "https://v1.hitokoto.cn/?encode=text",
-    },
-}
+from .ui_schema import DEFAULTS
 
 REG = get_manager().register("napcat", DEFAULTS, clean_extra=True)
 
@@ -35,4 +22,4 @@ def save_config(cfg: dict[str, Any]) -> None:
 
 def cfg_image_display() -> dict[str, Any]:
     """获取图片外显配置。"""
-    return get_config().get("image_display", {})
+    return get_config()["image_display"]

@@ -120,7 +120,7 @@ def _num_to_chinese(num: int) -> str:
 
 async def _get_background_image() -> Image.Image | None:
     """获取可选背景图。"""
-    url = str(cfg_api_urls().get("background_api") or "").strip()
+    url = str(cfg_api_urls()["background_api"]).strip()
     if not url:
         return None
     try:

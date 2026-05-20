@@ -66,7 +66,7 @@ async def _handle_update(matcher: Matcher, event: Event) -> None:
     _updating_gallery = True
     try:
         force = "强制" in _event_text(event)
-        repo = str(load_cfg().get("poke_repo", "")).strip()
+        repo = str(load_cfg()["poke_repo"]).strip()
         if not repo:
             await matcher.finish("未配置图库仓库地址")
 

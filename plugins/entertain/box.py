@@ -23,9 +23,9 @@ from .config import cfg_box
 P = Plugin("entertain", display_name="娱乐", enabled=True, level=PermLevel.LOW, scene=PermScene.ALL)
 
 
-def _cfg_get(key: str, default: Any = None) -> Any:
+def _cfg_get(key: str) -> Any:
     """读取开盒配置项。"""
-    return cfg_box().get(key, default)
+    return cfg_box()[key]
 
 
 def _uid(event: Event) -> str:
@@ -101,7 +101,7 @@ async def _handle_box(
 
     if _cfg_get("only_admin") and group_id and not await _is_admin(bot, group_id, _uid(event)):
         await matcher.finish("仅限管理员可用")
-    blacklist = {str(item) for item in (_cfg_get("box_blacklist", []) or [])}
+    blacklist = {str(item) for item in (_cfg_get("box_blacklist") or [])}
     if str(target_id) in blacklist:
         await matcher.finish("该用户无法被开盒")
     message = await _do_box(bot, target_id=target_id, group_id=group_id)
@@ -134,7 +134,7 @@ async def _do_box(bot: Bot, *, target_id: str, group_id: str | None):
 
 async def _get_avatar_bytes(user_id: str) -> bytes | None:
     """下载 QQ 头像。"""
-    url = str(_cfg_get("avatar_api_url", "https://q4.qlogo.cn/headimg_dl?dst_uin={user_id}&spec=640")).format(
+    url = str(_cfg_get("avatar_api_url")).format(
         user_id=user_id
     )
     try:
@@ -324,7 +324,7 @@ async def _handle_increase_box(bot: Bot, event: Event) -> None:
     group_id = _gid(event)
     if not group_id:
         return
-    groups = {str(item) for item in (_cfg_get("auto_box_groups", []) or [])}
+    groups = {str(item) for item in (_cfg_get("auto_box_groups") or [])}
     if groups and group_id not in groups:
         return
     user_id = str(getattr(event, "user_id", "") or "")

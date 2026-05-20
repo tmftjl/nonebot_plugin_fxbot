@@ -39,14 +39,11 @@ def _is_superuser(user_id: str) -> bool:
 
 def _bot_admins() -> set[str]:
     """读取 bot_admin 用户列表。"""
-    try:
-        cfg = get_config_manager().get_system()
-        permission_cfg = cfg.get("permission") if isinstance(cfg.get("permission"), dict) else {}
-        value = permission_cfg.get("bot_admins", [])
-        if isinstance(value, (list, tuple, set)):
-            return {str(item) for item in value if item is not None}
-    except Exception:
-        return set()
+    cfg = get_config_manager().get_system()
+    permission_cfg = cfg["permission"]
+    value = permission_cfg["bot_admins"]
+    if isinstance(value, (list, tuple, set)):
+        return {str(item) for item in value if item is not None}
     return set()
 
 

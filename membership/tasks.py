@@ -56,7 +56,7 @@ def _format_dt(value: datetime | None) -> str:
 def _membership_cfg() -> dict[str, Any]:
     """读取会员任务配置。"""
     cfg = get_config_manager().get_system()
-    return cfg.get("membership") if isinstance(cfg.get("membership"), dict) else {}
+    return cfg["membership"]
 
 
 async def _send_group_message(bot_id: str | None, group_id: str, message: str) -> bool:
@@ -95,10 +95,10 @@ async def _leave_group(bot_id: str | None, group_id: str) -> bool:
 async def check_and_process_memberships() -> MembershipTaskResult:
     """检查会员到期状态，执行提醒和自动退群。"""
     cfg = _membership_cfg()
-    notice_days = {int(item) for item in cfg.get("expire_notice_days", [7, 3, 1])}
-    auto_leave = bool(cfg.get("auto_leave_expired_groups", False))
-    delay = max(float(cfg.get("batch_delay_seconds", 0) or 0), 0.0)
-    contact = str(cfg.get("contact_info") or "")
+    notice_days = {int(item) for item in cfg["expire_notice_days"]}
+    auto_leave = bool(cfg["auto_leave_expired_groups"])
+    delay = max(float(cfg["batch_delay_seconds"] or 0), 0.0)
+    contact = str(cfg["contact_info"] or "")
     today = _today_key()
     result = MembershipTaskResult()
 
@@ -162,9 +162,9 @@ def setup_membership_tasks() -> None:
         return
 
     cfg = _membership_cfg()
-    if not bool(cfg.get("enable_scheduler", True)):
+    if not bool(cfg["enable_scheduler"]):
         return
-    schedule_time = str(cfg.get("schedule_time") or "12:00")
+    schedule_time = str(cfg["schedule_time"])
     try:
         hour_text, minute_text = schedule_time.split(":", 1)
         hour = int(hour_text)

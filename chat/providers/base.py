@@ -19,7 +19,7 @@ class BaseProvider(abc.ABC):
     def __init__(self, provider_id: str, config: dict[str, Any]) -> None:
         self.provider_id = provider_id
         self.config = config
-        self.model_name = str(config.get("model") or "")
+        self.model_name = str(config["model"])
 
     def get_model(self) -> str:
         """获取当前模型名。"""
@@ -105,7 +105,7 @@ class EmbeddingProvider(BaseProvider):
 
     def get_dimension(self) -> int:
         """获取向量维度。"""
-        return int(self.config.get("embedding_dim", 1536))
+        return int(self.config["embedding_dim"])
 
     def meta(self) -> ProviderMeta:
         """返回嵌入 Provider 元数据。"""

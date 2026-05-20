@@ -21,11 +21,11 @@ class AnthropicProvider(ChatProvider):
     def __init__(self, provider_id: str, config: dict[str, Any]) -> None:
         super().__init__(provider_id, config)
         self.client = AsyncAnthropic(
-            api_key=config.get("api_key"),
-            base_url=config.get("base_url", "https://api.anthropic.com"),
-            timeout=config.get("timeout", 120),
+            api_key=config["api_key"],
+            base_url=config["base_url"],
+            timeout=float(config["timeout"]),
         )
-        self.model_name = str(config.get("model") or "claude-3-5-sonnet-20241022")
+        self.model_name = str(config["model"])
 
     def _convert_to_anthropic_format(
         self,

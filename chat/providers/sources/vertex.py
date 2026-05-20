@@ -20,13 +20,13 @@ class VertexAIProvider(ChatProvider):
 
     def __init__(self, provider_id: str, config: dict[str, Any]) -> None:
         super().__init__(provider_id, config)
-        self.api_key = config.get("api_key")
+        self.api_key = config["api_key"]
         if not self.api_key:
             raise ValueError("Vertex AI provider requires 'api_key'")
 
-        self.base_url = config.get("base_url", "https://aiplatform.googleapis.com/v1")
-        self.timeout = config.get("timeout", 120)
-        self.model_name = str(config.get("model") or "gemini-2.0-flash-exp")
+        self.base_url = config["base_url"]
+        self.timeout = float(config["timeout"])
+        self.model_name = str(config["model"])
         self.client = httpx.AsyncClient(
             timeout=httpx.Timeout(self.timeout),
             limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),

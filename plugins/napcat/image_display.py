@@ -40,13 +40,13 @@ async def _fetch_hitokoto(api_url: str) -> str:
 
 def _get_summary_text(cfg: dict[str, Any]) -> str:
     """生成图片外显文本。"""
-    display_type = int(cfg.get("type", 1) or 1)
+    display_type = int(cfg["type"])
     if display_type == 1:
-        return str(cfg.get("text", "Ciallo~"))
+        return str(cfg["text"])
     if display_type == 2:
         return _hitokoto_cache
     if display_type == 3:
-        items = cfg.get("list", [])
+        items = cfg["list"]
         if isinstance(items, list) and items:
             return str(random.choice(items))
         return "[图片]"
@@ -68,7 +68,7 @@ def enable_image_summary() -> bool:
 
     def _patched_image(file: Any, *args: Any, **kwargs: Any):
         segment = _original_image(file, *args, **kwargs)
-        if cfg_image_display().get("enabled", True):
+        if cfg_image_display()["enabled"]:
             segment.data["summary"] = _get_summary_text(cfg_image_display())
         return segment
 
@@ -109,7 +109,7 @@ async def _handle_toggle(matcher: Matcher, event: Event) -> None:
     text = str(event.get_plaintext()) if hasattr(event, "get_plaintext") else ""
     enabled = "开启" in text
     cfg = get_config()
-    cfg.setdefault("image_display", {})["enabled"] = enabled
+    cfg["image_display"]["enabled"] = enabled
     save_config(cfg)
 
     ok = enable_image_summary() if enabled else disable_image_summary()
@@ -123,11 +123,11 @@ async def _handle_toggle(matcher: Matcher, event: Event) -> None:
 async def _init_image_display() -> None:
     """启动时初始化图片外显状态。"""
     cfg = cfg_image_display()
-    if cfg.get("enabled", True) and int(cfg.get("type", 1) or 1) == 2:
-        await _fetch_hitokoto(str(cfg.get("api", "https://v1.hitokoto.cn/?encode=text")))
-    if cfg.get("enabled", True):
+    if cfg["enabled"] and int(cfg["type"]) == 2:
+        await _fetch_hitokoto(str(cfg["api"]))
+    if cfg["enabled"]:
         enable_image_summary()
 
 
-if cfg_image_display().get("enabled", True):
+if cfg_image_display()["enabled"]:
     enable_image_summary()

@@ -59,12 +59,9 @@ def _plain_text(event: Any) -> str:
 
 def _membership_enabled() -> bool:
     """读取会员门禁开关。"""
-    try:
-        cfg = get_config_manager().get_system()
-        membership_cfg = cfg.get("membership") if isinstance(cfg.get("membership"), dict) else {}
-        return bool(membership_cfg.get("enabled", True))
-    except Exception:
-        return True
+    cfg = get_config_manager().get_system()
+    membership_cfg = cfg["membership"]
+    return bool(membership_cfg["enabled"])
 
 
 @event_preprocessor

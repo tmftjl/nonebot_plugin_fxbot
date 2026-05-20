@@ -90,8 +90,8 @@ async def _encode_images_to_b64(images: Iterable[bytes]) -> list[str]:
 async def _post_score(images_b64: list[str], command_str: str) -> tuple[bytes | None, str | None]:
     """调用评分服务。"""
     cfg = cfg_waves_analyze()
-    api_url = str(cfg.get("api_url", "")).strip()
-    token = str(cfg.get("token", "")).strip()
+    api_url = str(cfg["api_url"]).strip()
+    token = str(cfg["token"]).strip()
     if not api_url or not token:
         return None, "未配置评分服务地址或 Token"
     payload = {"command_str": _build_command_str(command_str), "images_base64": images_b64}

@@ -163,14 +163,14 @@ def _days_remaining(value: datetime) -> int:
 def _membership_cfg() -> dict[str, Any]:
     """读取会员配置。"""
     cfg = get_config_manager().get_system()
-    return cfg.get("membership") if isinstance(cfg.get("membership"), dict) else {}
+    return cfg["membership"]
 
 
 def _console_url(token: str) -> str:
     """生成控制台登录地址。"""
     cfg = get_config_manager().get_system()
-    console_cfg = cfg.get("console") if isinstance(cfg.get("console"), dict) else {}
-    path = str(console_cfg.get("mount_path") or "/fxbot")
+    console_cfg = cfg["console"]
+    path = str(console_cfg["mount_path"])
     host = str(get_driver().config.host)
     port = int(get_driver().config.port)
     return f"http://{host}:{port}{path}?token={token}"
@@ -298,7 +298,7 @@ async def _handle_expiry(matcher: Matcher, event: Event) -> None:
         else:
             status = f"有效(剩余{days}天)"
 
-    contact_info = str(_membership_cfg().get("contact_info") or "")
+    contact_info = str(_membership_cfg()["contact_info"] or "")
     reply = f"本群会员状态：{status}\n到期时间：{_format_cn(group.expires_at)}"
     if contact_info:
         reply += f"\n{contact_info}"

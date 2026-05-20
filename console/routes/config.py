@@ -8,7 +8,7 @@ from typing import Any
 from nonebot import logger
 from fastapi import APIRouter, Depends, HTTPException
 
-from ...config import get_manager
+from ...config import SYSTEM_DEFAULTS, get_manager
 from ...utils.paths import built_in_plugins_dir
 from ..auth import bearer_auth
 
@@ -25,30 +25,30 @@ def _system_config_tab() -> dict[str, Any]:
                 "key": "membership",
                 "title": "会员系统",
                 "schemas": [
-                    {"field": "enabled", "label": "启用会员门禁", "component": "Switch"},
-                    {"field": "cache_ttl_seconds", "label": "缓存时间（秒）", "component": "InputNumber", "componentProps": {"min": 1}},
-                    {"field": "schedule_time", "label": "定时任务时间", "component": "Input", "componentProps": {"placeholder": "12:00"}},
-                    {"field": "auto_leave_expired_groups", "label": "过期自动退群", "component": "Switch"},
-                    {"field": "contact_info", "label": "续费联系信息", "component": "Textarea"},
+                    {"field": "enabled", "label": "启用会员门禁", "component": "Switch", "default": SYSTEM_DEFAULTS["membership"]["enabled"]},
+                    {"field": "cache_ttl_seconds", "label": "缓存时间（秒）", "component": "InputNumber", "default": SYSTEM_DEFAULTS["membership"]["cache_ttl_seconds"], "componentProps": {"min": 1}},
+                    {"field": "schedule_time", "label": "定时任务时间", "component": "Input", "default": SYSTEM_DEFAULTS["membership"]["schedule_time"], "componentProps": {"placeholder": "12:00"}},
+                    {"field": "auto_leave_expired_groups", "label": "过期自动退群", "component": "Switch", "default": SYSTEM_DEFAULTS["membership"]["auto_leave_expired_groups"]},
+                    {"field": "contact_info", "label": "续费联系信息", "component": "Textarea", "default": SYSTEM_DEFAULTS["membership"]["contact_info"]},
                 ],
             },
             {
                 "key": "console",
                 "title": "控制台",
                 "schemas": [
-                    {"field": "enabled", "label": "启用控制台", "component": "Switch"},
-                    {"field": "mount_path", "label": "挂载路径", "component": "Input"},
-                    {"field": "token", "label": "访问 Token", "component": "InputPassword"},
+                    {"field": "enabled", "label": "启用控制台", "component": "Switch", "default": SYSTEM_DEFAULTS["console"]["enabled"]},
+                    {"field": "mount_path", "label": "挂载路径", "component": "Input", "default": SYSTEM_DEFAULTS["console"]["mount_path"]},
+                    {"field": "token", "label": "访问 Token", "component": "InputPassword", "default": SYSTEM_DEFAULTS["console"]["token"]},
                 ],
             },
             {
                 "key": "chat",
                 "title": "AI 对话",
                 "schemas": [
-                    {"field": "enabled", "label": "启用 AI", "component": "Switch"},
-                    {"field": "provider", "label": "默认 Provider", "component": "Input"},
-                    {"field": "max_history", "label": "最大历史轮数", "component": "InputNumber", "componentProps": {"min": 0}},
-                    {"field": "max_tool_rounds", "label": "最大工具轮数", "component": "InputNumber", "componentProps": {"min": 0}},
+                    {"field": "enabled", "label": "启用 AI", "component": "Switch", "default": SYSTEM_DEFAULTS["chat"]["enabled"]},
+                    {"field": "provider", "label": "默认 Provider", "component": "Input", "default": SYSTEM_DEFAULTS["chat"]["provider"]},
+                    {"field": "max_history", "label": "最大历史轮数", "component": "InputNumber", "default": SYSTEM_DEFAULTS["chat"]["max_history"], "componentProps": {"min": 0}},
+                    {"field": "max_tool_rounds", "label": "最大工具轮数", "component": "InputNumber", "default": SYSTEM_DEFAULTS["chat"]["max_tool_rounds"], "componentProps": {"min": 0}},
                 ],
             },
         ],

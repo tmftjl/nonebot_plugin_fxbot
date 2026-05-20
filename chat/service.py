@@ -7,6 +7,8 @@ from typing import Any
 
 from nonebot import logger
 
+from ..config import get_manager as get_config_manager
+
 from .providers import provider_manager
 from .session import ChatSessionStore, default_session_store
 from .tools import ToolContext, ToolRuntime, default_registry, execute_tool
@@ -21,6 +23,8 @@ class ChatService:
 
     async def process(self, request: ChatRequest, runtime: ToolRuntime | None = None) -> ChatResponse:
         """处理一次对话请求。"""
+        chat_cfg = get_config_manager().get_system()["chat"]
+        self.session_store.max_messages = int(chat_cfg["max_history"])
         provider = provider_manager.get_provider()
         runtime = runtime or ToolRuntime()
         messages = self.session_store.get(request.session_id)
@@ -28,7 +32,7 @@ class ChatService:
 
         tools = default_registry.to_openai_tools()
         response = await provider.chat(messages=messages, tools=tools or None)
-        max_tool_rounds = 3
+        max_tool_rounds = int(chat_cfg["max_tool_rounds"])
 
         for _ in range(max_tool_rounds):
             if not response.has_tool_calls:

@@ -7,7 +7,7 @@ from typing import Any
 
 from fastapi import HTTPException, Request, status
 
-from ..config import get_manager as get_config_manager
+from ..config import SYSTEM_DEFAULTS, get_manager as get_config_manager
 
 _TOKEN_BYTES = 32
 
@@ -15,15 +15,15 @@ _TOKEN_BYTES = 32
 def _system_proxy():
     """获取系统配置代理。"""
     manager = get_config_manager()
-    return manager.register("system", manager.get_system())
+    return manager.register("system", SYSTEM_DEFAULTS)
 
 
 def get_console_token() -> str:
     """读取控制台 token，不存在时自动生成。"""
     manager = get_config_manager()
     cfg = manager.get_system()
-    console_cfg = cfg.setdefault("console", {})
-    token = str(console_cfg.get("token") or "")
+    console_cfg = cfg["console"]
+    token = str(console_cfg["token"] or "")
     if len(token) >= 32:
         return token
     return rotate_console_token()
@@ -33,7 +33,7 @@ def rotate_console_token() -> str:
     """生成并保存新的控制台 token。"""
     manager = get_config_manager()
     cfg = manager.get_system()
-    console_cfg = cfg.setdefault("console", {})
+    console_cfg = cfg["console"]
     token = secrets.token_urlsafe(_TOKEN_BYTES)
     console_cfg["token"] = token
     _system_proxy().save(cfg)

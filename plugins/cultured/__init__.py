@@ -33,7 +33,7 @@ def _command_names() -> list[str]:
     """读取所有 API 图库命令名。"""
     names: list[str] = []
     for item in load_all_commands():
-        name = str(item.get("name", "")).strip()
+        name = str(item["name"]).strip()
         if name:
             names.append(name)
     return names
@@ -59,10 +59,10 @@ def _build_picture(bot: Bot, url: str, response_text: str | None = None):
 
 def _create_api_handler(bot: Bot, command: dict[str, Any]) -> Callable[[], Any]:
     """根据配置创建 API 图库处理器。"""
-    url = str(command.get("url", "")).strip()
-    method = str(command.get("method", "direct")).strip().lower()
-    response_text = command.get("response_text")
-    regex_pattern = str(command.get("regex", r"https?://[^ ]+"))
+    url = str(command["url"]).strip()
+    method = str(command["method"]).strip().lower()
+    response_text = command["response_text"]
+    regex_pattern = str(command["regex"])
 
     async def _fetch_text() -> str:
         client = await get_shared_async_client()
@@ -98,7 +98,7 @@ def _api_handlers(bot: Bot) -> list[tuple[str, Callable[[], Any]]]:
     """加载 API 图库处理器。"""
     handlers: list[tuple[str, Callable[[], Any]]] = []
     for command in load_all_commands():
-        name = str(command.get("name", "")).strip()
+        name = str(command["name"]).strip()
         if name:
             handlers.append((name, _create_api_handler(bot, command)))
     return handlers
@@ -109,7 +109,7 @@ def _pick_face_image(name: str, bot: Bot):
     path = random_local_image(name)
     if path is not None:
         return build_message_segment(bot, "image", path)
-    fallback = str(load_cfg().get("fallback_api", "https://ciallo.hxxn.cc/?name={name}"))
+    fallback = str(load_cfg()["fallback_api"])
     return build_message_segment(bot, "image", fallback.format(name=name))
 
 
@@ -154,7 +154,7 @@ async def _handle_list(matcher: Matcher) -> None:
 @api_cmd.handle()
 async def _handle_api_picture(matcher: Matcher, bot: Bot, event: Event) -> None:
     """发送 API 图库图片。"""
-    if not bool(load_cfg().get("random_picture_open", True)):
+    if not bool(load_cfg()["random_picture_open"]):
         await matcher.finish()
 
     text = _event_text(event)
@@ -181,7 +181,7 @@ async def _handle_api_picture(matcher: Matcher, bot: Bot, event: Event) -> None:
 @picture_cmd.handle()
 async def _handle_picture(matcher: Matcher, bot: Bot, event: Event) -> None:
     """发送随机本地图库图片。"""
-    if not bool(load_cfg().get("random_picture_open", True)):
+    if not bool(load_cfg()["random_picture_open"]):
         return
 
     text = _event_text(event)

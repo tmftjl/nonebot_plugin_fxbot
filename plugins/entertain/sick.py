@@ -27,7 +27,7 @@ sick_cmd = P.on_regex(
 @sick_cmd.handle()
 async def _handle_sick(matcher: Matcher, bot: Bot, event: Event) -> None:
     """获取发病语录。"""
-    url = str(cfg_api_urls().get("sick_quote_api") or "").strip()
+    url = str(cfg_api_urls()["sick_quote_api"]).strip()
     if not url:
         await matcher.finish("未配置发病语录接口")
     try:

@@ -54,21 +54,21 @@ def _is_to_me(event: Any) -> bool:
 def _chat_cfg() -> dict[str, Any]:
     """读取 AI 配置。"""
     cfg = get_config_manager().get_system()
-    return cfg.get("chat") if isinstance(cfg.get("chat"), dict) else {}
+    return cfg["chat"]
 
 
 async def _ai_fallback_rule(bot: Bot, event: Event) -> bool:
     """AI 兜底匹配规则。"""
     cfg = _chat_cfg()
-    if not bool(cfg.get("enabled", True)):
+    if not bool(cfg["enabled"]):
         return False
     text = _plain_text(event)
     if not text:
         return False
-    prefixes = tuple(str(item) for item in cfg.get("command_prefixes", ["#", "/", "."]))
+    prefixes = tuple(str(item) for item in cfg["command_prefixes"])
     if text.startswith(prefixes):
         return False
-    if _gid(event) and bool(cfg.get("group_requires_mention", True)) and not _is_to_me(event):
+    if _gid(event) and bool(cfg["group_requires_mention"]) and not _is_to_me(event):
         return False
     return True
 

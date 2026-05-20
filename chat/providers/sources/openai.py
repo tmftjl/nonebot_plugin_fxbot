@@ -21,11 +21,11 @@ class OpenAIProvider(ChatProvider):
     def __init__(self, provider_id: str, config: dict[str, Any]) -> None:
         super().__init__(provider_id, config)
         self.client = AsyncOpenAI(
-            api_key=config.get("api_key"),
-            base_url=config.get("base_url"),
-            timeout=config.get("timeout", 60),
+            api_key=config["api_key"],
+            base_url=config["base_url"],
+            timeout=float(config["timeout"]),
         )
-        self.model_name = str(config.get("model") or "gpt-4o-mini")
+        self.model_name = str(config["model"])
 
     async def chat(
         self,
@@ -158,11 +158,11 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
     def __init__(self, provider_id: str, config: dict[str, Any]) -> None:
         super().__init__(provider_id, config)
         self.client = AsyncOpenAI(
-            api_key=config.get("api_key"),
-            base_url=config.get("base_url"),
-            timeout=config.get("timeout", 30),
+            api_key=config["api_key"],
+            base_url=config["base_url"],
+            timeout=float(config["timeout"]),
         )
-        self.model_name = str(config.get("model") or "text-embedding-3-small")
+        self.model_name = str(config["model"])
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         """批量获取文本嵌入向量。"""

@@ -130,7 +130,7 @@ def _uid(event: Event) -> str:
 def _normalize_platform(alias: str | None) -> Platform:
     """归一化音乐平台名称。"""
     if not alias:
-        default = str(cfg_music().get("provider_default", "tencent")).lower()
+        default = str(cfg_music()["provider_default"]).lower()
         return "qq" if default == "tencent" else "netease"
     return "qq" if alias.lower() == "qq" else "netease"
 
@@ -142,13 +142,13 @@ def _platform_name_cn(platform: Platform) -> str:
 
 def _music_api_base() -> str:
     """读取本地 music-api 地址。"""
-    return str(cfg_music().get("api_base") or "http://127.0.0.1:3000").strip().rstrip("/")
+    return str(cfg_music()["api_base"]).strip().rstrip("/")
 
 
 def _login_mode() -> str:
     """读取登录账号使用模式。"""
-    mode = str(cfg_music().get("login_mode") or "shared").strip().lower()
-    return "per_user" if mode in {"per_user", "user", "own"} else "shared"
+    mode = str(cfg_music()["login_mode"]).strip().lower()
+    return "per_user" if mode in {"per_user", "private", "user", "own"} else "shared"
 
 
 def _login_hint(platform: Platform) -> str:
@@ -512,16 +512,11 @@ def _quality_for_api(platform: Platform) -> str:
     config = cfg_music()
     if platform == "qq":
         qualities = ["m4a", "128", "320", "flac", "ape"]
-        value = config.get("qq_quality")
-        default_level = 2
+        value = config["qq_quality"]
     else:
         qualities = ["standard", "higher", "exhigh", "lossless", "hires", "jyeffect", "sky", "jymaster"]
-        value = config.get("netease_quality")
-        default_level = 4
-    try:
-        level = int(value)
-    except (TypeError, ValueError):
-        level = default_level
+        value = config["netease_quality"]
+    level = int(value)
     level = max(1, min(level, len(qualities)))
     return qualities[level - 1]
 
@@ -535,7 +530,7 @@ async def _search_songs_api(
     """通过本地 music-api 搜索歌曲。"""
     if not auth:
         raise MusicLoginRequired()
-    limit = int(cfg_music().get("search_num") or 10)
+    limit = int(cfg_music()["search_num"])
     data = await _music_api_get(
         "/api/search",
         {"provider": platform, "key": keyword, "limit": limit, "auth": auth},

@@ -11,20 +11,14 @@ from nonebot import logger
 
 from ...config import get_manager
 from ...utils.paths import data_dir
+from .ui_schema import DEFAULTS
 
 PLUGIN_DIR = Path(__file__).parent
 COMMANDS_PATH = PLUGIN_DIR / "commands.json"
 RES_DIR = data_dir("resources") / "cultured"
 POKE_DIR = RES_DIR / "poke"
 
-DEFAULT_CFG: dict[str, Any] = {
-    "random_picture_open": True,
-    "poke_repo": "https://cnb.cool/denfenglai/poke.git",
-    "fallback_api": "https://ciallo.hxxn.cc/?name={name}",
-    "custom_commands": {},
-}
-
-REG = get_manager().register("cultured", DEFAULT_CFG, clean_extra=True)
+REG = get_manager().register("cultured", DEFAULTS, clean_extra=True)
 
 
 def ensure_dirs() -> None:
@@ -77,7 +71,7 @@ def load_default_commands() -> list[dict[str, Any]]:
 def load_all_commands() -> list[dict[str, Any]]:
     """合并内置和用户自定义 API 图库命令。"""
     commands = list(load_default_commands())
-    custom = load_cfg().get("custom_commands", {})
+    custom = load_cfg()["custom_commands"]
     if isinstance(custom, dict):
         for name, item in custom.items():
             if isinstance(item, dict):
