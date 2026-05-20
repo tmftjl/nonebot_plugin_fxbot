@@ -27,6 +27,7 @@ DEFAULTS: dict[str, Any] = {
     "api_urls": {
         "sick_quote_api": "https://oiapi.net/API/SickL/",
         "doro_api": "https://doro-api.hxxn.cc/get",
+        "background_api": "",
     },
 }
 

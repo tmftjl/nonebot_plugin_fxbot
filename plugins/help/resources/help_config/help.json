@@ -1,0 +1,61 @@
+{
+  "title": "今汐机器人帮助(所有需要@的都要@在最后面才能生效)",
+  "sub_title": "Nonebot2 & 今汐",
+  "footer": "dggb 强力驱动",
+  "col_count": 3,
+  "groups": [
+    {
+      "group": "核心功能",
+      "list": [
+        {"icon": 6, "title": "ww帮助", "desc": "鸣潮功能帮助"},
+        {"icon": 12, "title": "各种短视频解析", "desc": "分享链接即可"},
+        {"icon": 14, "title": "#表情列表", "desc": "表情包制作列表，触发命令前面需要加#"},
+        {"icon": 1, "title": "#群管帮助", "desc": "查看群管帮助"}
+      ]
+    },
+    {
+      "group": "娱乐功能",
+      "list": [
+        {"icon": 2, "title": "#点歌", "desc": "点歌演员"},
+        {"icon": 4, "title": "#今日运势", "desc": "今日运势"},
+        {"icon": 5, "title": "#doro结局", "desc": "抽取doro结局"},
+        {"icon": 6, "title": "#看看腿", "desc": "看看腿"},
+        {"icon": 8, "title": "#随机doro", "desc": "随机doro"},
+        {"icon": 10, "title": "#来张黑丝", "desc": "随机黑丝"},
+        {"icon": 11, "title": "#发病语录", "desc": "发病语录"},
+        {"icon": 12, "title": "#盒", "desc": "开盒自己或群友"},
+        {"icon": 13, "title": "#注册时间", "desc": "查询qq信息"},
+        {"icon": 14, "title": "#联系主人", "desc": "联系主人"}
+      ]
+    },
+    {
+      "group": "ai对话（需联系主人开启功能）",
+      "list": [
+        {"icon": 12, "title": "#开启AI", "desc": "开启AI（群管可用）"},
+        {"icon": 13, "title": "#关闭AI", "desc": "关闭AI（群管可用）"},
+        {"icon": 16, "title": "@机器人", "desc": "群聊需 @ 机器人触发；私聊直接发送"},
+        {"icon": 17, "title": "#清空会话", "desc": "清空会话记录（群管可用）"},
+        {"icon": 18, "title": "#会话信息", "desc": "查看会话信息（群管可用）"},
+        {"icon": 19, "title": "#人格列表", "desc": "查看人格列表（群管可用）"},
+        {"icon": 20, "title": "#切换人格", "desc": "切换人格（群管可用）"}
+      ]
+    },
+    {
+      "group": "入群欢迎",
+      "list": [
+        {"icon": 16, "title": "#设置欢迎", "desc": "设置入群欢迎语，支持图片，但要一起发"},
+        {"icon": 17, "title": "#查看欢迎", "desc": "查看本群欢迎语"},
+        {"icon": 18, "title": "#开启欢迎", "desc": "启用入群欢迎"},
+        {"icon": 19, "title": "#关闭欢迎", "desc": "禁用入群欢迎"}
+      ]
+    },
+    {
+      "group": "机器人续费",
+      "list": [
+        {"icon": 18, "title": "ww拉群", "desc": "获取拉群/续费帮助信息"},
+        {"icon": 19, "title": "ww到期", "desc": "获取到期时间"},
+        {"icon": 20, "title": "ww续费", "desc": "ww续费<时长><单位>-<生成的代码>"}
+      ]
+    }
+  ]
+}

@@ -1,22 +1,23 @@
-"""点歌命令和 AI 工具。"""
+"""点歌命令。"""
 
 from __future__ import annotations
 
 import asyncio
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 from nonebot import logger
 from nonebot.adapters import Bot, Event
 from nonebot.matcher import Matcher
 from nonebot.params import RegexGroup
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 
-from ...chat.tools import ToolContext, ToolError, ToolRuntime, tool
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
 from ...utils.compat import build_message, build_message_segment
+from ...utils.fonts import load_font
 from ...utils.http import get_shared_async_client
 from .config import cfg_music
 
@@ -176,26 +177,80 @@ async def _get_song_url_api(platform: Platform, song: Song) -> str | None:
 
 
 def _draw_music_list(platform: Platform, keyword: str, songs: list[Song]) -> bytes:
-    """绘制搜索结果图片。"""
-    width = 900
-    row_height = 70
+    """按旧版双列卡片排版绘制搜索结果。"""
+    bg_color = (240, 242, 245)
+    header_color = (64, 84, 180)
+    card_bg = (255, 255, 255)
+    text_main = (30, 30, 30)
+    text_sub = (100, 100, 100)
+    accent = (64, 84, 180)
+
+    padding = 30
+    columns = 2
+    gap_x = 20
+    gap_y = 15
+    card_h = 70
+    col_w = 400
+    font_path = Path(__file__).parent / "resource" / "font.ttf"
+
+    font_title = load_font(font_path, 36)
+    font_sub = load_font(font_path, 22)
+    font_song = load_font(font_path, 26)
+    font_artist = load_font(font_path, 20)
+    font_badge = load_font(font_path, 20)
+    font_footer = load_font(font_path, 18)
+
     count = min(len(songs), 20)
-    height = 160 + count * row_height + 50
-    image = Image.new("RGB", (width, height), (244, 246, 250))
+    rows = (count + columns - 1) // columns
+    header_h = 120
+    list_h = rows * card_h + max(rows - 1, 0) * gap_y
+    footer_h = 50
+    width = padding * 2 + col_w * columns + gap_x * (columns - 1)
+    height = header_h + list_h + footer_h + padding
+
+    image = Image.new("RGB", (width, height), bg_color)
     draw = ImageDraw.Draw(image)
-    font_title = ImageFont.load_default()
-    font_text = ImageFont.load_default()
+    draw.rectangle([(0, 0), (width, header_h)], fill=header_color)
+    draw.text((padding, 25), f"搜索结果: {keyword}", font=font_title, fill=(255, 255, 255))
+    draw.text(
+        (padding, 75),
+        f"来源: {_platform_name_cn(platform)} | 共找到 {len(songs)} 首歌曲",
+        font=font_sub,
+        fill=(220, 220, 255),
+    )
 
-    draw.rectangle([(0, 0), (width, 120)], fill=(62, 86, 180))
-    draw.text((32, 28), f"搜索结果: {keyword}", font=font_title, fill=(255, 255, 255))
-    draw.text((32, 72), f"来源: {_platform_name_cn(platform)} | 共找到 {len(songs)} 首歌曲", font=font_text, fill=(230, 235, 255))
+    start_y = header_h + 20
+    for index, song in enumerate(songs[:20]):
+        row = index // columns
+        col = index % columns
+        x = padding + col * (col_w + gap_x)
+        y = start_y + row * (card_h + gap_y)
+        draw.rounded_rectangle([(x, y), (x + col_w, y + card_h)], radius=8, fill=card_bg)
 
-    y = 145
-    for index, song in enumerate(songs[:20], 1):
-        draw.rounded_rectangle([(28, y), (width - 28, y + 52)], radius=8, fill=(255, 255, 255))
-        draw.text((48, y + 18), f"{index}. {song.song} - {song.singer}", font=font_text, fill=(30, 30, 30))
-        y += row_height
-    draw.text((32, height - 35), "发送 #序号 播放，例如 #1", font=font_text, fill=(110, 110, 110))
+        badge_size = 36
+        bx = x + 15
+        by = y + (card_h - badge_size) // 2
+        draw.ellipse([(bx, by), (bx + badge_size, by + badge_size)], fill=bg_color)
+        idx_str = str(index + 1)
+        bbox = draw.textbbox((0, 0), idx_str, font=font_badge)
+        draw.text(
+            (bx + (badge_size - (bbox[2] - bbox[0])) / 2, by + (badge_size - (bbox[3] - bbox[1])) / 2 - 2),
+            idx_str,
+            fill=accent,
+            font=font_badge,
+        )
+
+        text_x = bx + badge_size + 15
+        content_w = col_w - (text_x - x) - 10
+        song_name = song.song
+        while draw.textlength(song_name, font=font_song) > content_w and len(song_name) > 1:
+            song_name = song_name[:-2] + "…"
+        draw.text((text_x, y + 12), song_name, fill=text_main, font=font_song)
+        draw.text((text_x, y + 42), song.singer, fill=text_sub, font=font_artist)
+
+    footer = "发送 #序号 (如 #1) 即可播放"
+    bbox = draw.textbbox((0, 0), footer, font=font_footer)
+    draw.text(((width - (bbox[2] - bbox[0])) / 2, height - 30), footer, fill=(150, 150, 150), font=font_footer)
 
     import io
 
@@ -273,54 +328,6 @@ async def _send_song(matcher: Matcher, bot: Bot, platform: Platform, song: Song)
         await matcher.finish(f"播放失败：{song.song} - {song.singer}")
     segment = build_message_segment(bot, "record", audio_url)
     await matcher.finish(build_message(bot, segment))
-
-
-@tool(
-    name="play_music",
-    description="搜索并播放歌曲，默认播放搜索结果第一首。",
-    parameters={
-        "type": "object",
-        "properties": {
-            "song_name": {"type": "string", "description": "歌曲名称或关键词"},
-            "platform": {
-                "type": "string",
-                "enum": ["qq", "netease"],
-                "description": "音乐平台，默认 qq",
-            },
-        },
-        "required": ["song_name"],
-    },
-)
-async def play_music_tool(
-    ctx: ToolContext,
-    rt: ToolRuntime,
-    song_name: str,
-    platform: Platform = "qq",
-) -> str:
-    """AI 工具：搜索并播放歌曲。"""
-    try:
-        songs = await _search_songs_api(platform, song_name)
-        if not songs:
-            raise ToolError(f"未找到歌曲：{song_name}", code="song_not_found")
-        song = songs[0]
-        audio_url = await _get_song_url_api(platform, song)
-        if not audio_url:
-            raise ToolError(f"无法获取歌曲播放链接：{song.song}", code="url_unavailable")
-
-        bot = rt.require_bot()
-        segment = build_message_segment(bot, "record", audio_url)
-
-        if ctx.group_id:
-            await bot.send_group_msg(group_id=int(ctx.group_id), message=segment)
-        else:
-            await bot.send_private_msg(user_id=int(ctx.user_id), message=segment)
-        suffix = f" - {song.singer}" if song.singer else ""
-        return f"正在播放：{song.song}{suffix}"
-    except ToolError:
-        raise
-    except Exception as exc:
-        logger.opt(exception=True).warning("[musicshare] AI 点歌失败")
-        raise ToolError(f"点歌失败：{exc}", code="internal_error") from exc
 
 
 async def _cleanup_cache_loop() -> None:

@@ -119,3 +119,71 @@ def build_message(bot: Bot, *segments: Any):
         return Message(filtered)
 
     return "".join(str(segment) for segment in filtered)
+
+
+def extract_image_sources(message: Any) -> list[str]:
+    """从消息对象中提取图片来源。"""
+    if isinstance(message, str) and has_onebot_v11():
+        try:
+            from nonebot.adapters.onebot.v11 import Message
+
+            message = Message(message)
+        except Exception:
+            pass
+    sources: list[str] = []
+    try:
+        iterable = list(message)
+    except Exception:
+        iterable = []
+    for segment in iterable:
+        if getattr(segment, "type", "") != "image":
+            continue
+        data = getattr(segment, "data", {}) or {}
+        source = data.get("url") or data.get("file")
+        if isinstance(source, str) and source and not source.startswith("base64://"):
+            sources.append(source)
+    return sources
+
+
+def extract_reply_message_id(message: Any) -> int | None:
+    """从消息对象中提取回复消息 ID。"""
+    if isinstance(message, str) and has_onebot_v11():
+        try:
+            from nonebot.adapters.onebot.v11 import Message
+
+            message = Message(message)
+        except Exception:
+            pass
+    try:
+        iterable = list(message)
+    except Exception:
+        iterable = []
+    for segment in iterable:
+        if getattr(segment, "type", "") != "reply":
+            continue
+        data = getattr(segment, "data", {}) or {}
+        value = data.get("id")
+        if value is not None:
+            try:
+                return int(value)
+            except Exception:
+                return None
+    return None
+
+
+async def get_replied_message(bot: Bot, message_id: int) -> Any:
+    """通过适配器 API 获取被回复消息。"""
+    if hasattr(bot, "get_msg"):
+        result = await bot.get_msg(message_id=message_id)
+    else:
+        result = await bot.call_api("get_msg", message_id=message_id)
+    if isinstance(result, dict):
+        return result.get("message")
+    return None
+
+
+async def send_ark_message(bot: Bot, event: Any, ark_data: dict[str, Any]) -> Any:
+    """发送 QQ ARK 消息。"""
+    if not is_qq_official(bot):
+        raise RuntimeError("ARK 消息仅支持 QQ 官方适配器")
+    return await bot.send(event, message={"type": "ark", "data": ark_data})

@@ -2,15 +2,29 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any
+
+from nonebot.adapters import Bot
 from nonebot.matcher import Matcher
+from nonebot.params import RegexGroup
+from PIL import Image, ImageDraw
 
 from ...permission import PermLevel, PermScene
-from ...plugin import Plugin, get_command_display_names, get_plugin_display_names
+from ...plugin import Plugin
+from ...utils.compat import build_message, build_message_segment, is_qq_official
+from ...utils.fonts import load_font
+from .config import CFG_DIR, help_config_filename, load_help_config, resolve_help_config
+
+try:
+    from .renderer import render_help_image
+except Exception:  # pragma: no cover
+    render_help_image = None
 
 P = Plugin("help", display_name="帮助", enabled=True, level=PermLevel.LOW, scene=PermScene.ALL)
 
 help_cmd = P.on_regex(
-    r"^(?:#|/)?(?:帮助|菜单|功能)$",
+    r"^(?:#|/)(.*?)\s*(帮助|菜单|功能)",
     name="help",
     display_name="帮助",
     priority=5,
@@ -20,27 +34,86 @@ help_cmd = P.on_regex(
 )
 
 
-def _build_help_text() -> str:
-    """根据已注册展示名生成文本帮助。"""
-    plugin_names = get_plugin_display_names()
-    command_names = get_command_display_names()
-    lines = ["FxBot 帮助"]
-    for plugin, display in sorted(plugin_names.items()):
-        commands = command_names.get(plugin, {})
-        if not commands:
-            lines.append(f"- {display}")
-            continue
-        command_text = "、".join(
-            f"{command_display}({command_name})"
-            for command_name, command_display in sorted(commands.items())
-        )
-        lines.append(f"- {display}: {command_text}")
-    if len(lines) == 1:
-        lines.append("暂无已注册命令")
-    return "\n".join(lines)
+def _resolve_config_name(bot: Bot, keyword: str | None) -> str | None:
+    """解析帮助图配置名称。"""
+    resolved = resolve_help_config(keyword)
+    if is_qq_official(bot):
+        if resolved is None:
+            return "help_qq.json"
+        if resolved.endswith(".json"):
+            qq_variant = resolved.replace(".json", "_qq.json")
+            if (CFG_DIR / qq_variant).exists():
+                return qq_variant
+            if resolved == "help.json":
+                return "help_qq.json"
+    return resolved
+
+
+def _fallback_image(title: str, sub_title: str, groups_data: list[dict[str, Any]]) -> bytes:
+    """帮助图兜底渲染。"""
+    text = f"{title}\n{sub_title}\n\n" + "\n".join(
+        f"【{group.get('group', '')}】 "
+        + ", ".join(str(item.get("title", "")) for item in (group.get("list") or []))
+        for group in groups_data
+    )
+    lines = text.split("\n")
+    font = load_font(Path(__file__).parent / "resources" / "common" / "font" / "FZB.ttf", 24)
+    width = max(480, max((len(line) for line in lines), default=20) * 14 + 40)
+    height = max(320, 30 + len(lines) * 32 + 30)
+    image = Image.new("RGB", (width, height), (255, 255, 255))
+    draw = ImageDraw.Draw(image)
+    y = 20
+    for line in lines:
+        draw.text((20, y), line, font=font, fill=(32, 32, 32))
+        y += 32
+    import io
+
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
 
 
 @help_cmd.handle()
-async def _handle_help(matcher: Matcher) -> None:
-    """发送帮助文本。"""
-    await matcher.finish(_build_help_text())
+async def _handle_help(matcher: Matcher, bot: Bot, groups: tuple = RegexGroup()) -> None:
+    """发送旧版排版帮助图。"""
+    keyword = str(groups[0]).strip() if groups and groups[0] else None
+    resolved_name = _resolve_config_name(bot, keyword)
+    if keyword and resolved_name is None:
+        await matcher.skip()
+
+    config = load_help_config(resolved_name)
+    title = str(config.get("title") or "帮助")
+    sub_title = str(config.get("sub_title") or (keyword or ""))
+    footer = config.get("footer")
+    col_count = int(config.get("col_count", 3) or 3)
+    groups_data = config.get("groups", []) or []
+
+    tmp_dir = Path(__file__).parent / "temp"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    cfg_filename = help_config_filename(resolved_name)
+    cache_file = tmp_dir / cfg_filename.replace(".json", ".png")
+    cfg_path = CFG_DIR / cfg_filename
+
+    try:
+        code_files = [Path(__file__), Path(__file__).parent / "renderer.py", Path(__file__).parent / "config.py"]
+        code_mtime = max((path.stat().st_mtime for path in code_files if path.exists()), default=0)
+        cfg_mtime = cfg_path.stat().st_mtime if cfg_path.exists() else 0
+        cache_valid = cache_file.exists() and cache_file.stat().st_mtime >= max(cfg_mtime, code_mtime)
+    except Exception:
+        cache_valid = False
+
+    image_bytes = cache_file.read_bytes() if cache_valid else b""
+    if not image_bytes and render_help_image is not None:
+        image_bytes = await render_help_image(
+            title=title,
+            sub_title=sub_title,
+            groups=groups_data,
+            col_count=col_count,
+            footer=str(footer) if footer is not None else None,
+        )
+        if image_bytes:
+            cache_file.write_bytes(image_bytes)
+    if not image_bytes:
+        image_bytes = _fallback_image(title, sub_title, groups_data)
+
+    await matcher.finish(build_message(bot, build_message_segment(bot, "image", image_bytes)))

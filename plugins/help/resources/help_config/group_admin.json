@@ -1,0 +1,43 @@
+{
+  "title": "今汐机器人群管帮助",
+  "sub_title": "Nonebot2 & 今汐",
+  "footer": "dggb 强力驱动",
+  "col_count": 3,
+  "groups": [
+    {
+      "group": "bot为群主",
+      "list": [
+        {"icon": 6, "title": "#设置管理", "desc": "设置管理"},
+        {"icon": 12, "title": "#取消管理", "desc": "取消管理"}
+      ]
+    },
+    {
+      "group": "管理员相关",
+      "list": [
+        {"icon": 6, "title": "#设置管理", "desc": "设置管理"},
+        {"icon": 12, "title": "#取消管理", "desc": "取消管理"},
+        {"icon": 14, "title": "#踢", "desc": "踢出群"},
+        {"icon": 1, "title": "#拉黑踢", "desc": "踢出群并拉黑"},
+        {"icon": 12, "title": "#禁言", "desc": "禁言"},
+        {"icon": 14, "title": "#解禁", "desc": "取消禁言"},
+        {"icon": 1, "title": "#开启全体禁言", "desc": "开启全体禁言"},
+        {"icon": 12, "title": "#关闭全体禁言", "desc": "开启全体禁言"},
+        {"icon": 1, "title": "#撤回", "desc": "撤回"},
+        {"icon": 12, "title": "#设置精华", "desc": "设置精华"},
+        {"icon": 12, "title": "#取消精华", "desc": "取消精华"}
+      ]
+    },
+    {
+      "group": "违禁词管理",
+      "list": [
+        {"icon": 2, "title": "#开启违禁词", "desc": "开启违禁词检测"},
+        {"icon": 3, "title": "#关闭违禁词", "desc": "关闭违禁词检测"},
+        {"icon": 4, "title": "#新增违禁词", "desc": "新增违禁词 [精确|模糊|正则][禁|踢|撤]"},
+        {"icon": 5, "title": "#删除违禁词", "desc": "删除违禁词 [词条]"},
+        {"icon": 6, "title": "#清空违禁词", "desc": "清空所有违禁词"},
+        {"icon": 8, "title": "#违禁词列表", "desc": "查看违禁词列表"},
+        {"icon": 7, "title": "#设置违禁词禁言时间", "desc": "设置禁言时长(秒)"}
+      ]
+    }
+  ]
+}
