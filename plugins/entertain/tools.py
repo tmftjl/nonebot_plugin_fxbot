@@ -9,7 +9,7 @@ from nonebot import logger
 from ...chat.tools import ToolContext, ToolError, ToolRuntime, tool
 from ...utils.compat import build_message_segment
 from .fortune import _generate_fortune_canvas, _get_background_image, _get_or_create_today_fortune
-from .musicshare import Platform, _get_song_url_api, _search_songs_api
+from .musicshare import MusicLoginRequired, Platform, _get_song_url_with_pool, _login_hint, _search_songs_with_pool
 
 
 @tool(
@@ -82,11 +82,11 @@ async def play_music_tool(
 ) -> str:
     """AI 工具：搜索并播放歌曲。"""
     try:
-        songs = await _search_songs_api(platform, song_name)
+        songs = await _search_songs_with_pool(ctx.user_id, platform, song_name)
         if not songs:
             raise ToolError(f"未找到歌曲：{song_name}", code="song_not_found")
         song = songs[0]
-        audio_url = await _get_song_url_api(platform, song)
+        audio_url = await _get_song_url_with_pool(ctx.user_id, platform, song)
         if not audio_url:
             raise ToolError(f"无法获取歌曲播放链接：{song.song}", code="url_unavailable")
 
@@ -100,6 +100,8 @@ async def play_music_tool(
         return f"正在播放：{song.song}{suffix}"
     except ToolError:
         raise
+    except MusicLoginRequired as exc:
+        raise ToolError(_login_hint(platform), code="login_required") from exc
     except Exception as exc:
         logger.opt(exception=True).warning("[entertain.tools] 点歌失败")
         raise ToolError(f"点歌失败：{exc}", code="internal_error") from exc

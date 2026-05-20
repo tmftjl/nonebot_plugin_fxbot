@@ -8,10 +8,12 @@ from ...config import get_manager
 
 DEFAULTS: dict[str, Any] = {
     "music": {
-        "api_base": "https://api.vkeys.cn",
+        "api_base": "http://127.0.0.1:3000",
         "provider_default": "tencent",
         "search_num": 20,
-        "quality": 4,
+        "login_mode": "shared",
+        "qq_quality": 2,
+        "netease_quality": 4,
     },
     "box": {
         "only_admin": False,
