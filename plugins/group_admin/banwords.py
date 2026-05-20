@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from nonebot import get_driver, logger
+from nonebot import logger
 from nonebot.adapters import Bot, Event
 from nonebot.exception import StopPropagation
 from nonebot.matcher import Matcher
@@ -17,6 +17,7 @@ from nonebot.params import RegexGroup
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
 from ...utils.paths import data_dir
+from .identity import is_superuser_id
 
 MatchType = Literal["exact", "fuzzy", "regex"]
 PenaltyType = Literal["mute", "kick", "recall"]
@@ -228,7 +229,7 @@ class BannedWordsManager:
 
 
 banword_add = P.on_regex(
-    r"^#新增(精确|模糊|正则)?(禁|踢|撤)?违禁词\s*(.+)$",
+    r"^#新增(精确|模糊|正则)?(禁|踢|撤)?违禁词\s*(.+)",
     name="banword_add",
     display_name="新增违禁词",
     priority=5,
@@ -238,7 +239,7 @@ banword_add = P.on_regex(
 )
 
 banword_del = P.on_regex(
-    r"^#删除违禁词\s*(.+)$",
+    r"^#删除违禁词\s*(.+)",
     name="banword_del",
     display_name="删除违禁词",
     priority=5,
@@ -248,7 +249,7 @@ banword_del = P.on_regex(
 )
 
 banword_clear = P.on_regex(
-    r"^#清空违禁词$",
+    r"^#清空违禁词",
     name="banword_clear",
     display_name="清空违禁词",
     priority=5,
@@ -258,7 +259,7 @@ banword_clear = P.on_regex(
 )
 
 banword_list = P.on_regex(
-    r"^#违禁词列表$",
+    r"^#违禁词列表",
     name="banword_list",
     display_name="违禁词列表",
     priority=5,
@@ -268,7 +269,7 @@ banword_list = P.on_regex(
 )
 
 banword_on = P.on_regex(
-    r"^#开启违禁词$",
+    r"^#开启违禁词",
     name="banword_on",
     display_name="开启违禁词",
     priority=5,
@@ -278,7 +279,7 @@ banword_on = P.on_regex(
 )
 
 banword_off = P.on_regex(
-    r"^#关闭违禁词$",
+    r"^#关闭违禁词",
     name="banword_off",
     display_name="关闭违禁词",
     priority=5,
@@ -288,7 +289,7 @@ banword_off = P.on_regex(
 )
 
 banword_mute_time = P.on_regex(
-    r"^#设置违禁词禁言时间\s*(\d+)$",
+    r"^#设置违禁词禁言时间\s*(\d+)",
     name="banword_mute_time",
     display_name="设置违禁词禁言时间",
     priority=5,
@@ -435,14 +436,6 @@ async def _is_admin(bot: Bot, event: Event) -> bool:
         return False
 
 
-def _is_superuser(event: Event) -> bool:
-    """判断消息发送者是否为超级用户。"""
-    user_id = _uid(event)
-    if user_id is None:
-        return False
-    return str(user_id) in {str(item) for item in get_driver().config.superusers}
-
-
 @banword_interceptor.handle()
 async def _handle_banword_interceptor(bot: Bot, event: Event) -> None:
     """拦截违禁词消息。"""
@@ -453,7 +446,7 @@ async def _handle_banword_interceptor(bot: Bot, event: Event) -> None:
     config = BannedWordsManager.load_group_config(group_id)
     if not config.get("enabled", True):
         return
-    if await _is_admin(bot, event) or _is_superuser(event):
+    if await _is_admin(bot, event) or is_superuser_id(user_id):
         return
     text = _plain_text(event)
     if not text:

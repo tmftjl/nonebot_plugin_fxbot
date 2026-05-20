@@ -19,7 +19,7 @@ from .config import cfg_reg_time
 P = Plugin("entertain", display_name="娱乐", enabled=True, level=PermLevel.LOW, scene=PermScene.ALL)
 
 reg_time_cmd = P.on_regex(
-    r"^#注册时间\s*(.*)$",
+    r"^#注册时间",
     name="query",
     display_name="注册时间",
     priority=5,

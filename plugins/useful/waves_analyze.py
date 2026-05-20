@@ -23,7 +23,7 @@ from .config import cfg_waves_analyze
 P = Plugin("useful", display_name="实用工具", enabled=True, level=PermLevel.LOW, scene=PermScene.ALL)
 
 waves_analyze_cmd = P.on_regex(
-    r"^(.*)ww(?:评分|分析)\s*(.+)$",
+    r"^(.*)ww(评分|分析)\s*(.+)",
     name="waves_analyze",
     display_name="鸣潮分析评分",
     priority=5,

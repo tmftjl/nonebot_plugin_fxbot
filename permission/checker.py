@@ -132,6 +132,9 @@ class PermissionChecker:
         plugin_node = sub_plugins.get(plugin, {}) if plugin else {}
         commands = plugin_node.get("commands") if isinstance(plugin_node.get("commands"), dict) else {}
 
+        if context.user_level == PermLevel.SUPERUSER:
+            return True
+
         layers = [
             config.get("top"),
             plugin_node.get("top") if plugin else None,

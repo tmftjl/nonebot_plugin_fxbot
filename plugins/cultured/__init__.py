@@ -113,10 +113,20 @@ def _pick_face_image(name: str, bot: Bot):
     return build_message_segment(bot, "image", fallback.format(name=name))
 
 
+api_cmd = P.on_regex(
+    r"^(?:#|/)?(?:来张|看看|随机).+",
+    name="pictures_api",
+    display_name="看看腿",
+    priority=5,
+    block=True,
+    level=PermLevel.MEMBER,
+    scene=PermScene.ALL,
+)
+
 list_cmd = P.on_regex(
-    r"^#?(?:cultured|图库|表情包)列表$",
+    r"^#?(?:cultured|表情包)列表",
     name="pictures_list",
-    display_name="图库列表",
+    display_name="表情包列表",
     priority=5,
     block=True,
     level=PermLevel.MEMBER,
@@ -124,9 +134,9 @@ list_cmd = P.on_regex(
 )
 
 picture_cmd = P.on_regex(
-    r"^(?:#|/)?(?:来张|看看|随机)\s*(\S+)$",
-    name="pictures_random",
-    display_name="随机图片",
+    r"^(?:#|/)?(?:来张|看看|随机)\s*(\S+)",
+    name="pictures_local",
+    display_name="随机本地表情",
     priority=5,
     block=True,
     level=PermLevel.MEMBER,
@@ -138,17 +148,12 @@ picture_cmd = P.on_regex(
 async def _handle_list(matcher: Matcher) -> None:
     """发送图库列表。"""
     faces = face_list()
-    api_names = _command_names()
-    lines = ["图库列表："]
-    lines.append("本地图库：" + ("、".join(faces) if faces else "(空)"))
-    lines.append("API 图库：" + ("、".join(api_names) if api_names else "(空)"))
-    lines.append("使用方式：#随机<名称>")
-    await matcher.finish("\n".join(lines))
+    await matcher.finish("表情列表：\n" + ("、".join(faces) or "(空)") + "\n\n使用 #随机<名称>")
 
 
-@picture_cmd.handle()
-async def _handle_picture(matcher: Matcher, bot: Bot, event: Event) -> None:
-    """发送随机图片。"""
+@api_cmd.handle()
+async def _handle_api_picture(matcher: Matcher, bot: Bot, event: Event) -> None:
+    """发送 API 图库图片。"""
     if not bool(load_cfg().get("random_picture_open", True)):
         await matcher.finish()
 
@@ -167,12 +172,20 @@ async def _handle_picture(matcher: Matcher, bot: Bot, event: Event) -> None:
                     except Exception:
                         logger.opt(exception=True).warning(f"[Cultured] API 图库 {name} 请求失败")
                         await matcher.finish("图库接口请求失败")
-                    if result is not None:
+                    if result:
                         await matcher.finish(result)
-                    await matcher.finish("图库接口没有返回可用图片")
+                    await matcher.finish()
+    await matcher.finish()
 
-    match = re.match(r"^(?:#|/)?(?:来张|看看|随机)\s*(\S+)$", text)
+
+@picture_cmd.handle()
+async def _handle_picture(matcher: Matcher, bot: Bot, event: Event) -> None:
+    """发送随机本地图库图片。"""
+    if not bool(load_cfg().get("random_picture_open", True)):
+        return
+
+    text = _event_text(event)
+    match = re.match(r"^(?:#|/)?(?:来张|看看|随机)\s*(\S+)", text)
     name = match.group(1) if match else ""
     if name in face_list():
         await matcher.finish(build_message(bot, _pick_face_image(name, bot)))
-    await matcher.finish(f"图库「{name}」暂未配置图片源。")

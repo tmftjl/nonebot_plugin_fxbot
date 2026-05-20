@@ -789,7 +789,7 @@ login_poll_matcher = P.on_regex(
 )
 
 search_matcher = P.on_regex(
-    r"^#点歌(?:(qq|网易云|netease))?\s*(.*)$",
+    r"^#点歌(?:(qq|网易云|netease))?\s*(.*)",
     name="search",
     display_name="点歌",
     priority=5,
@@ -799,11 +799,9 @@ search_matcher = P.on_regex(
 )
 
 select_matcher = P.on_regex(
-    r"^#(\d{1,2})$",
+    r"^#(\d+)",
     name="select",
-    display_name="选择歌曲",
-    priority=5,
-    block=True,
+    display_name="选择歌",
     level=PermLevel.LOW,
     scene=PermScene.ALL,
 )

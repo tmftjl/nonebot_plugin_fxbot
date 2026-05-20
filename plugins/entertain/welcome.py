@@ -211,7 +211,7 @@ def _render_welcome_content(bot: Bot, group_key: str | None, text: str):
 
 
 set_welcome_cmd = P.on_regex(
-    r"^#设置欢迎(?:\s*(.+))?",
+    r"^(?:#)设置欢迎(?:\s*(.+))?",
     name="set",
     display_name="设置欢迎",
     priority=5,
@@ -221,7 +221,7 @@ set_welcome_cmd = P.on_regex(
 )
 
 show_welcome_cmd = P.on_regex(
-    r"^#?查看欢迎$",
+    r"^(?:#)?查看欢迎",
     name="show",
     display_name="查看欢迎",
     priority=5,
@@ -231,7 +231,7 @@ show_welcome_cmd = P.on_regex(
 )
 
 enable_welcome_cmd = P.on_regex(
-    r"^#?开启欢迎$",
+    r"^(?:#)?开启欢迎",
     name="enable",
     display_name="开启欢迎",
     priority=5,
@@ -241,7 +241,7 @@ enable_welcome_cmd = P.on_regex(
 )
 
 disable_welcome_cmd = P.on_regex(
-    r"^#?关闭欢迎$",
+    r"^(?:#)?关闭欢迎",
     name="disable",
     display_name="关闭欢迎",
     priority=5,

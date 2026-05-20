@@ -78,7 +78,7 @@ async def _is_admin(bot: Bot, group_id: str, user_id: str) -> bool:
 
 
 box_matcher = P.on_regex(
-    r"^(?:#|/)(?:盒|开盒)\s*(.*)$",
+    r"^(?:#|/)(?:盒|开盒)\s*(.*)",
     name="box",
     display_name="开盒",
     priority=5,

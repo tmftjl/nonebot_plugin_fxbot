@@ -93,7 +93,7 @@ def disable_image_summary() -> bool:
 
 
 toggle_cmd = P.on_regex(
-    r"^#(?:开启|关闭)图片外显$",
+    r"^#(开启|关闭)图片外显",
     name="toggle_image_display",
     display_name="图片外显开关",
     priority=5,
