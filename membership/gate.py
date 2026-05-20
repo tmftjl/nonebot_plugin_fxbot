@@ -13,7 +13,7 @@ from ..config import get_manager as get_config_manager
 
 from .guard import membership_guard
 
-_RENEW_COMMAND_RE = re.compile(r"^(?:续费|fxbot续费|查到期|fxbot查到期|控制台登录)(?:\s+.*)?$")
+_RENEW_COMMAND_RE = re.compile(r"^(?:ww到期|ww(?:拉群|续费)|ww续费\d+(?:天|月|年)-[A-Za-z0-9_]+)$")
 
 
 def _normalize_id(value: Any) -> str | None:

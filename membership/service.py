@@ -122,6 +122,7 @@ class MembershipService:
         duration_value: int,
         duration_unit: str,
         operator_user_id: str | None = None,
+        managed_by_bot: str | None = None,
         code: str = "",
         session: AsyncSession | None = None,
     ) -> RedeemResult:
@@ -135,6 +136,7 @@ class MembershipService:
                     duration_value=duration_value,
                     duration_unit=duration_unit,
                     operator_user_id=operator_user_id,
+                    managed_by_bot=managed_by_bot,
                     code=code,
                     session=new_session,
                 )
@@ -153,6 +155,8 @@ class MembershipService:
         after = base + delta
         group.status = "active"
         group.expires_at = after
+        if managed_by_bot:
+            group.managed_by_bot = str(managed_by_bot)
         group.updated_at = now
 
         record = RenewRecord(
@@ -204,6 +208,7 @@ class MembershipService:
         group_id: str,
         *,
         operator_user_id: str | None = None,
+        managed_by_bot: str | None = None,
     ) -> RedeemResult:
         """兑换续费码。"""
         maker = get_session_maker()
@@ -225,6 +230,7 @@ class MembershipService:
                 duration_value=renew_code.duration_value,
                 duration_unit=renew_code.duration_unit,
                 operator_user_id=operator_user_id,
+                managed_by_bot=managed_by_bot,
                 code=renew_code.code,
                 session=session,
             )

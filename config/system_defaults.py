@@ -5,7 +5,7 @@ from __future__ import annotations
 SYSTEM_DEFAULTS = {
     "membership": {
         "enabled": True,
-        "renew_commands": ["续费", "fxbot续费", "查到期", "fxbot查到期", "控制台登录"],
+        "renew_commands": ["ww到期", "ww拉群", "ww续费", "ww续费<时长>-<续费码>"],
         "cache_ttl_seconds": 60,
         "expire_notice_days": [7, 3, 1],
         "auto_leave_expired_groups": False,
