@@ -187,3 +187,36 @@ async def send_ark_message(bot: Bot, event: Any, ark_data: dict[str, Any]) -> An
     if not is_qq_official(bot):
         raise RuntimeError("ARK 消息仅支持 QQ 官方适配器")
     return await bot.send(event, message={"type": "ark", "data": ark_data})
+
+
+def extract_message_target(event: Any) -> dict[str, Any]:
+    """提取可持久化的消息目标信息。"""
+    target: dict[str, Any] = {
+        "user_id": getattr(event, "user_id", None),
+        "session_id": event.get_session_id() if hasattr(event, "get_session_id") else None,
+    }
+    for field in ("group_id", "group_openid", "channel_id", "guild_id"):
+        value = getattr(event, field, None)
+        if value is not None:
+            target[field] = value
+    return target
+
+
+async def send_text_to_target(bot: Bot, target: dict[str, Any], text: str) -> Any:
+    """根据保存的目标信息发送文本消息。"""
+    if target.get("group_id") is not None:
+        group_id = target["group_id"]
+        if hasattr(bot, "send_group_msg"):
+            return await bot.send_group_msg(group_id=int(group_id), message=text)
+        return await bot.call_api("send_group_msg", group_id=int(group_id), message=text)
+
+    if is_qq_official(bot) and target.get("group_openid") is not None:
+        message = build_message(bot, build_message_segment(bot, "text", text))
+        return await bot.send_to_group(group_openid=str(target["group_openid"]), message=message)
+
+    if target.get("user_id") is not None:
+        user_id = target["user_id"]
+        if hasattr(bot, "send_private_msg"):
+            return await bot.send_private_msg(user_id=int(user_id), message=text)
+
+    raise RuntimeError("无法识别消息目标")
