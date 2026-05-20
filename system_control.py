@@ -15,7 +15,7 @@ from nonebot.matcher import Matcher
 from .permission import PermLevel, PermScene
 from .plugin import Plugin
 from .utils.compat import extract_message_target, send_text_to_target
-from .utils.paths import data_dir
+from .utils.paths import data_dir, package_root
 
 P = Plugin("system", category="system", display_name="系统命令")
 
@@ -37,6 +37,17 @@ shutdown_cmd = P.on_regex(
     r"^#关机$",
     name="system_shutdown",
     display_name="关机",
+    priority=1,
+    block=True,
+    level=PermLevel.SUPERUSER,
+    scene=PermScene.ALL,
+    log=True,
+)
+
+update_cmd = P.on_regex(
+    r"^#更新$",
+    name="system_update",
+    display_name="更新并重启",
     priority=1,
     block=True,
     level=PermLevel.SUPERUSER,
@@ -108,6 +119,42 @@ async def _execute_shutdown() -> None:
         sys.exit(0)
 
 
+def _truncate_output(text: str, limit: int = 1200) -> str:
+    """截断命令输出，避免消息过长。"""
+    clean_text = str(text or "").strip()
+    if len(clean_text) <= limit:
+        return clean_text
+    return clean_text[-limit:]
+
+
+async def _git_pull_plugin() -> tuple[bool, str]:
+    """在当前插件目录执行 git pull。"""
+    workdir = package_root()
+    process = await asyncio.create_subprocess_exec(
+        "git",
+        "pull",
+        "--ff-only",
+        cwd=str(workdir),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=180)
+    except asyncio.TimeoutError:
+        process.kill()
+        await process.communicate()
+        return False, "git pull 超时"
+
+    output = "\n".join(
+        part.decode("utf-8", errors="replace").strip()
+        for part in (stdout, stderr)
+        if part
+    ).strip()
+    if process.returncode == 0:
+        return True, output or "Already up to date."
+    return False, output or f"git pull 失败，退出码 {process.returncode}"
+
+
 @restart_cmd.handle()
 async def _handle_restart(matcher: Matcher, bot: Bot, event: Event) -> None:
     """处理重启命令。"""
@@ -131,6 +178,24 @@ async def _handle_shutdown(matcher: Matcher, event: Event) -> None:
         logger.error(f"[system_control] 发送关闭提示失败: {exc}")
     await asyncio.sleep(0.5)
     await _execute_shutdown()
+
+
+@update_cmd.handle()
+async def _handle_update(matcher: Matcher, bot: Bot, event: Event) -> None:
+    """处理更新并重启命令。"""
+    logger.warning(f"[system_control] 超级用户触发 Bot 更新命令: {event.get_user_id()}")
+    await matcher.send("收到更新指令，正在拉取插件代码...")
+    ok, output = await _git_pull_plugin()
+    if not ok:
+        await matcher.finish("更新失败：\n" + _truncate_output(output))
+
+    try:
+        await matcher.send("更新完成，正在重启 NoneBot...\n" + _truncate_output(output))
+    except Exception as exc:
+        logger.error(f"[system_control] 发送更新提示失败: {exc}")
+    _save_restart_info(bot, event)
+    await asyncio.sleep(0.5)
+    await _execute_restart()
 
 
 @get_driver().on_bot_connect
