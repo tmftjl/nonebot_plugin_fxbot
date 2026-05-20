@@ -170,11 +170,26 @@ def _login_session_key(owner: str, platform: Platform) -> str:
 
 
 def _save_login_sessions() -> None:
-    """保存登录会话。"""
+    """只保存已登录账号会话。"""
     try:
+        persist_data: dict[str, dict[str, Any]] = {}
+        for key, bucket in _LOGIN_SESSIONS.items():
+            if not isinstance(bucket, dict):
+                continue
+            accounts = [
+                account
+                for account in bucket.get("accounts", [])
+                if isinstance(account, dict) and str(account.get("auth") or "").strip()
+            ]
+            if accounts:
+                persist_data[key] = {
+                    "provider": bucket.get("provider"),
+                    "owner": bucket.get("owner"),
+                    "accounts": accounts,
+                }
         _LOGIN_SESSION_FILE.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = _LOGIN_SESSION_FILE.with_suffix(".tmp")
-        tmp_path.write_text(json.dumps(_LOGIN_SESSIONS, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp_path.write_text(json.dumps(persist_data, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp_path.replace(_LOGIN_SESSION_FILE)
     except Exception:
         logger.opt(exception=True).warning("[musicshare] 保存音乐登录会话失败")
@@ -241,7 +256,6 @@ async def _get_login_session_data(owner: str, platform: Platform) -> dict[str, A
         bucket = _normalize_login_bucket(owner, platform, cached)
     else:
         bucket = _normalize_login_bucket(owner, platform, _LOGIN_SESSIONS.get(_login_session_key(owner, platform)))
-    _LOGIN_SESSIONS[_login_session_key(owner, platform)] = bucket
     _cache_set(cache_key, bucket)
     return bucket
 
@@ -249,7 +263,11 @@ async def _get_login_session_data(owner: str, platform: Platform) -> dict[str, A
 async def _save_login_bucket(owner: str, platform: Platform, bucket: dict[str, Any]) -> None:
     """保存登录会话桶。"""
     bucket = _normalize_login_bucket(owner, platform, bucket)
-    _LOGIN_SESSIONS[_login_session_key(owner, platform)] = bucket
+    session_key = _login_session_key(owner, platform)
+    if bucket.get("accounts"):
+        _LOGIN_SESSIONS[session_key] = bucket
+    else:
+        _LOGIN_SESSIONS.pop(session_key, None)
     _save_login_sessions()
     _cache_set(_login_cache_key(owner, platform), bucket)
 
