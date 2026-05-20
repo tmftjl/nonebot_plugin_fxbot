@@ -20,6 +20,7 @@ from .utils.paths import data_dir
 P = Plugin("system", category="system", display_name="系统命令")
 
 _RESTART_FLAG_FILE = data_dir("system") / "restart_flag.json"
+_PROC_CMDLINE = "/proc/self/cmdline"
 
 restart_cmd = P.on_regex(
     r"^#重启$",
@@ -61,14 +62,37 @@ def _save_restart_info(bot: Bot, event: Event) -> None:
         logger.error(f"[system_control] 保存重启信息失败: {exc}")
 
 
+def _current_process_argv() -> list[str]:
+    """获取可用于 execv 的当前进程启动参数。"""
+    original_argv = getattr(sys, "orig_argv", None)
+    if isinstance(original_argv, list) and len(original_argv) >= 2:
+        argv = [str(item) for item in original_argv]
+        argv[0] = sys.executable
+        if argv[1:] != sys.argv:
+            return argv
+
+    try:
+        with open(_PROC_CMDLINE, "rb") as file:
+            raw_parts = [part for part in file.read().split(b"\0") if part]
+        parts = [part.decode(errors="surrogateescape") for part in raw_parts]
+        if parts:
+            parts[0] = sys.executable
+            return parts
+    except Exception:
+        pass
+
+    if sys.argv[:1] == ["-c"]:
+        raise RuntimeError("当前进程由 python -c 启动，且无法读取 /proc/self/cmdline，不能还原重启命令")
+    return [sys.executable] + sys.argv
+
+
 async def _execute_restart() -> None:
     """执行进程重启。"""
     logger.critical("[system_control] 执行 NoneBot 进程重启")
     try:
-        python = sys.executable
-        args = sys.argv[:]
-        logger.info(f"[system_control] 重启命令: {python} {' '.join(args)}")
-        os.execv(python, [python] + args)
+        argv = _current_process_argv()
+        logger.info(f"[system_control] 重启命令: {' '.join(argv)}")
+        os.execv(argv[0], argv)
     except Exception as exc:
         logger.error(f"[system_control] Bot 重启失败: {exc}")
 
