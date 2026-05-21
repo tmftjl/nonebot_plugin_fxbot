@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
-from nonebot import get_driver
+from nonebot import get_driver, require
 from nonebot.plugin import PluginMetadata
 
 from . import bootstrap
+
+require("nonebot_plugin_waiter")
+require("nonebot_plugin_uninfo")
+require("nonebot_plugin_localstore")
+require("nonebot_plugin_orm")
 
 __plugin_meta__ = PluginMetadata(
     name="FxBot",
