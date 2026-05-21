@@ -26,7 +26,14 @@ from pypinyin import Style, pinyin
 
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
-from .config import memes_config, notice_prob
+from .config import (
+    cfg_command_prefixes,
+    cfg_list_image_config,
+    cfg_notice_prob,
+    cfg_random_meme_show_info,
+    cfg_use_default_when_no_text,
+    cfg_use_sender_when_no_image,
+)
 from .exception import MemeGeneratorException
 from .manager import MemeMode, meme_manager
 from .plot import plot_duration_counts, plot_meme_and_duration_counts
@@ -121,7 +128,7 @@ def _build_trigger_map() -> dict[str, list[str]]:
 
 def _prefixes() -> list[str]:
     prefixes = list(get_driver().config.command_start)
-    if (configured := memes_config.memes_command_prefixes) is not None:
+    if (configured := cfg_command_prefixes()) is not None:
         prefixes = configured
     return prefixes
 
@@ -396,7 +403,7 @@ async def extract_inputs(
             image_user_ids.insert(0, str(session.user.id))  # 发送者的头像
 
         if (
-            memes_config.memes_use_sender_when_no_image
+            cfg_use_sender_when_no_image()
             and meme.params_type.min_images == 1
             and len(images) == 0
             and session.user.avatar
@@ -405,7 +412,7 @@ async def extract_inputs(
             image_user_ids.append(str(session.user.id))  # 发送者的头像
 
         if (
-            memes_config.memes_use_default_when_no_text
+            cfg_use_default_when_no_text()
             and meme.params_type.min_texts > 0
             and len(texts) == 0
         ):
@@ -676,7 +683,7 @@ meme_msg_matcher = P.on_message(
 async def _help(bot: Bot, event: Event, matcher: Matcher, session: Uninfo):
     user_key = get_user_id(session)
     memes = meme_manager.get_memes()
-    list_image_config = memes_config.memes_list_image_config
+    list_image_config = cfg_list_image_config()
 
     sort_by = list_image_config.sort_by
     sort_reverse = list_image_config.sort_reverse
@@ -740,7 +747,7 @@ async def _help(bot: Bot, event: Event, matcher: Matcher, session: Uninfo):
     else:
         img = meme_list_cache_file.read_bytes()
 
-    prefixes = memes_config.memes_command_prefixes or []
+    prefixes = cfg_command_prefixes() or []
     hint_prefix = prefixes[0] if prefixes else ""
     text = (
         f"触发方式：关键词{prefixes} 表情名 图片/文字/@某人\n"
@@ -755,7 +762,7 @@ async def _help(bot: Bot, event: Event, matcher: Matcher, session: Uninfo):
 
 @usage_help_cmd.handle()
 async def _usage_help(matcher: Matcher):
-    prefixes = memes_config.memes_command_prefixes or []
+    prefixes = cfg_command_prefixes() or []
     memes_prefix = prefixes[0] if prefixes else ""
     await matcher.finish(
         "- 表情列表\n"
@@ -1159,7 +1166,7 @@ async def _random(
         texts_num = len(base_texts)
         if (
             session.user.avatar
-            and memes_config.memes_use_sender_when_no_image
+            and cfg_use_sender_when_no_image()
             and images_num == 0
             and meme.params_type.min_images == 1
         ):
@@ -1190,8 +1197,10 @@ async def _random(
         await matcher.finish(e.message)
 
     text = ""
-    if random.random() < notice_prob:
-        text = "注意避免群聊刷屏哦~群管可启用禁用表情\n"
+    if cfg_random_meme_show_info():
+        text = f"随机表情：{meme.key} ({'/'.join(meme.keywords)})\n"
+    if random.random() < cfg_notice_prob():
+        text += "注意避免群聊刷屏哦~群管可启用禁用表情\n"
     await _send_image(matcher, bot, event, result, text)
 
 
@@ -1232,8 +1241,8 @@ async def _meme(
         await matcher.finish(e.message)
 
     text = ""
-    if random.random() < notice_prob:
-        text = "注意避免群聊刷屏哦~群管可启用禁用表情\n"
+    if random.random() < cfg_notice_prob():
+        text += "注意避免群聊刷屏哦~群管可启用禁用表情\n"
     await _send_image(matcher, bot, event, result, text)
 
 

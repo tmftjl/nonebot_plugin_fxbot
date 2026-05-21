@@ -8,7 +8,7 @@ from arclet.alconna.action import Action
 from nonebot.compat import model_dump, type_validate_python
 from pydantic import BaseModel
 
-from .config import memes_config
+from .config import cfg_base_url
 from .exception import (
     ArgMismatch,
     ArgModelMismatch,
@@ -24,7 +24,9 @@ from .exception import (
     TextOverLength,
 )
 
-BASE_URL = memes_config.meme_generator_base_url
+def _base_url() -> str:
+    """读取表情生成服务地址。"""
+    return cfg_base_url()
 
 
 @overload
@@ -62,7 +64,7 @@ async def send_request(
 ):
     async with httpx.AsyncClient(timeout=300) as client:
         request_method = client.post if request_type == "POST" else client.get
-        resp = await request_method(BASE_URL + router, **kwargs)
+        resp = await request_method(_base_url() + router, **kwargs)
         status_code = resp.status_code
         if status_code == 200:
             if response_type == "JSON":

@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from rapidfuzz import process
 
 from ...utils.paths import data_dir
-from .config import memes_config
+from .config import cfg_disabled_list
 from .request import MemeInfo, get_meme_info, get_meme_keys
 
 config_path = data_dir("memes") / "memes_config.yaml"
@@ -45,12 +45,10 @@ class MemeManager:
         self.__meme_tags: dict[str, list[MemeInfo]] = {}
 
     async def init(self):
+        disabled_list = set(cfg_disabled_list())
         self.__meme_dict = {
             meme_key: await get_meme_info(meme_key)
-            for meme_key in filter(
-                lambda meme_key: meme_key not in memes_config.memes_disabled_list,
-                sorted(await get_meme_keys()),
-            )
+            for meme_key in filter(lambda meme_key: meme_key not in disabled_list, sorted(await get_meme_keys()))
         }
         self.__load()
         self.__dump()

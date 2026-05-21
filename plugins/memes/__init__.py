@@ -6,10 +6,10 @@ require("nonebot_plugin_uninfo")
 require("nonebot_plugin_localstore")
 require("nonebot_plugin_orm")
 
-from .config import Config, memes_config, ban_path
+from .config import cfg_command_prefixes
 from . import native_matchers as native_matchers
 
-memes_prefixes = memes_config.memes_command_prefixes
+memes_prefixes = cfg_command_prefixes()
 memes_prefix = memes_prefixes[0] if memes_prefixes else ""
 
 __plugin_meta__ = PluginMetadata(
@@ -51,7 +51,6 @@ __plugin_meta__ = PluginMetadata(
     ),
     type="application",
     homepage="https://github.com/noneplugin/nonebot-plugin-memes",
-    config=Config,
     supported_adapters=inherit_supported_adapters(
         "nonebot_plugin_uninfo"
     ),
