@@ -22,14 +22,15 @@ def get_ui_schema() -> dict[str, Any]:
                 "key": "cultured",
                 "title": "图库",
                 "schemas": [
-                    {"field": "random_picture_open", "label": "启用随机图片", "component": "Switch", "default": DEFAULTS["random_picture_open"]},
-                    {"field": "poke_repo", "label": "戳一戳图库仓库", "component": "Input", "default": DEFAULTS["poke_repo"]},
-                    {"field": "fallback_api", "label": "兜底图片 API", "component": "Input", "default": DEFAULTS["fallback_api"]},
+                    {"field": "random_picture_open", "label": "启用随机图片", "component": "Switch", "default": DEFAULTS["random_picture_open"], "helpMessage": "关闭后图库相关命令不会自动回复图片。"},
+                    {"field": "poke_repo", "label": "戳一戳图库仓库", "component": "Input", "default": DEFAULTS["poke_repo"], "helpMessage": "本地图库仓库地址。"},
+                    {"field": "fallback_api", "label": "兜底图片 API", "component": "Input", "default": DEFAULTS["fallback_api"], "helpMessage": "找不到本地图片时使用的远程图片接口。"},
                     {
                         "field": "custom_commands",
                         "label": "自定义图库命令",
                         "component": "GSubForm",
                         "default": DEFAULTS["custom_commands"],
+                        "helpMessage": "自定义图库命令列表，键名是命令名。",
                         "componentProps": {
                             "modalProps": {"title": "自定义图库命令"},
                             "schemas": [

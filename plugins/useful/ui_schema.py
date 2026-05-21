@@ -27,17 +27,17 @@ def get_ui_schema() -> dict[str, Any]:
                 "key": "useful.taffy",
                 "title": "Taffy 查询",
                 "schemas": [
-                    {"field": "api_url", "label": "接口地址", "component": "Input", "default": DEFAULTS["taffy"]["api_url"]},
-                    {"field": "username", "label": "用户名", "component": "Input", "default": DEFAULTS["taffy"]["username"]},
-                    {"field": "password", "label": "密码", "component": "InputPassword", "default": DEFAULTS["taffy"]["password"]},
+                    {"field": "api_url", "label": "接口地址", "component": "Input", "default": DEFAULTS["taffy"]["api_url"], "helpMessage": "Taffy 统计接口。"},
+                    {"field": "username", "label": "用户名", "component": "Input", "default": DEFAULTS["taffy"]["username"], "helpMessage": "接口认证用户名。"},
+                    {"field": "password", "label": "密码", "component": "InputPassword", "default": DEFAULTS["taffy"]["password"], "helpMessage": "接口认证密码。"},
                 ],
             },
             {
                 "key": "useful.waves_analyze",
                 "title": "鸣潮评分",
                 "schemas": [
-                    {"field": "api_url", "label": "接口地址", "component": "Input", "default": DEFAULTS["waves_analyze"]["api_url"]},
-                    {"field": "token", "label": "Token", "component": "InputPassword", "default": DEFAULTS["waves_analyze"]["token"]},
+                    {"field": "api_url", "label": "接口地址", "component": "Input", "default": DEFAULTS["waves_analyze"]["api_url"], "helpMessage": "鸣潮评分服务地址。"},
+                    {"field": "token", "label": "Token", "component": "InputPassword", "default": DEFAULTS["waves_analyze"]["token"], "helpMessage": "评分服务的鉴权令牌。"},
                 ],
             },
         ],
