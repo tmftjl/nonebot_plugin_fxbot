@@ -123,4 +123,14 @@ export const metaApi = {
       bots: (data.bots || []).map((item) => typeof item === 'string' ? item : item.self_id)
     }
   },
+  getPersonas: () => api.get<Record<string, string>>('/ai_chat/personas'),
+  createPersona: (key: string, desc: string) => api.post<{ success: boolean }>('/ai_chat/persona', { key, desc }),
+  updatePersona: (key: string, desc: string) => api.put<{ success: boolean }>(`/ai_chat/persona/${encodeURIComponent(key)}`, { desc }),
+  deletePersona: (key: string) => api.delete<{ success: boolean }>(`/ai_chat/persona/${encodeURIComponent(key)}`),
+  getKnowledgeStats: (personaName: string) => api.get<{ persona_name: string; count: number }>(`/ai_chat/knowledge/${encodeURIComponent(personaName)}/stats`),
+  importKnowledgeText: (personaName: string, text: string, source: string = 'webui_import') =>
+    api.post<{ success: boolean; message: string; count: number }>(`/ai_chat/knowledge/${encodeURIComponent(personaName)}/text`, { text, source }),
+  clearKnowledge: (personaName: string) =>
+    api.delete<{ success: boolean; message: string }>(`/ai_chat/knowledge/${encodeURIComponent(personaName)}`),
+  getTools: () => api.get<{ success: boolean; data: Array<{ label: string; value: string }> }>('/ai_chat/tools'),
 }

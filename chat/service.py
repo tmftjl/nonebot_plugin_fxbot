@@ -9,6 +9,7 @@ from nonebot import logger
 
 from ..config import get_manager as get_config_manager
 
+from .personas import get_persona_text
 from .providers import provider_manager
 from .session import ChatSessionStore, default_session_store
 from .tools import ToolContext, ToolRuntime, default_registry, execute_tool
@@ -28,6 +29,12 @@ class ChatService:
         provider = provider_manager.get_provider()
         runtime = runtime or ToolRuntime()
         messages = self.session_store.get(request.session_id)
+        persona_text = get_persona_text(request.metadata.get("persona_name") if isinstance(request.metadata, dict) else None)
+        if persona_text:
+            if not messages or messages[0].get("role") != "system":
+                messages.insert(0, {"role": "system", "content": persona_text})
+            else:
+                messages[0] = {"role": "system", "content": persona_text}
         messages.append({"role": "user", "content": request.text})
 
         tools = default_registry.to_openai_tools()

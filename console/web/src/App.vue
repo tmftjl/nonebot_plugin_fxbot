@@ -6,6 +6,7 @@ import DashboardView from '@/views/DashboardView.vue'
 import ConfigView from '@/views/ConfigView.vue'
 import PermissionsView from '@/views/PermissionsView.vue'
 import MembershipView from '@/views/MembershipView.vue'
+import PersonasView from '@/views/PersonasView.vue'
 import StatsView from '@/views/StatsView.vue'
 import { configApi } from '@/api'
 import type { ConfigTab } from '@/types/schema'
@@ -102,6 +103,10 @@ const sidebarWidth = computed(() => sidebarCollapsed.value ? '64px' : '200px')
             <el-icon><Lock /></el-icon>
             <template #title>权限管理</template>
           </el-menu-item>
+          <el-menu-item index="personas">
+            <el-icon><Avatar /></el-icon>
+            <template #title>人格管理</template>
+          </el-menu-item>
           <!-- 插件配置子菜单 -->
           <el-sub-menu index="config" v-if="configTabs.length">
             <template #title>
@@ -128,6 +133,7 @@ const sidebarWidth = computed(() => sidebarCollapsed.value ? '64px' : '200px')
         <MembershipView v-else-if="activeMenu === 'membership'" />
         <StatsView v-else-if="activeMenu === 'stats'" />
         <PermissionsView v-else-if="activeMenu === 'permissions'" />
+        <PersonasView v-else-if="activeMenu === 'personas'" />
         <ConfigView v-else-if="activeMenu.startsWith('config')" :active-tab="activeConfigTab" />
       </el-main>
     </el-container>

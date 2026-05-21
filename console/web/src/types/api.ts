@@ -91,4 +91,5 @@ export interface BotStats {
 export interface Persona {
   key: string
   details: string
+  knowledgeCount?: number
 }
