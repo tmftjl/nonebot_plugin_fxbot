@@ -7,7 +7,59 @@ from datetime import datetime, timezone
 from sqlalchemy import UniqueConstraint
 from sqlmodel import Field
 
-from ..db import BaseIDModel
+from ..db import BaseIDModel, exec_list
+
+
+exec_list.extend(
+    [
+        "ALTER TABLE membership_groups ADD COLUMN managed_by_bot VARCHAR",
+        "ALTER TABLE membership_groups ADD COLUMN remark VARCHAR",
+        "ALTER TABLE membership_groups ADD COLUMN last_reminder_on VARCHAR",
+        "ALTER TABLE membership_groups ADD COLUMN expired_at DATETIME",
+        "ALTER TABLE membership_groups ADD COLUMN created_at DATETIME",
+        "ALTER TABLE membership_groups ADD COLUMN updated_at DATETIME",
+        "ALTER TABLE renew_codes ADD COLUMN expires_at DATETIME",
+        "ALTER TABLE renew_codes ADD COLUMN status VARCHAR NOT NULL DEFAULT 'active'",
+        "ALTER TABLE renew_codes ADD COLUMN created_at DATETIME",
+        "ALTER TABLE renew_codes ADD COLUMN updated_at DATETIME",
+        "ALTER TABLE membership ADD COLUMN status TEXT DEFAULT 'active'",
+        "ALTER TABLE membership ADD COLUMN managed_by_bot TEXT",
+        "ALTER TABLE membership ADD COLUMN remark TEXT",
+        "ALTER TABLE membership ADD COLUMN last_reminder_on TEXT",
+        "ALTER TABLE membership ADD COLUMN expired_at TEXT",
+        """
+        INSERT INTO membership_groups (
+            group_id,
+            status,
+            expires_at,
+            managed_by_bot,
+            remark,
+            last_reminder_on,
+            expired_at,
+            created_at,
+            updated_at
+        )
+        SELECT
+            membership.group_id,
+            COALESCE(membership.status, 'active'),
+            membership.expiry,
+            membership.managed_by_bot,
+            membership.remark,
+            membership.last_reminder_on,
+            membership.expired_at,
+            CURRENT_TIMESTAMP,
+            CURRENT_TIMESTAMP
+        FROM membership
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM membership_groups
+            WHERE membership_groups.group_id = membership.group_id
+        )
+        """,
+        "DROP TABLE IF EXISTS membership",
+        "DROP TABLE IF EXISTS generatedcode",
+    ]
+)
 
 
 def utc_now() -> datetime:
