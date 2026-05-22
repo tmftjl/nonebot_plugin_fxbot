@@ -27,11 +27,8 @@ from ...adapter.uninfo import QryItrface, Uninfo
 from ...utils.paths import cache_dir
 from .config import (
     cfg_command_prefixes,
-    cfg_list_image_config,
     cfg_notice_prob,
     cfg_random_meme_show_info,
-    cfg_use_default_when_no_text,
-    cfg_use_sender_when_no_image,
 )
 from .exception import MemeGeneratorException
 from .manager import MemeMode, meme_manager
@@ -387,22 +384,59 @@ async def extract_inputs(
             image_user_ids.insert(0, str(session.user.id))  # 发送者的头像
 
         if (
-            cfg_use_sender_when_no_image()
-            and meme.params_type.min_images == 1
+            meme.params_type.min_images == 1
             and len(images) == 0
             and session.user.avatar
         ):
             images.append(await download_url(session.user.avatar))
             image_user_ids.append(str(session.user.id))  # 发送者的头像
 
-        if (
-            cfg_use_default_when_no_text()
-            and meme.params_type.min_texts > 0
-            and len(texts) == 0
-        ):
-            texts = list(meme.params_type.default_texts)
-
     return texts, images, image_user_ids
+
+
+def _num_desc(min_num: int, max_num: int) -> str:
+    """格式化参数数量要求。"""
+    if min_num == max_num:
+        return str(min_num)
+    return f"{min_num} ~ {max_num}"
+
+
+def _can_fill_default_texts(meme: MemeInfo, texts: list[str]) -> bool:
+    """判断默认文案是否足够补齐缺失文本。"""
+    return len(texts) < meme.params_type.min_texts and len(
+        meme.params_type.default_texts
+    ) >= meme.params_type.min_texts
+
+
+async def normalize_meme_params(
+    matcher: Matcher,
+    meme: MemeInfo,
+    texts: list[str],
+    images: list[bytes],
+) -> list[str]:
+    """固定处理表情参数数量不匹配。"""
+    params = meme.params_type
+
+    if len(images) < params.min_images or len(images) > params.max_images:
+        await matcher.finish(
+            f"图片数量不符，图片数量应为 {_num_desc(params.min_images, params.max_images)}"
+        )
+
+    if len(texts) > params.max_texts:
+        await matcher.finish(
+            f"文字数量不符，文字数量应为 {_num_desc(params.min_texts, params.max_texts)}"
+        )
+
+    if len(texts) < params.min_texts:
+        if _can_fill_default_texts(meme, texts):
+            default_texts = list(params.default_texts)
+            texts = texts + default_texts[len(texts) : params.min_texts]
+        else:
+            await matcher.finish(
+                f"文字数量不符，文字数量应为 {_num_desc(params.min_texts, params.max_texts)}"
+            )
+
+    return texts
 
 
 async def apply_protection(
@@ -666,41 +700,22 @@ meme_msg_matcher = P.on_message(
 @help_cmd.handle()
 async def _help(bot: Bot, event: Event, matcher: Matcher, session: Uninfo):
     user_key = get_user_id(session)
-    memes = meme_manager.get_memes()
-    list_image_config = cfg_list_image_config()
-
-    sort_by = list_image_config.sort_by
-    sort_reverse = list_image_config.sort_reverse
-    if sort_by == "key":
-        memes = sorted(memes, key=lambda m: m.key, reverse=sort_reverse)
-    elif sort_by == "keywords":
-        memes = sorted(
-            memes,
-            key=lambda m: "".join(
-                chain.from_iterable(pinyin(m.keywords[0], style=Style.TONE3))
-            ),
-            reverse=sort_reverse,
-        )
-    elif sort_by == "date_created":
-        memes = sorted(memes, key=lambda m: m.date_created, reverse=sort_reverse)
-    elif sort_by == "date_modified":
-        memes = sorted(memes, key=lambda m: m.date_modified, reverse=sort_reverse)
-
-    label_new_timedelta = list_image_config.label_new_timedelta
-    label_hot_threshold = list_image_config.label_hot_threshold
-    label_hot_days = list_image_config.label_hot_days
+    memes = sorted(
+        meme_manager.get_memes(),
+        key=lambda m: "".join(chain.from_iterable(pinyin(m.keywords[0], style=Style.TONE3))),
+    )
     meme_generation_keys = await get_meme_generation_keys(
         session,
         SessionIdType.GLOBAL,
-        time_start=datetime.now(timezone.utc) - timedelta(days=label_hot_days),
+        time_start=datetime.now(timezone.utc) - timedelta(days=7),
     )
 
     meme_list: list[MemeKeyWithProperties] = []
     for meme in memes:
         labels: list[str] = []
-        if datetime.now() - meme.date_created < label_new_timedelta:
+        if datetime.now() - meme.date_created < timedelta(days=30):
             labels.append("new")
-        if meme_generation_keys.count(meme.key) >= label_hot_threshold:
+        if meme_generation_keys.count(meme.key) >= 21:
             labels.append("hot")
         disabled = not meme_manager.check(user_key, meme.key)
         meme_list.append(
@@ -724,8 +739,8 @@ async def _help(bot: Bot, event: Event, matcher: Matcher, session: Uninfo):
     if not meme_list_cache_file.exists():
         img = await render_meme_list(
             meme_list,
-            text_template=list_image_config.text_template,
-            add_category_icon=list_image_config.add_category_icon,
+            text_template="{keywords}",
+            add_category_icon=True,
         )
         meme_list_cache_file.write_bytes(img)
     else:
@@ -1150,13 +1165,14 @@ async def _random(
         texts_num = len(base_texts)
         if (
             session.user.avatar
-            and cfg_use_sender_when_no_image()
             and images_num == 0
             and meme.params_type.min_images == 1
         ):
             images_num = 1
         if session.user.avatar and meme.params_type.min_images == 2 and images_num == 1:
             images_num = 2
+        if _can_fill_default_texts(meme, base_texts):
+            texts_num = meme.params_type.min_texts
         if (
             meme.params_type.min_images <= images_num <= meme.params_type.max_images
             and meme.params_type.min_texts <= texts_num <= meme.params_type.max_texts
@@ -1168,6 +1184,7 @@ async def _random(
 
     meme = random.choice(candidates)
     texts, images, image_user_ids = await extract_inputs(bot, event, matcher, session, interface, meme, arg)
+    texts = await normalize_meme_params(matcher, meme, texts, images)
 
     # 应用表情保护逻辑
     images = await apply_protection(
@@ -1212,6 +1229,7 @@ async def _meme(
     texts, images, image_user_ids = await extract_inputs(
         bot, event, matcher, session, interface, meme, msg
     )
+    texts = await normalize_meme_params(matcher, meme, texts, images)
 
     # 应用表情保护逻辑
     images = await apply_protection(
