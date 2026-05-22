@@ -97,13 +97,6 @@ def is_initialized() -> bool:
     return _db_initialized
 
 
-def get_session_maker() -> async_sessionmaker[AsyncSession]:
-    """获取会话工厂。"""
-    if async_maker is None:
-        raise RuntimeError("Database is not initialized")
-    return async_maker
-
-
 def with_session(
     func: Callable[Concatenate[Any, AsyncSession, P], Awaitable[R]],
 ) -> Callable[Concatenate[Any, P], Awaitable[R]]:

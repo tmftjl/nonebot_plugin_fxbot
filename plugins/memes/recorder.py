@@ -3,7 +3,10 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Optional, Union
 
+from sqlalchemy import ColumnElement
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel import select
+
 from ...adapter.uninfo import Session, SupportScope
 from ...adapter.uninfo import (
     BotModel,
@@ -12,25 +15,9 @@ from ...adapter.uninfo import (
     UserModel,
     get_session_persist_id,
 )
-from sqlalchemy import ColumnElement
-from sqlmodel import Field, SQLModel, select
-
 from ...db import with_session
+from ...models.memes import MemeGenerationRecord
 from .utils import remove_timezone
-
-
-class MemeGenerationRecord(SQLModel, table=True):
-    """表情调用记录"""
-
-    __tablename__ = "nonebot_plugin_memes_api_memegenerationrecord_v2"
-
-    id: int | None = Field(default=None, primary_key=True)
-    session_persist_id: int = Field(nullable=False)
-    """ 会话持久化id """
-    time: datetime = Field(nullable=False)
-    """ 调用时间\n\n存放 UTC 时间 """
-    meme_key: str = Field(max_length=64, nullable=False)
-    """ 表情名 """
 
 
 @dataclass

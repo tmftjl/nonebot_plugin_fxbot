@@ -36,7 +36,7 @@ async def init() -> None:
 
     _import_startup_module("membership.models")
     _import_startup_module("adapter.uninfo")
-    _import_startup_module("plugins.memes.recorder")
+    _import_startup_module("models.memes")
 
     try:
         await init_database()
