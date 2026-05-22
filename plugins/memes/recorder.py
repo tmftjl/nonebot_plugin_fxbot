@@ -1,9 +1,9 @@
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
-from nonebot_plugin_orm import Model, get_session
+from sqlalchemy.ext.asyncio import AsyncSession
 from ...adapter.uninfo import Session, SupportScope
 from ...adapter.uninfo import (
     BotModel,
@@ -12,24 +12,24 @@ from ...adapter.uninfo import (
     UserModel,
     get_session_persist_id,
 )
-from sqlalchemy import ColumnElement, String, select
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import ColumnElement
+from sqlmodel import Field, SQLModel, select
 
+from ...db import with_session
 from .utils import remove_timezone
 
 
-class MemeGenerationRecord(Model):
+class MemeGenerationRecord(SQLModel, table=True):
     """表情调用记录"""
 
     __tablename__ = "nonebot_plugin_memes_api_memegenerationrecord_v2"
-    __table_args__ = {"extend_existing": True}
 
-    id: Mapped[int] = mapped_column(primary_key=True)
-    session_persist_id: Mapped[int]
+    id: int | None = Field(default=None, primary_key=True)
+    session_persist_id: int = Field(nullable=False)
     """ 会话持久化id """
-    time: Mapped[datetime]
+    time: datetime = Field(nullable=False)
     """ 调用时间\n\n存放 UTC 时间 """
-    meme_key: Mapped[str] = mapped_column(String(64))
+    meme_key: str = Field(max_length=64, nullable=False)
     """ 表情名 """
 
 
@@ -39,24 +39,42 @@ class MemeRecord:
     meme_key: str
 
 
-async def record_meme_generation(session: Session, meme_key: str):
-    session_persist_id = await get_session_persist_id(session)
-
-    record = MemeGenerationRecord(
-        session_persist_id=session_persist_id,
-        time=remove_timezone(datetime.now(timezone.utc)),
-        meme_key=meme_key,
-    )
-    async with get_session() as db_session:
-        db_session.add(record)
-        await db_session.commit()
-
-
 class SessionIdType(Enum):
     GLOBAL = 0
     USER = 1
     GROUP = 2
     GROUP_USER = 3
+
+
+class _MemeRecordStore:
+    """表情调用记录存储。"""
+
+    @with_session
+    async def add_record(self, db_session: AsyncSession, session: Session, meme_key: str) -> None:
+        session_persist_id = await get_session_persist_id(session, db_session=db_session)
+        db_session.add(
+            MemeGenerationRecord(
+                session_persist_id=session_persist_id,
+                time=remove_timezone(datetime.now(timezone.utc)),
+                meme_key=meme_key,
+            )
+        )
+
+    @with_session
+    async def list_records(self, db_session: AsyncSession, statement: Any) -> list[MemeRecord]:
+        results = (await db_session.execute(statement)).all()
+        return [MemeRecord(result[0], result[1]) for result in results]
+
+    @with_session
+    async def list_scalars(self, db_session: AsyncSession, statement: Any) -> list[Any]:
+        return list((await db_session.execute(statement)).scalars().all())
+
+
+_store = _MemeRecordStore()
+
+
+async def record_meme_generation(session: Session, meme_key: str):
+    await _store.add_record(session, meme_key)
 
 
 def scope_value(scope: Union[str, SupportScope]) -> str:
@@ -117,9 +135,7 @@ async def get_meme_generation_records(
         .join(SceneModel, SceneModel.id == SessionModel.scene_persist_id)
         .join(UserModel, UserModel.id == SessionModel.user_persist_id)
     )
-    async with get_session() as db_session:
-        results = (await db_session.execute(statement)).all()
-    return [MemeRecord(result[0], result[1]) for result in results]
+    return await _store.list_records(statement)
 
 
 async def get_meme_generation_times(
@@ -141,9 +157,7 @@ async def get_meme_generation_times(
         .join(SceneModel, SceneModel.id == SessionModel.scene_persist_id)
         .join(UserModel, UserModel.id == SessionModel.user_persist_id)
     )
-    async with get_session() as db_session:
-        results = (await db_session.scalars(statement)).all()
-    return list(results)
+    return await _store.list_scalars(statement)
 
 
 async def get_meme_generation_keys(
@@ -164,6 +178,4 @@ async def get_meme_generation_keys(
         .join(SceneModel, SceneModel.id == SessionModel.scene_persist_id)
         .join(UserModel, UserModel.id == SessionModel.user_persist_id)
     )
-    async with get_session() as db_session:
-        results = (await db_session.scalars(statement)).all()
-    return list(results)
+    return await _store.list_scalars(statement)

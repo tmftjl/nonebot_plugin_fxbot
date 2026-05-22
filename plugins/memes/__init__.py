@@ -1,9 +1,5 @@
 from nonebot.plugin import PluginMetadata
 
-from nonebot import require
-
-require("nonebot_plugin_orm")
-
 from .config import cfg_command_prefixes
 from . import native_matchers as native_matchers
 

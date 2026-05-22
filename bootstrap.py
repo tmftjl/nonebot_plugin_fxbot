@@ -35,6 +35,8 @@ async def init() -> None:
     get_config_manager().bootstrap()
 
     _import_startup_module("membership.models")
+    _import_startup_module("adapter.uninfo")
+    _import_startup_module("plugins.memes.recorder")
 
     try:
         await init_database()

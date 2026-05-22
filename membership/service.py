@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from ..db import get_session_maker
+from ..db import with_session
 
 from .models import MembershipGroup, RenewCode, RenewRecord, utc_now
 
@@ -52,21 +52,18 @@ def _generate_code(length: int = 16) -> str:
 class MembershipService:
     """会员业务服务。"""
 
-    async def get_group(self, group_id: str, *, session: AsyncSession | None = None) -> MembershipGroup | None:
+    @with_session
+    async def get_group(self, session: AsyncSession, group_id: str) -> MembershipGroup | None:
         """按群号获取会员群。"""
-        owns_session = session is None
-        if owns_session:
-            maker = get_session_maker()
-            async with maker() as new_session:
-                return await self.get_group(group_id, session=new_session)
-        assert session is not None
         result = await session.execute(
             select(MembershipGroup).where(MembershipGroup.group_id == str(group_id))
         )
         return result.scalar_one_or_none()
 
+    @with_session
     async def upsert_group(
         self,
+        session: AsyncSession,
         group_id: str,
         *,
         expires_at: datetime | None = None,
@@ -75,48 +72,43 @@ class MembershipService:
         remark: str | None = None,
     ) -> MembershipGroup:
         """新增或更新会员群。"""
-        maker = get_session_maker()
-        async with maker() as session:
-            group = await self.get_group(group_id, session=session)
-            if group is None:
-                group = MembershipGroup(group_id=str(group_id))
-                session.add(group)
-            group.status = status
-            group.expires_at = expires_at
-            group.managed_by_bot = managed_by_bot
-            group.remark = remark
-            group.updated_at = utc_now()
-            await session.commit()
-            await session.refresh(group)
-            return group
+        group = await self.get_group(group_id, session=session)
+        if group is None:
+            group = MembershipGroup(group_id=str(group_id))
+            session.add(group)
+        group.status = status
+        group.expires_at = expires_at
+        group.managed_by_bot = managed_by_bot
+        group.remark = remark
+        group.updated_at = utc_now()
+        await session.flush()
+        return group
 
-    async def list_groups(self) -> list[MembershipGroup]:
+    @with_session
+    async def list_groups(self, session: AsyncSession) -> list[MembershipGroup]:
         """列出所有会员群。"""
-        maker = get_session_maker()
-        async with maker() as session:
-            result = await session.execute(select(MembershipGroup))
-            return list(result.scalars().all())
+        result = await session.execute(select(MembershipGroup))
+        return list(result.scalars().all())
 
-    async def list_codes(self) -> list[RenewCode]:
+    @with_session
+    async def list_codes(self, session: AsyncSession) -> list[RenewCode]:
         """列出所有续费码。"""
-        maker = get_session_maker()
-        async with maker() as session:
-            result = await session.execute(select(RenewCode))
-            return list(result.scalars().all())
+        result = await session.execute(select(RenewCode))
+        return list(result.scalars().all())
 
-    async def delete_group(self, group_id: str) -> bool:
+    @with_session
+    async def delete_group(self, session: AsyncSession, group_id: str) -> bool:
         """删除会员群记录。"""
-        maker = get_session_maker()
-        async with maker() as session:
-            group = await self.get_group(group_id, session=session)
-            if group is None:
-                return False
-            await session.delete(group)
-            await session.commit()
-            return True
+        group = await self.get_group(group_id, session=session)
+        if group is None:
+            return False
+        await session.delete(group)
+        return True
 
+    @with_session
     async def extend_group(
         self,
+        session: AsyncSession,
         group_id: str,
         *,
         duration_value: int,
@@ -124,26 +116,8 @@ class MembershipService:
         operator_user_id: str | None = None,
         managed_by_bot: str | None = None,
         code: str = "",
-        session: AsyncSession | None = None,
     ) -> RedeemResult:
         """为会员群延期。"""
-        owns_session = session is None
-        if owns_session:
-            maker = get_session_maker()
-            async with maker() as new_session:
-                result = await self.extend_group(
-                    group_id,
-                    duration_value=duration_value,
-                    duration_unit=duration_unit,
-                    operator_user_id=operator_user_id,
-                    managed_by_bot=managed_by_bot,
-                    code=code,
-                    session=new_session,
-                )
-                await new_session.commit()
-                return result
-
-        assert session is not None
         now = utc_now()
         delta = _duration_delta(duration_value, duration_unit)
         group = await self.get_group(group_id, session=session)
@@ -169,8 +143,10 @@ class MembershipService:
         session.add(record)
         return RedeemResult(group=group, record=record, before_expires_at=before, after_expires_at=after)
 
+    @with_session
     async def generate_code(
         self,
+        session: AsyncSession,
         *,
         duration_value: int,
         duration_unit: str,
@@ -183,27 +159,26 @@ class MembershipService:
         if max_use <= 0:
             raise MembershipError("最大使用次数必须大于 0")
 
-        maker = get_session_maker()
-        async with maker() as session:
-            for _ in range(20):
-                code = _generate_code(code_length)
-                exists = await session.execute(select(RenewCode).where(RenewCode.code == code))
-                if exists.scalar_one_or_none() is None:
-                    row = RenewCode(
-                        code=code,
-                        duration_value=duration_value,
-                        duration_unit=duration_unit,
-                        max_use=max_use,
-                        expires_at=expires_at,
-                    )
-                    session.add(row)
-                    await session.commit()
-                    await session.refresh(row)
-                    return row
+        for _ in range(20):
+            code = _generate_code(code_length)
+            exists = await session.execute(select(RenewCode).where(RenewCode.code == code))
+            if exists.scalar_one_or_none() is None:
+                row = RenewCode(
+                    code=code,
+                    duration_value=duration_value,
+                    duration_unit=duration_unit,
+                    max_use=max_use,
+                    expires_at=expires_at,
+                )
+                session.add(row)
+                await session.flush()
+                return row
         raise MembershipError("续费码生成失败，请重试")
 
+    @with_session
     async def redeem_code(
         self,
+        session: AsyncSession,
         code: str,
         group_id: str,
         *,
@@ -211,37 +186,33 @@ class MembershipService:
         managed_by_bot: str | None = None,
     ) -> RedeemResult:
         """兑换续费码。"""
-        maker = get_session_maker()
-        async with maker() as session:
-            result = await session.execute(select(RenewCode).where(RenewCode.code == str(code).strip()))
-            renew_code = result.scalar_one_or_none()
-            if renew_code is None:
-                raise MembershipError("续费码不存在")
-            now = utc_now()
-            if renew_code.status != "active":
-                raise MembershipError("续费码不可用")
-            if renew_code.expires_at and renew_code.expires_at <= now:
-                raise MembershipError("续费码已过期")
-            if renew_code.used_count >= renew_code.max_use:
-                raise MembershipError("续费码使用次数已耗尽")
+        result = await session.execute(select(RenewCode).where(RenewCode.code == str(code).strip()))
+        renew_code = result.scalar_one_or_none()
+        if renew_code is None:
+            raise MembershipError("续费码不存在")
+        now = utc_now()
+        if renew_code.status != "active":
+            raise MembershipError("续费码不可用")
+        if renew_code.expires_at and renew_code.expires_at <= now:
+            raise MembershipError("续费码已过期")
+        if renew_code.used_count >= renew_code.max_use:
+            raise MembershipError("续费码使用次数已耗尽")
 
-            redeem_result = await self.extend_group(
-                group_id,
-                duration_value=renew_code.duration_value,
-                duration_unit=renew_code.duration_unit,
-                operator_user_id=operator_user_id,
-                managed_by_bot=managed_by_bot,
-                code=renew_code.code,
-                session=session,
-            )
-            renew_code.used_count += 1
-            renew_code.updated_at = now
-            if renew_code.used_count >= renew_code.max_use:
-                renew_code.status = "used"
-            await session.commit()
-            await session.refresh(redeem_result.group)
-            await session.refresh(redeem_result.record)
-            return redeem_result
+        redeem_result = await self.extend_group(
+            group_id,
+            duration_value=renew_code.duration_value,
+            duration_unit=renew_code.duration_unit,
+            operator_user_id=operator_user_id,
+            managed_by_bot=managed_by_bot,
+            code=renew_code.code,
+            session=session,
+        )
+        renew_code.used_count += 1
+        renew_code.updated_at = now
+        if renew_code.used_count >= renew_code.max_use:
+            renew_code.status = "used"
+        await session.flush()
+        return redeem_result
 
 
 membership_service = MembershipService()

@@ -12,10 +12,11 @@ from typing import Annotated, Any
 from nonebot import get_bots
 from nonebot.adapters import Bot, Event
 from nonebot.params import Depends
-from nonebot_plugin_orm import Model, get_session as get_orm_session
-from sqlalchemy import JSON, Integer, String, UniqueConstraint, exc, select
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import Column, JSON, UniqueConstraint, exc
+from sqlmodel import Field, SQLModel, select
 
+from ..db import with_session
 from .support import adapter_name, event_group_id, event_user_id, official_qq_avatar, qq_avatar
 
 
@@ -336,16 +337,16 @@ def QueryInterface() -> Interface:
 QryItrface = Annotated[Interface, QueryInterface()]
 
 
-class BotModel(Model):
+class BotModel(SQLModel, table=True):
     """持久化 Bot。"""
 
     __tablename__ = "nonebot_plugin_uninfo_botmodel"
     __table_args__ = (UniqueConstraint("self_id", "adapter", name="nonebot_plugin_uninfo_unique_bot"),)
 
-    id: Mapped[int] = mapped_column(primary_key=True)
-    self_id: Mapped[str] = mapped_column(String(64))
-    adapter: Mapped[str] = mapped_column(String(32))
-    scope: Mapped[str] = mapped_column(String(32))
+    id: int | None = Field(default=None, primary_key=True)
+    self_id: str = Field(max_length=64, nullable=False)
+    adapter: str = Field(max_length=32, nullable=False)
+    scope: str = Field(max_length=32, nullable=False)
 
     def get_bot(self) -> Bot | None:
         for bot in list(get_bots().values()):
@@ -354,43 +355,43 @@ class BotModel(Model):
         return None
 
 
-class SceneModel(Model):
+class SceneModel(SQLModel, table=True):
     """持久化场景。"""
 
     __tablename__ = "nonebot_plugin_uninfo_scenemodel"
     __table_args__ = (UniqueConstraint("bot_persist_id", "scene_id", "scene_type", name="nonebot_plugin_uninfo_unique_scene"),)
 
-    id: Mapped[int] = mapped_column(primary_key=True)
-    bot_persist_id: Mapped[int] = mapped_column(Integer)
-    parent_scene_persist_id: Mapped[int | None] = mapped_column(Integer)
-    scene_id: Mapped[str] = mapped_column(String(64))
-    scene_type: Mapped[int] = mapped_column(Integer)
-    scene_data: Mapped[dict] = mapped_column(JSON)
+    id: int | None = Field(default=None, primary_key=True)
+    bot_persist_id: int = Field(nullable=False)
+    parent_scene_persist_id: int | None = Field(default=None, nullable=True)
+    scene_id: str = Field(max_length=64, nullable=False)
+    scene_type: int = Field(nullable=False)
+    scene_data: dict = Field(sa_column=Column(JSON, nullable=False))
 
 
-class UserModel(Model):
+class UserModel(SQLModel, table=True):
     """持久化用户。"""
 
     __tablename__ = "nonebot_plugin_uninfo_usermodel"
     __table_args__ = (UniqueConstraint("bot_persist_id", "user_id", name="nonebot_plugin_uninfo_unique_user"),)
 
-    id: Mapped[int] = mapped_column(primary_key=True)
-    bot_persist_id: Mapped[int] = mapped_column(Integer)
-    user_id: Mapped[str] = mapped_column(String(64))
-    user_data: Mapped[dict] = mapped_column(JSON)
+    id: int | None = Field(default=None, primary_key=True)
+    bot_persist_id: int = Field(nullable=False)
+    user_id: str = Field(max_length=64, nullable=False)
+    user_data: dict = Field(sa_column=Column(JSON, nullable=False))
 
 
-class SessionModel(Model):
+class SessionModel(SQLModel, table=True):
     """持久化会话。"""
 
     __tablename__ = "nonebot_plugin_uninfo_sessionmodel"
     __table_args__ = (UniqueConstraint("bot_persist_id", "scene_persist_id", "user_persist_id", name="nonebot_plugin_uninfo_unique_session"),)
 
-    id: Mapped[int] = mapped_column(primary_key=True)
-    bot_persist_id: Mapped[int] = mapped_column(Integer)
-    scene_persist_id: Mapped[int] = mapped_column(Integer)
-    user_persist_id: Mapped[int] = mapped_column(Integer)
-    member_data: Mapped[dict | None] = mapped_column(JSON)
+    id: int | None = Field(default=None, primary_key=True)
+    bot_persist_id: int = Field(nullable=False)
+    scene_persist_id: int = Field(nullable=False)
+    user_persist_id: int = Field(nullable=False)
+    member_data: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))
 
 
 _insert_mutex: asyncio.Lock | None = None
@@ -403,109 +404,134 @@ def _get_insert_mutex() -> asyncio.Lock:
     return _insert_mutex
 
 
-async def get_bot_persist_id(basic_info: dict[str, str]) -> int:
-    statement = select(BotModel).where(BotModel.self_id == basic_info["self_id"]).where(BotModel.adapter == basic_info["adapter"])
-    async with get_orm_session() as db_session:
-        if row := (await db_session.scalars(statement)).one_or_none():
+class _UninfoStore:
+    """会话信息持久化存储。"""
+
+    @with_session
+    async def get_bot_persist_id(self, db_session: AsyncSession, basic_info: dict[str, str]) -> int:
+        statement = select(BotModel).where(BotModel.self_id == basic_info["self_id"]).where(BotModel.adapter == basic_info["adapter"])
+        if row := (await db_session.execute(statement)).scalar_one_or_none():
             row.scope = basic_info["scope"]
-            await db_session.commit()
-            await db_session.refresh(row)
+            await db_session.flush()
+            assert row.id is not None
             return row.id
 
-    row = BotModel(self_id=basic_info["self_id"], adapter=basic_info["adapter"], scope=basic_info["scope"])
-    async with _get_insert_mutex():
-        try:
-            async with get_orm_session() as db_session:
+        row = BotModel(self_id=basic_info["self_id"], adapter=basic_info["adapter"], scope=basic_info["scope"])
+        async with _get_insert_mutex():
+            try:
                 db_session.add(row)
-                await db_session.commit()
-                await db_session.refresh(row)
+                await db_session.flush()
+                assert row.id is not None
                 return row.id
-        except exc.IntegrityError:
-            async with get_orm_session() as db_session:
-                return (await db_session.scalars(statement)).one().id
+            except exc.IntegrityError:
+                await db_session.rollback()
+                persisted_id = (await db_session.execute(statement)).scalar_one().id
+                assert persisted_id is not None
+                return persisted_id
+
+    @with_session
+    async def get_scene_persist_id(self, db_session: AsyncSession, basic_info: dict[str, str], scene: Scene) -> int:
+        bot_persist_id = await self.get_bot_persist_id(basic_info, session=db_session)
+        parent_id = await self.get_scene_persist_id(basic_info, scene.parent, session=db_session) if scene.parent else None
+        scene_data = json.loads(scene.dump_json())
+        statement = (
+            select(SceneModel)
+            .where(SceneModel.bot_persist_id == bot_persist_id)
+            .where(SceneModel.scene_id == scene.id)
+            .where(SceneModel.scene_type == scene.type.value)
+        )
+        if row := (await db_session.execute(statement)).scalar_one_or_none():
+            row.parent_scene_persist_id = parent_id
+            row.scene_data = scene_data
+            await db_session.flush()
+            assert row.id is not None
+            return row.id
+
+        row = SceneModel(bot_persist_id=bot_persist_id, parent_scene_persist_id=parent_id, scene_id=scene.id, scene_type=scene.type.value, scene_data=scene_data)
+        async with _get_insert_mutex():
+            try:
+                db_session.add(row)
+                await db_session.flush()
+                assert row.id is not None
+                return row.id
+            except exc.IntegrityError:
+                await db_session.rollback()
+                persisted_id = (await db_session.execute(statement)).scalar_one().id
+                assert persisted_id is not None
+                return persisted_id
+
+    @with_session
+    async def get_user_persist_id(self, db_session: AsyncSession, basic_info: dict[str, str], user: User) -> int:
+        bot_persist_id = await self.get_bot_persist_id(basic_info, session=db_session)
+        user_data = json.loads(user.dump_json())
+        statement = select(UserModel).where(UserModel.bot_persist_id == bot_persist_id).where(UserModel.user_id == user.id)
+        if row := (await db_session.execute(statement)).scalar_one_or_none():
+            row.user_data = user_data
+            await db_session.flush()
+            assert row.id is not None
+            return row.id
+
+        row = UserModel(bot_persist_id=bot_persist_id, user_id=user.id, user_data=user_data)
+        async with _get_insert_mutex():
+            try:
+                db_session.add(row)
+                await db_session.flush()
+                assert row.id is not None
+                return row.id
+            except exc.IntegrityError:
+                await db_session.rollback()
+                persisted_id = (await db_session.execute(statement)).scalar_one().id
+                assert persisted_id is not None
+                return persisted_id
+
+    @with_session
+    async def get_session_persist_id(self, db_session: AsyncSession, info_session: Session) -> int:
+        bot_persist_id = await self.get_bot_persist_id(info_session.basic, session=db_session)
+        scene_persist_id = await self.get_scene_persist_id(info_session.basic, info_session.scene, session=db_session)
+        user_persist_id = await self.get_user_persist_id(info_session.basic, info_session.user, session=db_session)
+        member_data = json.loads(info_session.member.dump_json()) if info_session.member else None
+        statement = (
+            select(SessionModel)
+            .where(SessionModel.bot_persist_id == bot_persist_id)
+            .where(SessionModel.scene_persist_id == scene_persist_id)
+            .where(SessionModel.user_persist_id == user_persist_id)
+        )
+        if row := (await db_session.execute(statement)).scalar_one_or_none():
+            row.member_data = member_data
+            await db_session.flush()
+            assert row.id is not None
+            return row.id
+
+        row = SessionModel(bot_persist_id=bot_persist_id, scene_persist_id=scene_persist_id, user_persist_id=user_persist_id, member_data=member_data)
+        async with _get_insert_mutex():
+            try:
+                db_session.add(row)
+                await db_session.flush()
+                assert row.id is not None
+                return row.id
+            except exc.IntegrityError:
+                await db_session.rollback()
+                persisted_id = (await db_session.execute(statement)).scalar_one().id
+                assert persisted_id is not None
+                return persisted_id
+
+
+_store = _UninfoStore()
+
+
+async def get_bot_persist_id(basic_info: dict[str, str]) -> int:
+    return await _store.get_bot_persist_id(basic_info)
 
 
 async def get_scene_persist_id(basic_info: dict[str, str], scene: Scene) -> int:
-    bot_persist_id = await get_bot_persist_id(basic_info)
-    parent_id = await get_scene_persist_id(basic_info, scene.parent) if scene.parent else None
-    scene_data = json.loads(scene.dump_json())
-    statement = (
-        select(SceneModel)
-        .where(SceneModel.bot_persist_id == bot_persist_id)
-        .where(SceneModel.scene_id == scene.id)
-        .where(SceneModel.scene_type == scene.type.value)
-    )
-    async with get_orm_session() as db_session:
-        if row := (await db_session.scalars(statement)).one_or_none():
-            row.parent_scene_persist_id = parent_id
-            row.scene_data = scene_data
-            await db_session.commit()
-            await db_session.refresh(row)
-            return row.id
-
-    row = SceneModel(bot_persist_id=bot_persist_id, parent_scene_persist_id=parent_id, scene_id=scene.id, scene_type=scene.type.value, scene_data=scene_data)
-    async with _get_insert_mutex():
-        try:
-            async with get_orm_session() as db_session:
-                db_session.add(row)
-                await db_session.commit()
-                await db_session.refresh(row)
-                return row.id
-        except exc.IntegrityError:
-            async with get_orm_session() as db_session:
-                return (await db_session.scalars(statement)).one().id
+    return await _store.get_scene_persist_id(basic_info, scene)
 
 
 async def get_user_persist_id(basic_info: dict[str, str], user: User) -> int:
-    bot_persist_id = await get_bot_persist_id(basic_info)
-    user_data = json.loads(user.dump_json())
-    statement = select(UserModel).where(UserModel.bot_persist_id == bot_persist_id).where(UserModel.user_id == user.id)
-    async with get_orm_session() as db_session:
-        if row := (await db_session.scalars(statement)).one_or_none():
-            row.user_data = user_data
-            await db_session.commit()
-            await db_session.refresh(row)
-            return row.id
-
-    row = UserModel(bot_persist_id=bot_persist_id, user_id=user.id, user_data=user_data)
-    async with _get_insert_mutex():
-        try:
-            async with get_orm_session() as db_session:
-                db_session.add(row)
-                await db_session.commit()
-                await db_session.refresh(row)
-                return row.id
-        except exc.IntegrityError:
-            async with get_orm_session() as db_session:
-                return (await db_session.scalars(statement)).one().id
+    return await _store.get_user_persist_id(basic_info, user)
 
 
-async def get_session_persist_id(session: Session) -> int:
-    bot_persist_id = await get_bot_persist_id(session.basic)
-    scene_persist_id = await get_scene_persist_id(session.basic, session.scene)
-    user_persist_id = await get_user_persist_id(session.basic, session.user)
-    member_data = json.loads(session.member.dump_json()) if session.member else None
-    statement = (
-        select(SessionModel)
-        .where(SessionModel.bot_persist_id == bot_persist_id)
-        .where(SessionModel.scene_persist_id == scene_persist_id)
-        .where(SessionModel.user_persist_id == user_persist_id)
-    )
-    async with get_orm_session() as db_session:
-        if row := (await db_session.scalars(statement)).one_or_none():
-            row.member_data = member_data
-            await db_session.commit()
-            await db_session.refresh(row)
-            return row.id
-
-    row = SessionModel(bot_persist_id=bot_persist_id, scene_persist_id=scene_persist_id, user_persist_id=user_persist_id, member_data=member_data)
-    async with _get_insert_mutex():
-        try:
-            async with get_orm_session() as db_session:
-                db_session.add(row)
-                await db_session.commit()
-                await db_session.refresh(row)
-                return row.id
-        except exc.IntegrityError:
-            async with get_orm_session() as db_session:
-                return (await db_session.scalars(statement)).one().id
+async def get_session_persist_id(info_session: Session, *, db_session: AsyncSession | None = None) -> int:
+    if db_session is not None:
+        return await _store.get_session_persist_id(info_session, session=db_session)
+    return await _store.get_session_persist_id(info_session)

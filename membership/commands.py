@@ -9,11 +9,12 @@ from typing import Any
 from nonebot import get_bots, get_driver
 from nonebot.adapters import Bot, Event
 from nonebot.matcher import Matcher
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from ..config import get_manager as get_config_manager
 from ..console.auth import rotate_console_token
-from ..db import get_session_maker
+from ..db import with_session
 from ..permission import PermLevel, PermScene
 from ..plugin import Plugin
 
@@ -25,6 +26,36 @@ P = Plugin("membership", category="system", display_name="会员系统")
 
 _UNIT_TO_SERVICE = {"天": "day", "月": "month", "年": "year"}
 _SERVICE_TO_UNIT = {"day": "天", "days": "天", "d": "天", "month": "月", "months": "月", "m": "月", "year": "年", "years": "年", "y": "年"}
+
+
+class _MembershipCommandStore:
+    """会员命令数据库操作。"""
+
+    @with_session
+    async def adjust_managed_bots(self, session: AsyncSession, groups_by_bot: dict[str, list[Any]]) -> tuple[int, int]:
+        result = await session.execute(select(MembershipGroup))
+        rows = {row.group_id: row for row in result.scalars().all()}
+        updated_count = 0
+        unchanged_count = 0
+
+        for bot_id, groups in groups_by_bot.items():
+            for item in groups:
+                group_id = _normalize_id(
+                    item.get("group_id") if isinstance(item, dict) else getattr(item, "group_id", None)
+                )
+                if not group_id or group_id not in rows:
+                    continue
+                row = rows[group_id]
+                if row.managed_by_bot == str(bot_id):
+                    unchanged_count += 1
+                    continue
+                row.managed_by_bot = str(bot_id)
+                updated_count += 1
+
+        return updated_count, unchanged_count
+
+
+_command_store = _MembershipCommandStore()
 
 console_login_cmd = P.on_regex(
     r"^今汐登录$",
@@ -321,36 +352,17 @@ async def _handle_adjust_bot(matcher: Matcher, event: Event) -> None:
     if not bots:
         await matcher.finish("当前无在线机器人，无法执行续费调整")
 
-    updated_count = 0
-    unchanged_count = 0
     failed_bots: list[str] = []
+    groups_by_bot: dict[str, list[Any]] = {}
 
-    maker = get_session_maker()
-    async with maker() as session:
-        result = await session.execute(select(MembershipGroup))
-        rows = {row.group_id: row for row in result.scalars().all()}
+    for bot_id, bot in bots.items():
+        try:
+            groups_by_bot[str(bot_id)] = list(await bot.get_group_list())  # type: ignore[attr-defined]
+        except Exception:
+            failed_bots.append(str(bot_id))
+            continue
 
-        for bot_id, bot in bots.items():
-            try:
-                groups = await bot.get_group_list()  # type: ignore[attr-defined]
-            except Exception:
-                failed_bots.append(str(bot_id))
-                continue
-
-            for item in groups or []:
-                group_id = _normalize_id(
-                    item.get("group_id") if isinstance(item, dict) else getattr(item, "group_id", None)
-                )
-                if not group_id or group_id not in rows:
-                    continue
-                row = rows[group_id]
-                if row.managed_by_bot == str(bot_id):
-                    unchanged_count += 1
-                    continue
-                row.managed_by_bot = str(bot_id)
-                updated_count += 1
-
-        await session.commit()
+    updated_count, unchanged_count = await _command_store.adjust_managed_bots(groups_by_bot)
 
     await membership_guard.reload_all_cache()
     result_msg = f"续费调整完成\n更新: {updated_count} 个群\n未变: {unchanged_count} 个群"

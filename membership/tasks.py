@@ -8,9 +8,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 from nonebot import get_bots, logger
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_manager as get_config_manager
-from ..db import get_session_maker
+from ..db import with_session
 
 from .guard import membership_guard
 from .models import MembershipGroup, utc_now
@@ -24,6 +25,61 @@ class MembershipTaskResult:
     reminded: int = 0
     left: int = 0
     expired: int = 0
+
+
+class _MembershipTaskStore:
+    """会员定时任务数据库操作。"""
+
+    @with_session
+    async def process(
+        self,
+        session: AsyncSession,
+        groups: list[MembershipGroup],
+        *,
+        notice_days: set[int],
+        auto_leave: bool,
+        delay: float,
+        contact: str,
+        today: str,
+    ) -> MembershipTaskResult:
+        result = MembershipTaskResult()
+        for group in groups:
+            if group.status != "active" or group.expires_at is None:
+                continue
+            expires_at = _as_utc(group.expires_at)
+            if expires_at is None:
+                continue
+            days = _days_remaining(expires_at)
+            group_in_session = await session.get(MembershipGroup, group.id)
+            if group_in_session is None:
+                continue
+
+            if days < 0:
+                group_in_session.status = "expired"
+                group_in_session.expired_at = utc_now()
+                group_in_session.updated_at = utc_now()
+                result.expired += 1
+                if auto_leave and await _leave_group(group.managed_by_bot, group.group_id):
+                    result.left += 1
+                if delay:
+                    await asyncio.sleep(delay)
+                continue
+
+            if days in notice_days and group.last_reminder_on != today:
+                message = f"本群会员将在 {days} 天后到期，到期时间：{_format_dt(expires_at)}"
+                if contact:
+                    message += f"\n{contact}"
+                if await _send_group_message(group.managed_by_bot, group.group_id, message):
+                    group_in_session.last_reminder_on = today
+                    group_in_session.updated_at = utc_now()
+                    result.reminded += 1
+                if delay:
+                    await asyncio.sleep(delay)
+
+        return result
+
+
+_task_store = _MembershipTaskStore()
 
 
 def _as_utc(value: datetime | None) -> datetime | None:
@@ -100,45 +156,15 @@ async def check_and_process_memberships() -> MembershipTaskResult:
     delay = max(float(cfg["batch_delay_seconds"] or 0), 0.0)
     contact = str(cfg["contact_info"] or "")
     today = _today_key()
-    result = MembershipTaskResult()
-
     groups = await membership_service.list_groups()
-    maker = get_session_maker()
-    async with maker() as session:
-        for group in groups:
-            if group.status != "active" or group.expires_at is None:
-                continue
-            expires_at = _as_utc(group.expires_at)
-            if expires_at is None:
-                continue
-            days = _days_remaining(expires_at)
-            group_in_session = await session.get(MembershipGroup, group.id)
-            if group_in_session is None:
-                continue
-
-            if days < 0:
-                group_in_session.status = "expired"
-                group_in_session.expired_at = utc_now()
-                group_in_session.updated_at = utc_now()
-                result.expired += 1
-                if auto_leave and await _leave_group(group.managed_by_bot, group.group_id):
-                    result.left += 1
-                if delay:
-                    await asyncio.sleep(delay)
-                continue
-
-            if days in notice_days and group.last_reminder_on != today:
-                message = f"本群会员将在 {days} 天后到期，到期时间：{_format_dt(expires_at)}"
-                if contact:
-                    message += f"\n{contact}"
-                if await _send_group_message(group.managed_by_bot, group.group_id, message):
-                    group_in_session.last_reminder_on = today
-                    group_in_session.updated_at = utc_now()
-                    result.reminded += 1
-                if delay:
-                    await asyncio.sleep(delay)
-
-        await session.commit()
+    result = await _task_store.process(
+        groups,
+        notice_days=notice_days,
+        auto_leave=auto_leave,
+        delay=delay,
+        contact=contact,
+        today=today,
+    )
 
     await membership_guard.reload_all_cache()
     return result
