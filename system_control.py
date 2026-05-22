@@ -14,7 +14,7 @@ from nonebot.matcher import Matcher
 
 from .permission import PermLevel, PermScene
 from .plugin import Plugin
-from .utils.compat import extract_message_target, send_text_to_target
+from .adapter import extract_message_target, send_text_to_target
 from .utils.paths import data_dir, package_root
 
 P = Plugin("system", category="system", display_name="系统命令")

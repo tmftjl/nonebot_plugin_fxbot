@@ -12,7 +12,7 @@ from PIL import Image, ImageDraw
 
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
-from ...utils.compat import build_message, build_message_segment, is_qq_official
+from ...adapter import build_message, build_message_segment, is_qq_official
 from ...utils.fonts import load_font
 from .config import CFG_DIR, help_config_filename, load_help_config, resolve_help_config
 

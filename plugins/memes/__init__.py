@@ -1,8 +1,7 @@
-from nonebot.plugin import PluginMetadata, inherit_supported_adapters
+from nonebot.plugin import PluginMetadata
 
 from nonebot import require
 
-require("nonebot_plugin_uninfo")
 require("nonebot_plugin_localstore")
 require("nonebot_plugin_orm")
 
@@ -51,7 +50,5 @@ __plugin_meta__ = PluginMetadata(
     ),
     type="application",
     homepage="https://github.com/noneplugin/nonebot-plugin-memes",
-    supported_adapters=inherit_supported_adapters(
-        "nonebot_plugin_uninfo"
-    ),
+    supported_adapters={"~onebot.v11"},
 )

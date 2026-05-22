@@ -1,0 +1,228 @@
+"""消息适配器注册与通用入口。"""
+
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+from pathlib import Path
+from typing import Any
+
+from nonebot.adapters import Bot
+
+from .support import adapter_name, extract_message_target, is_onebot_v11, is_qq_official
+
+
+class MessageAdapter(ABC):
+    """平台消息适配器。"""
+
+    @abstractmethod
+    def match(self, bot: Bot) -> bool:
+        """判断当前适配器是否支持该 Bot。"""
+
+    @abstractmethod
+    def build_segment(self, bot: Bot, seg_type: str, data: Any = None) -> Any:
+        """构造平台消息段。"""
+
+    @abstractmethod
+    def build_message(self, bot: Bot, segments: list[Any]) -> Any:
+        """构造平台消息对象。"""
+
+    @abstractmethod
+    async def send_text_to_target(self, bot: Bot, target: dict[str, Any], text: str) -> Any:
+        """向持久化目标发送文本消息。"""
+
+    def extract_image_sources(self, message: Any) -> list[str]:
+        """从消息对象中提取图片来源。"""
+        try:
+            iterable = list(message)
+        except Exception:
+            iterable = []
+        sources: list[str] = []
+        for segment in iterable:
+            if getattr(segment, "type", "") != "image":
+                continue
+            data = getattr(segment, "data", {}) or {}
+            source = data.get("url") or data.get("file")
+            if isinstance(source, str) and source and not source.startswith("base64://"):
+                sources.append(source)
+        return sources
+
+    def extract_reply_message_id(self, message: Any) -> int | None:
+        """从消息对象中提取回复消息 ID。"""
+        try:
+            iterable = list(message)
+        except Exception:
+            iterable = []
+        for segment in iterable:
+            if getattr(segment, "type", "") != "reply":
+                continue
+            value = (getattr(segment, "data", {}) or {}).get("id")
+            if value is None:
+                continue
+            try:
+                return int(value)
+            except Exception:
+                return None
+        return None
+
+    async def get_replied_message(self, bot: Bot, message_id: int) -> Any:
+        """通过适配器 API 获取被回复消息。"""
+        if hasattr(bot, "get_msg"):
+            result = await bot.get_msg(message_id=message_id)
+        else:
+            result = await bot.call_api("get_msg", message_id=message_id)
+        if isinstance(result, dict):
+            return result.get("message")
+        return None
+
+
+_adapters: list[MessageAdapter] = []
+
+
+def register_message_adapter(adapter: MessageAdapter | type[MessageAdapter]) -> MessageAdapter | type[MessageAdapter]:
+    """注册消息适配器。"""
+    _adapters.append(adapter() if isinstance(adapter, type) else adapter)
+    return adapter
+
+
+def get_message_adapter(bot: Bot) -> MessageAdapter | None:
+    """获取当前 Bot 对应的消息适配器。"""
+    for adapter in _adapters:
+        if adapter.match(bot):
+            return adapter
+    return None
+
+
+def require_message_adapter(bot: Bot) -> MessageAdapter:
+    """获取消息适配器，不支持时抛出明确错误。"""
+    adapter = get_message_adapter(bot)
+    if adapter:
+        return adapter
+    raise ValueError(f"未支持的适配器：{adapter_name(bot)}")
+
+
+def get_onebot_v11_message_segment_class():
+    """获取 OneBot V11 MessageSegment 类。"""
+    from .onebot11 import OneBotV11MessageAdapter
+
+    return OneBotV11MessageAdapter.message_segment_class()
+
+
+def build_message_segment(bot: Bot, seg_type: str, data: Any = None) -> Any:
+    """根据适配器构造消息段。"""
+    return require_message_adapter(bot).build_segment(bot, seg_type, data)
+
+
+def build_message(bot: Bot, *segments: Any) -> Any:
+    """根据适配器构造消息对象。"""
+    filtered = [segment for segment in segments if segment is not None]
+    adapter = get_message_adapter(bot)
+    if adapter:
+        return adapter.build_message(bot, filtered)
+    return "".join(str(segment) for segment in filtered)
+
+
+def extract_image_sources(message: Any) -> list[str]:
+    """从消息对象中提取图片来源。"""
+    if isinstance(message, str) and is_onebot_v11_string_available():
+        from nonebot.adapters.onebot.v11 import Message
+
+        try:
+            message = Message(message)
+        except Exception:
+            pass
+    return _generic_adapter().extract_image_sources(message)
+
+
+def extract_reply_message_id(message: Any) -> int | None:
+    """从消息对象中提取回复消息 ID。"""
+    if isinstance(message, str) and is_onebot_v11_string_available():
+        from nonebot.adapters.onebot.v11 import Message
+
+        try:
+            message = Message(message)
+        except Exception:
+            pass
+    return _generic_adapter().extract_reply_message_id(message)
+
+
+async def get_replied_message(bot: Bot, message_id: int) -> Any:
+    """通过适配器 API 获取被回复消息。"""
+    adapter = get_message_adapter(bot) or _generic_adapter()
+    return await adapter.get_replied_message(bot, message_id)
+
+
+async def send_ark_message(bot: Bot, event: Any, ark_data: dict[str, Any]) -> Any:
+    """发送 QQ ARK 消息。"""
+    if not is_qq_official(bot):
+        raise RuntimeError("ARK 消息仅支持 QQ 官方适配器")
+    return await bot.send(event, message={"type": "ark", "data": ark_data})
+
+
+async def send_text_to_target(bot: Bot, target: dict[str, Any], text: str) -> Any:
+    """根据保存的目标信息发送文本消息。"""
+    return await require_message_adapter(bot).send_text_to_target(bot, target, text)
+
+
+def _image_bytes(data: Any) -> bytes:
+    """将本地图片输入转换为字节。"""
+    import io
+
+    if isinstance(data, bytes):
+        return data
+    if isinstance(data, Path):
+        return data.read_bytes()
+    if isinstance(data, str):
+        return Path(data).read_bytes()
+    buffer = io.BytesIO()
+    data.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def is_onebot_v11_string_available() -> bool:
+    """判断能否把 CQ 字符串解析成 OneBot V11 Message。"""
+    import importlib.util
+
+    return importlib.util.find_spec("nonebot.adapters.onebot.v11") is not None
+
+
+class _GenericMessageAdapter(MessageAdapter):
+    """只提供通用解析能力的兜底适配器。"""
+
+    def match(self, bot: Bot) -> bool:
+        return False
+
+    def build_segment(self, bot: Bot, seg_type: str, data: Any = None) -> Any:
+        if seg_type == "text":
+            return str(data)
+        raise ValueError(f"未支持的适配器：{adapter_name(bot)}")
+
+    def build_message(self, bot: Bot, segments: list[Any]) -> Any:
+        return "".join(str(segment) for segment in segments)
+
+    async def send_text_to_target(self, bot: Bot, target: dict[str, Any], text: str) -> Any:
+        raise RuntimeError("无法识别消息目标")
+
+
+_generic = _GenericMessageAdapter()
+
+
+def _generic_adapter() -> MessageAdapter:
+    return _generic
+
+
+__all__ = [
+    "MessageAdapter",
+    "build_message",
+    "build_message_segment",
+    "extract_image_sources",
+    "extract_message_target",
+    "extract_reply_message_id",
+    "get_message_adapter",
+    "get_onebot_v11_message_segment_class",
+    "get_replied_message",
+    "is_onebot_v11",
+    "is_qq_official",
+    "register_message_adapter",
+    "send_ark_message",
+    "send_text_to_target",
+]

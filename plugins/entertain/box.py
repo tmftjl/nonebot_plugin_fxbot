@@ -15,7 +15,7 @@ from PIL import Image
 
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
-from ...utils.compat import build_message, build_message_segment
+from ...adapter import build_message, build_message_segment
 from ...utils.http import get_shared_async_client
 from .box_draw import create_image
 from .config import cfg_box

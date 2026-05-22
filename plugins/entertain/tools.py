@@ -7,7 +7,7 @@ from typing import Literal
 from nonebot import logger
 
 from ...chat.tools import ToolContext, ToolError, ToolRuntime, tool
-from ...utils.compat import build_message_segment
+from ...adapter import build_message_segment
 from .fortune import _generate_fortune_canvas, _get_background_image, _get_or_create_today_fortune
 from .musicshare import MusicLoginRequired, Platform, _get_song_url_with_pool, _login_hint, _search_songs_with_pool
 

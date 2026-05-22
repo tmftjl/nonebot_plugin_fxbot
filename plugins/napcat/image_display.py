@@ -11,7 +11,7 @@ from nonebot.matcher import Matcher
 
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
-from ...utils.compat import get_onebot_v11_message_segment_class
+from ...adapter import get_onebot_v11_message_segment_class
 from ...utils.http import get_shared_async_client
 from .config import cfg_image_display, get_config, save_config
 

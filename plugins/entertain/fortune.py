@@ -18,7 +18,7 @@ from PIL import Image, ImageDraw, ImageOps
 
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
-from ...utils.compat import build_message, build_message_segment
+from ...adapter import build_message, build_message_segment
 from ...utils.fonts import load_font
 from ...utils.http import get_shared_async_client
 from ...utils.paths import data_dir

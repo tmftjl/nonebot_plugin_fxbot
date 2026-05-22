@@ -20,11 +20,11 @@ from nonebot.params import CommandArg
 from nonebot.rule import Rule
 from nonebot.typing import T_State
 from nonebot_plugin_localstore import get_cache_dir
-from nonebot_plugin_uninfo import QryItrface, Uninfo
 from pypinyin import Style, pinyin
 
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
+from ...adapter.uninfo import QryItrface, Uninfo
 from .config import (
     cfg_command_prefixes,
     cfg_list_image_config,

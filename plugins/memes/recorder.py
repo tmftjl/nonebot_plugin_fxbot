@@ -4,8 +4,8 @@ from enum import Enum
 from typing import Optional, Union
 
 from nonebot_plugin_orm import Model, get_session
-from nonebot_plugin_uninfo import Session, SupportScope
-from nonebot_plugin_uninfo.orm import (
+from ...adapter.uninfo import Session, SupportScope
+from ...adapter.uninfo import (
     BotModel,
     SceneModel,
     SessionModel,

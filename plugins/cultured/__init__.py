@@ -13,7 +13,7 @@ from nonebot.matcher import Matcher
 
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
-from ...utils.compat import build_message, build_message_segment
+from ...adapter import build_message, build_message_segment
 from ...utils.http import get_shared_async_client
 from .config import face_list, load_all_commands, load_cfg, random_local_image
 from . import update_gallery as update_gallery

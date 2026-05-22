@@ -8,7 +8,7 @@ from nonebot.matcher import Matcher
 
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
-from ...utils.compat import send_ark_message
+from ...adapter import send_ark_message
 
 P = Plugin("ark_test", display_name="ARK测试", enabled=True, level=PermLevel.LOW, scene=PermScene.ALL)
 

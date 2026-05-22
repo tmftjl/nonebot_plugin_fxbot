@@ -13,7 +13,7 @@ from nonebot.matcher import Matcher
 
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
-from ...utils.compat import extract_image_sources, extract_reply_message_id, get_replied_message
+from ...adapter import extract_image_sources, extract_reply_message_id, get_replied_message
 from ...utils.http import get_shared_async_client
 from ...utils.paths import data_dir
 
