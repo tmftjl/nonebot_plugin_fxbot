@@ -1,7 +1,7 @@
-from nonebot import require
 from nonebot.plugin import PluginMetadata, inherit_supported_adapters
 
-require("nonebot_plugin_waiter")
+from nonebot import require
+
 require("nonebot_plugin_uninfo")
 require("nonebot_plugin_localstore")
 require("nonebot_plugin_orm")

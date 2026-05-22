@@ -7,7 +7,6 @@ from nonebot.plugin import PluginMetadata
 
 from . import bootstrap
 
-require("nonebot_plugin_waiter")
 require("nonebot_plugin_uninfo")
 require("nonebot_plugin_localstore")
 require("nonebot_plugin_orm")

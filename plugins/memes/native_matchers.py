@@ -21,7 +21,6 @@ from nonebot.rule import Rule
 from nonebot.typing import T_State
 from nonebot_plugin_localstore import get_cache_dir
 from nonebot_plugin_uninfo import QryItrface, Uninfo
-from nonebot_plugin_waiter import waiter
 from pypinyin import Style, pinyin
 
 from ...permission import PermLevel, PermScene
@@ -245,32 +244,17 @@ async def find_meme(matcher: Matcher, meme_name: str) -> MemeInfo:
     if found_num == 1:
         return found_memes[0]
 
-    await matcher.send(
-        f"找到 {found_num} 个表情，请发送编号选择：\n"
-        + "\n".join(
-            f"{i + 1}. {meme.key} ({'/'.join(meme.keywords)})"
-            for i, meme in enumerate(found_memes)
-        )
+    target_name = meme_name.strip().lower()
+    for meme in found_memes:
+        if meme.key.lower() == target_name:
+            logger.warning(f"[memes] 表情别名重复，已优先选择完全同名项: {meme_name} -> {meme.key}")
+            return meme
+
+    chosen = found_memes[0]
+    logger.warning(
+        f"[memes] 表情别名重复，已默认选择首个结果: {meme_name} -> {chosen.key}，候选数={found_num}"
     )
-
-    @waiter(waits=["message"], keep_session=True)
-    async def get_response(event: Event):
-        return event.get_plaintext()
-
-    for _ in range(3):
-        resp = await get_response.wait(timeout=15)
-        if resp is None:
-            await matcher.finish()
-        if not resp.isdigit():
-            await matcher.send("输入错误，请输入数字")
-            continue
-        index = int(resp)
-        if not (1 <= index <= found_num):
-            await matcher.send("输入错误，请输入正确的数字")
-            continue
-        return found_memes[index - 1]
-
-    await matcher.finish()
+    return chosen
 
 
 async def _download_image_from_segment(seg: MessageSegment) -> Optional[bytes]:

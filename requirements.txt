@@ -13,7 +13,6 @@ matplotlib>=3.7.0
 nonebot-plugin-localstore>=0.6.0,<1.0.0
 nonebot-plugin-orm>=0.7.0,<1.0.0
 nonebot-plugin-uninfo>=0.6.1,<1.0.0
-nonebot-plugin-waiter>=0.6.0,<1.0.0
 pypinyin>=0.44.0,<1.0.0
 python-dateutil>=2.8.2
 PyYAML>=6.0
