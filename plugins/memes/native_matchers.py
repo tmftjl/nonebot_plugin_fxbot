@@ -19,12 +19,12 @@ from nonebot.matcher import Matcher
 from nonebot.params import CommandArg
 from nonebot.rule import Rule
 from nonebot.typing import T_State
-from nonebot_plugin_localstore import get_cache_dir
 from pypinyin import Style, pinyin
 
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
 from ...adapter.uninfo import QryItrface, Uninfo
+from ...utils.paths import cache_dir
 from .config import (
     cfg_command_prefixes,
     cfg_list_image_config,
@@ -79,7 +79,7 @@ except Exception:  # pragma: no cover
 MEME_TRIGGER_KEY = "_memes_trigger"
 MEME_MSG_KEY = "_memes_msg"
 
-memes_cache_dir = get_cache_dir("nonebot_plugin_memes_api")
+memes_cache_dir = cache_dir("nonebot_plugin_memes_api")
 
 _trigger_map: dict[str, list[str]] = {}
 

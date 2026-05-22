@@ -30,6 +30,16 @@ def config_dir(name: str | None = None) -> Path:
     return child
 
 
+def cache_dir(name: str | None = None) -> Path:
+    root = Path(os.getenv("FXBOT_CACHE_DIR", data_dir("cache")))
+    root.mkdir(parents=True, exist_ok=True)
+    if name is None:
+        return root
+    child = root / name
+    child.mkdir(parents=True, exist_ok=True)
+    return child
+
+
 def database_path() -> Path:
     return data_dir("db") / "fxbot.db"
 

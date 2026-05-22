@@ -2,7 +2,6 @@ from nonebot.plugin import PluginMetadata
 
 from nonebot import require
 
-require("nonebot_plugin_localstore")
 require("nonebot_plugin_orm")
 
 from .config import cfg_command_prefixes
