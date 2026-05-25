@@ -24,6 +24,18 @@ def _import_startup_module(module_name: str) -> None:
     import_module(f"{__package__}.{module_name}")
 
 
+def _import_plugin_model_modules() -> None:
+    """导入内置插件的数据模型模块。"""
+    for plugin_dir in sorted(built_in_plugins_dir().iterdir()):
+        if not plugin_dir.is_dir():
+            continue
+        if not (plugin_dir / "__init__.py").is_file():
+            continue
+        if not (plugin_dir / "models.py").is_file():
+            continue
+        _import_startup_module(f"plugins.{plugin_dir.name}.models")
+
+
 async def init() -> None:
     """初始化配置、数据库、系统 matcher 和内置子插件。"""
     global _database_ready, _initialized
@@ -36,7 +48,7 @@ async def init() -> None:
 
     _import_startup_module("membership.models")
     _import_startup_module("adapter.uninfo")
-    _import_startup_module("models.memes")
+    _import_plugin_model_modules()
 
     try:
         await init_database()

@@ -16,7 +16,7 @@ from ...adapter.uninfo import (
     get_session_persist_id,
 )
 from ...db import with_session
-from ...models.memes import MemeGenerationRecord
+from .models import MemeGenerationRecord
 from .utils import remove_timezone
 
 
