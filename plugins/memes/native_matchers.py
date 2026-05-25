@@ -289,6 +289,48 @@ async def _avatar_bytes_of(
     return await download_url(user.avatar)
 
 
+def _reprioritize_protected_mentions(
+    meme: MemeInfo,
+    images: list[bytes],
+    image_user_ids: list[Optional[str]],
+    image_from_mentions: list[bool],
+) -> tuple[list[bytes], list[Optional[str]], list[bool]]:
+    """调整受保护用户被 @ 时的头像优先级。"""
+    if (
+        meme.params_type.max_images <= 0
+        or not protection_manager.is_protected(meme.key)
+        or len(images) != len(image_user_ids)
+        or len(images) != len(image_from_mentions)
+    ):
+        return images, image_user_ids, image_from_mentions
+
+    protected_indices = {
+        i
+        for i, user_id in enumerate(image_user_ids)
+        if (
+            image_from_mentions[i]
+            and user_id
+            and protection_manager.is_in_whitelist(user_id)
+        )
+    }
+    if not protected_indices:
+        return images, image_user_ids, image_from_mentions
+
+    indexed = list(zip(images, image_user_ids, image_from_mentions))
+    if meme.params_type.max_images == 1:
+        ordered = [
+            item for i, item in enumerate(indexed) if i not in protected_indices
+        ] + [item for i, item in enumerate(indexed) if i in protected_indices]
+    else:
+        ordered = [
+            item for i, item in enumerate(indexed) if i in protected_indices
+        ] + [item for i, item in enumerate(indexed) if i not in protected_indices]
+
+    ordered = ordered[: meme.params_type.max_images]
+    images, image_user_ids, image_from_mentions = map(list, zip(*ordered))
+    return images, image_user_ids, image_from_mentions
+
+
 async def extract_inputs(
     bot: Bot,
     event: Event,
@@ -301,6 +343,7 @@ async def extract_inputs(
     texts: list[str] = []
     images: list[bytes] = []
     image_user_ids: list[Optional[str]] = []  # 记录每个图片对应的用户ID
+    image_from_mentions: list[bool] = []  # 记录图片是否由 @ 头像产生
 
     reply_has_image = False
     try:
@@ -313,6 +356,7 @@ async def extract_inputs(
                     if data:
                         images.append(data)
                         image_user_ids.append(None)  # 回复中的图片没有对应用户ID
+                        image_from_mentions.append(False)
                         reply_has_image = True
             elif isinstance(reply_msg, Message):
                 for seg in reply_msg:
@@ -321,6 +365,7 @@ async def extract_inputs(
                         if data:
                             images.append(data)
                             image_user_ids.append(None)  # 回复中的图片没有对应用户ID
+                            image_from_mentions.append(False)
                             reply_has_image = True
     except Exception:
         pass
@@ -347,12 +392,14 @@ async def extract_inputs(
             if avatar:
                 images.append(avatar)
                 image_user_ids.append(str(target))  # 记录@的用户ID
+                image_from_mentions.append(True)
 
         elif seg_type == "image":
             data = await _download_image_from_segment(seg)
             if data:
                 images.append(data)
                 image_user_ids.append(None)  # 直接发送的图片没有对应用户ID
+                image_from_mentions.append(False)
 
         elif seg.is_text():
             for token in _split_text(str(seg)):
@@ -363,12 +410,14 @@ async def extract_inputs(
                     if avatar:
                         images.append(avatar)
                         image_user_ids.append(token[1:])  # 记录@的用户ID
+                        image_from_mentions.append(True)
                     continue
 
                 if token == "自己":
                     if session.user.avatar:
                         images.append(await download_url(session.user.avatar))
                         image_user_ids.append(str(session.user.id))  # 记录自己的ID
+                        image_from_mentions.append(False)
                     continue
 
                 if token:
@@ -382,6 +431,7 @@ async def extract_inputs(
         ):
             images.insert(0, await download_url(session.user.avatar))
             image_user_ids.insert(0, str(session.user.id))  # 发送者的头像
+            image_from_mentions.insert(0, False)
 
         if (
             meme.params_type.min_images == 1
@@ -390,6 +440,11 @@ async def extract_inputs(
         ):
             images.append(await download_url(session.user.avatar))
             image_user_ids.append(str(session.user.id))  # 发送者的头像
+            image_from_mentions.append(False)
+
+        images, image_user_ids, image_from_mentions = _reprioritize_protected_mentions(
+            meme, images, image_user_ids, image_from_mentions
+        )
 
     return texts, images, image_user_ids
 
@@ -437,67 +492,6 @@ async def normalize_meme_params(
             )
 
     return texts
-
-
-async def apply_protection(
-    meme_key: str,
-    images: list[bytes],
-    image_user_ids: list[Optional[str]],
-    sender_avatar: Optional[str],
-) -> list[bytes]:
-    """
-    应用表情保护逻辑
-    - 如果表情在保护列表中，且某个图片对应的用户在白名单中
-    - 则将该用户的头像替换为发送者的头像（攻击者的头像）
-
-    Args:
-        meme_key: 表情key
-        images: 图片列表
-        image_user_ids: 每个图片对应的用户ID（可能为None）
-        sender_avatar: 发送者头像URL
-
-    Returns:
-        处理后的图片列表
-    """
-    # 只有在保护表情列表中的表情才需要检查
-    if not protection_manager.is_protected(meme_key):
-        return images
-
-    # 如果没有发送者头像，无法进行保护
-    if not sender_avatar:
-        return images
-
-    # 边界检查：确保长度一致
-    if len(images) != len(image_user_ids):
-        logger.warning(
-            f"表情保护失败：images 和 image_user_ids 长度不一致 "
-            f"({len(images)} vs {len(image_user_ids)})"
-        )
-        return images
-
-    # 先检查是否有需要保护的用户
-    indices_to_replace = [
-        i for i, user_id in enumerate(image_user_ids)
-        if user_id and protection_manager.is_in_whitelist(user_id)
-    ]
-
-    # 如果没有需要保护的用户，直接返回
-    if not indices_to_replace:
-        return images
-
-    # 只下载一次发送者头像
-    try:
-        sender_avatar_bytes = await download_url(sender_avatar)
-    except Exception as e:
-        logger.warning(f"表情保护失败：无法下载发送者头像: {e}")
-        return images  # 降级处理，返回原图片列表
-
-    # 替换所有需要保护的用户头像
-    protected_images = images.copy()
-    for i in indices_to_replace:
-        protected_images[i] = sender_avatar_bytes
-
-    return protected_images
 
 
 async def _send_image(matcher: Matcher, bot: Bot, event: Event, img: bytes, text: str):
@@ -1183,13 +1177,8 @@ async def _random(
         await matcher.finish("没有找到符合条件的表情")
 
     meme = random.choice(candidates)
-    texts, images, image_user_ids = await extract_inputs(bot, event, matcher, session, interface, meme, arg)
+    texts, images, _ = await extract_inputs(bot, event, matcher, session, interface, meme, arg)
     texts = await normalize_meme_params(matcher, meme, texts, images)
-
-    # 应用表情保护逻辑
-    images = await apply_protection(
-        meme.key, images, image_user_ids, session.user.avatar
-    )
 
     try:
         result = await generate_meme(meme.key, images, texts, args={})
@@ -1226,15 +1215,10 @@ async def _meme(
     if not meme_manager.check(user_key, meme.key):
         await matcher.finish("表情已被禁用")
 
-    texts, images, image_user_ids = await extract_inputs(
+    texts, images, _ = await extract_inputs(
         bot, event, matcher, session, interface, meme, msg
     )
     texts = await normalize_meme_params(matcher, meme, texts, images)
-
-    # 应用表情保护逻辑
-    images = await apply_protection(
-        meme.key, images, image_user_ids, session.user.avatar
-    )
 
     try:
         result = await generate_meme(meme.key, images, texts, args={})
