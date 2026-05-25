@@ -59,4 +59,22 @@ def cfg_use_ban_word() -> bool:
     return bool(get_config().get("use_ban_word", True))
 
 
+def cfg_whitelist_ids() -> list[str]:
+    """获取保护白名单用户 QQ 号列表。"""
+    return [str(user_id) for user_id in (get_config().get("whitelist_ids") or [])]
+
+
+def cfg_protected_memes() -> list[str]:
+    """获取需要保护的表情 key 列表。"""
+    return [str(meme_key) for meme_key in (get_config().get("protected_memes") or [])]
+
+
+def save_protection_config(whitelist_ids: list[str], protected_memes: list[str]) -> None:
+    """保存表情保护配置。"""
+    config = get_config()
+    config["whitelist_ids"] = list(whitelist_ids)
+    config["protected_memes"] = list(protected_memes)
+    REG.save(config)
+
+
 ban_path = str(data_dir("memes") / "ban")

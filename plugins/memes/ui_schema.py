@@ -13,6 +13,8 @@ DEFAULTS: dict[str, Any] = {
     "notice_prob": 0.1,
     "use_gif": False,
     "use_ban_word": True,
+    "whitelist_ids": [],
+    "protected_memes": [],
 }
 
 
@@ -34,6 +36,9 @@ def get_ui_schema() -> dict[str, Any]:
                     {"field": "notice_prob", "label": "刷屏提醒概率", "component": "InputNumber", "default": DEFAULTS["notice_prob"], "helpMessage": "随机触发提醒消息的概率。", "componentProps": {"min": 0, "max": 1, "step": 0.01}},
                     {"field": "use_gif", "label": "启用 GIF 输出", "component": "Switch", "default": DEFAULTS["use_gif"], "helpMessage": "把表情转换为 GIF 再发送。"},
                     {"field": "use_ban_word", "label": "启用屏蔽词", "component": "Switch", "default": DEFAULTS["use_ban_word"], "helpMessage": "过滤敏感词。"},
+                    {"label": "表情保护设置", "component": "Divider"},
+                    {"field": "whitelist_ids", "label": "保护白名单", "component": "GTags", "default": DEFAULTS["whitelist_ids"], "helpMessage": "填写需要保护的用户 QQ 号。主人默认受保护，不需要填写。"},
+                    {"field": "protected_memes", "label": "保护表情", "component": "GTags", "default": DEFAULTS["protected_memes"], "helpMessage": "填写需要启用保护逻辑的表情 key。"},
                 ],
             },
         ],
