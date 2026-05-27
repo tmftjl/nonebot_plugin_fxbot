@@ -42,6 +42,10 @@ class OneBotV11MessageAdapter(MessageAdapter):
             return MessageSegment.image(_image_bytes(data))
         if seg_type == "record":
             return MessageSegment.record(_image_bytes(data) if isinstance(data, Path) else data)
+        if seg_type == "video":
+            if isinstance(data, Path):
+                return MessageSegment.video(data.resolve().as_uri())
+            return MessageSegment.video(data)
         raise ValueError(f"不支持的消息段类型: {seg_type}")
 
     def build_message(self, bot: Bot, segments: list[Any]) -> Any:

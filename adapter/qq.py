@@ -37,6 +37,10 @@ class QQOfficialMessageAdapter(MessageAdapter):
             if isinstance(data, str) and data.startswith("base64://"):
                 return MessageSegment.file_audio(base64.b64decode(data[9:]))
             return MessageSegment.file_audio(_image_bytes(data))
+        if seg_type == "video":
+            if isinstance(data, str) and data.startswith(("http://", "https://")):
+                return MessageSegment.video(data)
+            raise ValueError("QQ 官方适配器暂只支持视频 URL")
         raise ValueError(f"不支持的消息段类型: {seg_type}")
 
     def build_message(self, bot: Bot, segments: list[Any]) -> Any:
