@@ -2,8 +2,15 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
+
+from nonebot import get_driver
+
+
+def _path_setting(config_name: str, default: Path) -> Path:
+    """读取 NoneBot 配置中的路径配置。"""
+    value = getattr(get_driver().config, config_name, None)
+    return Path(str(value)) if value else default
 
 
 def package_root() -> Path:
@@ -11,7 +18,7 @@ def package_root() -> Path:
 
 
 def data_dir(name: str | None = None) -> Path:
-    root = Path(os.getenv("FXBOT_DATA_DIR", package_root() / "data"))
+    root = _path_setting("fxbot_data_dir", package_root() / "data")
     root.mkdir(parents=True, exist_ok=True)
     if name is None:
         return root
@@ -21,7 +28,7 @@ def data_dir(name: str | None = None) -> Path:
 
 
 def config_dir(name: str | None = None) -> Path:
-    root = Path(os.getenv("FXBOT_CONFIG_DIR", data_dir("config")))
+    root = _path_setting("fxbot_config_dir", data_dir("config"))
     root.mkdir(parents=True, exist_ok=True)
     if name is None:
         return root
@@ -31,7 +38,7 @@ def config_dir(name: str | None = None) -> Path:
 
 
 def cache_dir(name: str | None = None) -> Path:
-    root = Path(os.getenv("FXBOT_CACHE_DIR", data_dir("cache")))
+    root = _path_setting("fxbot_cache_dir", data_dir("cache"))
     root.mkdir(parents=True, exist_ok=True)
     if name is None:
         return root
