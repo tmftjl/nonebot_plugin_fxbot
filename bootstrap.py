@@ -49,7 +49,7 @@ def _import_plugin_model_modules() -> None:
         model_path = plugin_dir / "models.py"
         if not model_path.is_file():
             continue
-        _import_model_file(f"{__package__}._plugin_models.{plugin_dir.name}", model_path)
+        _import_model_file(f"{__package__}.plugins.{plugin_dir.name}.models", model_path)
 
 
 async def init() -> None:
