@@ -161,7 +161,15 @@ async def download_video(result: VideoResult) -> Path:
         raise DownloadError(f"视频时长超过限制：{int(result.duration)} 秒")
 
     if not result.audio_url:
-        return await download_file(result.video_url, suffix=".mp4", headers=result.headers)
+        last_error: DownloadError | None = None
+        for url in _video_url_candidates(result):
+            try:
+                return await download_file(url, suffix=".mp4", headers=result.headers)
+            except DownloadError as exc:
+                last_error = exc
+        if last_error is not None:
+            raise last_error
+        raise DownloadError("媒体下载失败")
 
     video_path, audio_path = await asyncio.gather(
         download_file(result.video_url, suffix=".m4s", headers=result.headers),
@@ -169,6 +177,17 @@ async def download_video(result: VideoResult) -> Path:
     )
     output = CACHE_DIR / f"{hashlib.sha1((result.video_url + result.audio_url).encode('utf-8')).hexdigest()}.mp4"
     return await _merge_av(video_path, audio_path, output)
+
+
+def _video_url_candidates(result: VideoResult) -> tuple[str, ...]:
+    """生成视频下载候选 URL。"""
+    urls = [result.video_url, *result.video_urls]
+    candidates: list[str] = []
+    for url in urls:
+        if not url:
+            continue
+        candidates.extend(_url_candidates(url))
+    return tuple(dict.fromkeys(candidates))
 
 
 async def download_images(result: VideoResult) -> list[Path]:
@@ -184,7 +203,7 @@ async def download_images(result: VideoResult) -> list[Path]:
 
 async def _download_image(url: str, *, headers: dict[str, str]) -> Path | None:
     """下载图片，失败时尝试常见无样式原图地址。"""
-    for candidate in _image_url_candidates(url):
+    for candidate in _url_candidates(url):
         try:
             return await download_file(candidate, suffix=".jpg", headers=headers)
         except Exception:
@@ -192,8 +211,8 @@ async def _download_image(url: str, *, headers: dict[str, str]) -> Path | None:
     return None
 
 
-def _image_url_candidates(url: str) -> tuple[str, ...]:
-    """生成图片下载候选 URL。"""
+def _url_candidates(url: str) -> tuple[str, ...]:
+    """生成媒体下载候选 URL。"""
     candidates = [url]
     if url.startswith("http://"):
         candidates.append("https://" + url[7:])

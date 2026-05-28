@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from typing import Any
+from urllib.parse import urljoin
 
 import httpx
 
@@ -56,6 +57,14 @@ async def final_url(url: str, *, headers: dict[str, str] | None = None) -> str:
         response = await client.get(url, headers=headers or COMMON_HEADERS)
         response.raise_for_status()
         return str(response.url)
+
+
+async def redirect_url(url: str, *, headers: dict[str, str] | None = None) -> str:
+    """获取单次跳转地址。"""
+    async with httpx.AsyncClient(timeout=timeout(), proxy=proxy(), follow_redirects=False, verify=False) as client:
+        response = await client.get(url, headers=headers or COMMON_HEADERS)
+        response.raise_for_status()
+        return urljoin(url, response.headers.get("Location", url))
 
 
 def extract_json(html: str, pattern: str, *, undefined_to_null: bool = False) -> Any:

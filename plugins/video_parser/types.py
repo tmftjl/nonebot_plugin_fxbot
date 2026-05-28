@@ -12,6 +12,7 @@ class VideoResult:
     platform: str
     title: str
     video_url: str | None = None
+    video_urls: list[str] = field(default_factory=list)
     cover_url: str | None = None
     image_urls: list[str] = field(default_factory=list)
     duration: float | None = None

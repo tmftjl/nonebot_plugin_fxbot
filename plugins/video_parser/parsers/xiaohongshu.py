@@ -7,7 +7,7 @@ from typing import Any
 
 from ..types import VideoResult
 from .base import ParseError
-from .common import COMMON_HEADERS, IOS_HEADERS as SHARED_IOS_HEADERS, extract_json, final_url, first, get_text
+from .common import COMMON_HEADERS, IOS_HEADERS as SHARED_IOS_HEADERS, extract_json, first, get_text, redirect_url
 
 HEADERS = {
     **COMMON_HEADERS,
@@ -31,7 +31,7 @@ IOS_HEADERS = {
 
 async def parse(url: str) -> VideoResult:
     """解析小红书视频或图文。"""
-    resolved = await final_url(url, headers=IOS_HEADERS) if "xhslink.com" in url else url
+    resolved = await redirect_url(url, headers=IOS_HEADERS) if "xhslink.com" in url else url
     matched = re.search(r"(?:explore|discovery/item)/(?P<query>(?P<id>[0-9a-zA-Z]+)(?:\?[^#\s]+)?)", resolved)
     if not matched:
         raise ParseError("无法识别小红书笔记 ID")
@@ -89,13 +89,14 @@ def _result_from_note(note: dict[str, Any], *, source_url: str, discovery: bool)
     title = str(note.get("title") or note.get("desc") or "小红书笔记")
 
     if note.get("type") == "video" and isinstance(note.get("video"), dict):
-        video_url, duration = _video_url_and_duration(note["video"])
-        if not video_url:
+        video_urls, duration = _video_urls_and_duration(note["video"])
+        if not video_urls:
             raise ParseError("小红书页面没有视频直链")
         return VideoResult(
             platform="小红书",
             title=title,
-            video_url=video_url,
+            video_url=video_urls[0],
+            video_urls=video_urls[1:],
             cover_url=cover,
             duration=duration,
             source_url=source_url,
@@ -117,16 +118,26 @@ def _result_from_note(note: dict[str, Any], *, source_url: str, discovery: bool)
     )
 
 
-def _video_url_and_duration(video: dict[str, Any]) -> tuple[str | None, float | None]:
-    """提取小红书视频流。"""
+def _video_urls_and_duration(video: dict[str, Any]) -> tuple[list[str], float | None]:
+    """提取小红书视频流和备用地址。"""
     stream = (((video.get("media") or {}).get("stream")) or {})
+    urls: list[str] = []
+    duration = None
     for key in ("h265", "h264", "av1", "h266"):
         items = stream.get(key)
-        item = first(items)
-        if isinstance(item, dict) and item.get("masterUrl"):
-            duration = item.get("duration")
-            return str(item["masterUrl"]), (float(duration) / 1000) if duration else None
-    return None, None
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            if duration is None and item.get("duration"):
+                duration = float(item["duration"]) / 1000
+            if item.get("masterUrl"):
+                urls.append(str(item["masterUrl"]))
+            backups = item.get("backupUrl")
+            if isinstance(backups, list):
+                urls.extend(str(url) for url in backups if url)
+    return list(dict.fromkeys(urls)), duration
 
 
 def _image_urls(images: list[Any]) -> list[str]:

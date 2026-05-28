@@ -13,7 +13,7 @@ from typing import Any
 from ....utils.paths import data_dir
 from ..types import VideoResult
 from .base import ParseError
-from .common import COMMON_HEADERS, final_url
+from .common import COMMON_HEADERS, redirect_url
 
 COOKIE_PATH: Path = data_dir("video_parser") / "bilibili_cookies.json"
 BILI_HEADERS = {
@@ -27,7 +27,7 @@ _qr_login: Any | None = None
 async def parse(url: str) -> VideoResult:
     """解析 B 站视频或图文。"""
     if "b23.tv" in url or "bili2233.cn" in url:
-        url = await final_url(url, headers=BILI_HEADERS)
+        url = await redirect_url(url, headers=BILI_HEADERS)
     matched = re.search(r"(?P<bvid>BV[0-9A-Za-z]{10})", url)
     if matched:
         bvid = matched.group("bvid")
