@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
 from importlib import import_module
+from importlib.util import module_from_spec, spec_from_file_location
 
 from nonebot import load_plugins, logger
 
@@ -24,6 +27,18 @@ def _import_startup_module(module_name: str) -> None:
     import_module(f"{__package__}.{module_name}")
 
 
+def _import_model_file(module_name: str, path: Path) -> None:
+    """按文件路径导入模型模块，避免触发插件包入口。"""
+    if module_name in sys.modules:
+        return
+    spec = spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"无法加载模型模块: {path}")
+    module = module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+
+
 def _import_plugin_model_modules() -> None:
     """导入内置插件的数据模型模块。"""
     for plugin_dir in sorted(built_in_plugins_dir().iterdir()):
@@ -31,9 +46,10 @@ def _import_plugin_model_modules() -> None:
             continue
         if not (plugin_dir / "__init__.py").is_file():
             continue
-        if not (plugin_dir / "models.py").is_file():
+        model_path = plugin_dir / "models.py"
+        if not model_path.is_file():
             continue
-        _import_startup_module(f"plugins.{plugin_dir.name}.models")
+        _import_model_file(f"{__package__}._plugin_models.{plugin_dir.name}", model_path)
 
 
 async def init() -> None:
