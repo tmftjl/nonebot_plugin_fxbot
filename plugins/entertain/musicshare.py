@@ -6,6 +6,7 @@ import asyncio
 import base64
 import io
 import json
+import re
 import time
 import uuid
 from dataclasses import dataclass, replace
@@ -17,6 +18,8 @@ from nonebot.adapters import Bot, Event
 from nonebot.exception import FinishedException
 from nonebot.matcher import Matcher
 from nonebot.params import RegexGroup
+from nonebot.rule import Rule
+from nonebot.typing import T_State
 from PIL import Image, ImageDraw
 
 from ...permission import PermLevel, PermScene
@@ -38,6 +41,7 @@ _login_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _LOGIN_WATCH_TASKS: dict[str, asyncio.Task[None]] = {}
 _AUTH_POOL_CURSORS: dict[str, int] = {}
 _LOGIN_SESSION_FILE = data_dir("entertain") / "music_login_sessions.json"
+_SELECT_INDEX_STATE = "musicshare_select_index"
 
 
 @dataclass
@@ -133,6 +137,33 @@ def _normalize_platform(alias: str | None) -> Platform:
         default = str(cfg_music()["provider_default"]).lower()
         return "qq" if default == "tencent" else "netease"
     return "qq" if alias.lower() == "qq" else "netease"
+
+
+async def _has_active_select_session(event: Event, state: T_State) -> bool:
+    """仅在当前用户有未过期点歌结果时匹配 #序号。"""
+    matched = re.fullmatch(r"#(\d+)", event.get_plaintext().strip())
+    if not matched:
+        return False
+
+    user_id = _uid(event)
+    if not user_id:
+        return False
+    item = _music_cache.get(user_id)
+    if item is None:
+        return False
+
+    expires_at, cached = item
+    if expires_at < time.time():
+        _music_cache.pop(user_id, None)
+        return False
+
+    _, songs = cached
+    index = int(matched.group(1)) - 1
+    if not (0 <= index < len(songs)):
+        return False
+
+    state[_SELECT_INDEX_STATE] = index
+    return True
 
 
 def _platform_name_cn(platform: Platform) -> str:
@@ -794,7 +825,8 @@ search_matcher = P.on_regex(
 )
 
 select_matcher = P.on_regex(
-    r"^#(\d+)",
+    r"^#(\d+)\s*$",
+    rule=Rule(_has_active_select_session),
     name="select",
     display_name="选择歌",
     level=PermLevel.LOW,
@@ -926,20 +958,20 @@ async def _handle_search(matcher: Matcher, bot: Bot, event: Event, groups: tuple
 
 
 @select_matcher.handle()
-async def _handle_select(matcher: Matcher, bot: Bot, event: Event, groups: tuple = RegexGroup()) -> None:
+async def _handle_select(matcher: Matcher, bot: Bot, event: Event, state: T_State) -> None:
     """播放搜索结果中的歌曲。"""
     user_id = _uid(event)
     item = _music_cache.get(user_id)
     if item is None:
-        await matcher.finish("点歌会话已过期，请重新搜索。")
+        await matcher.skip()
     expires_at, cached = item
     if expires_at < time.time():
         _music_cache.pop(user_id, None)
-        await matcher.finish("点歌会话已过期，请重新搜索。")
+        await matcher.skip()
     platform, songs = cached
-    index = int(groups[0]) - 1
+    index = int(state.get(_SELECT_INDEX_STATE, -1))
     if not (0 <= index < len(songs)):
-        await matcher.finish("序号超出范围。")
+        await matcher.skip()
     song = songs[index]
 
     try:
