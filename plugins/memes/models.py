@@ -10,7 +10,7 @@ from sqlmodel import Field, SQLModel
 class MemeGenerationRecord(SQLModel, table=True):
     """表情调用记录。"""
 
-    __tablename__ = "nonebot_plugin_memes_api_memegenerationrecord_v2"
+    __tablename__ = "meme_generation_records"
 
     id: int | None = Field(default=None, primary_key=True)
     session_persist_id: int = Field(nullable=False)
