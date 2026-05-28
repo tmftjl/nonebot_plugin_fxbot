@@ -89,14 +89,13 @@ def _result_from_note(note: dict[str, Any], *, source_url: str, discovery: bool)
     title = str(note.get("title") or note.get("desc") or "小红书笔记")
 
     if note.get("type") == "video" and isinstance(note.get("video"), dict):
-        video_urls, duration = _video_urls_and_duration(note["video"])
-        if not video_urls:
+        video_url, duration = _video_url_and_duration(note["video"])
+        if not video_url:
             raise ParseError("小红书页面没有视频直链")
         return VideoResult(
             platform="小红书",
             title=title,
-            video_url=video_urls[0],
-            video_urls=video_urls[1:],
+            video_url=video_url,
             cover_url=cover,
             duration=duration,
             source_url=source_url,
@@ -118,26 +117,16 @@ def _result_from_note(note: dict[str, Any], *, source_url: str, discovery: bool)
     )
 
 
-def _video_urls_and_duration(video: dict[str, Any]) -> tuple[list[str], float | None]:
-    """提取小红书视频流和备用地址。"""
+def _video_url_and_duration(video: dict[str, Any]) -> tuple[str | None, float | None]:
+    """按原插件顺序提取小红书视频流。"""
     stream = (((video.get("media") or {}).get("stream")) or {})
-    urls: list[str] = []
-    duration = None
     for key in ("h265", "h264", "av1", "h266"):
         items = stream.get(key)
-        if not isinstance(items, list):
-            continue
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            if duration is None and item.get("duration"):
-                duration = float(item["duration"]) / 1000
-            if item.get("masterUrl"):
-                urls.append(str(item["masterUrl"]))
-            backups = item.get("backupUrl")
-            if isinstance(backups, list):
-                urls.extend(str(url) for url in backups if url)
-    return list(dict.fromkeys(urls)), duration
+        item = first(items)
+        if isinstance(item, dict) and item.get("masterUrl"):
+            duration = item.get("duration")
+            return str(item["masterUrl"]), (float(duration) / 1000) if duration else None
+    return None, None
 
 
 def _image_urls(images: list[Any]) -> list[str]:

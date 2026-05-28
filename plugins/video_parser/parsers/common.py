@@ -63,7 +63,8 @@ async def redirect_url(url: str, *, headers: dict[str, str] | None = None) -> st
     """获取单次跳转地址。"""
     async with httpx.AsyncClient(timeout=timeout(), proxy=proxy(), follow_redirects=False, verify=False) as client:
         response = await client.get(url, headers=headers or COMMON_HEADERS)
-        response.raise_for_status()
+        if response.status_code >= 400:
+            response.raise_for_status()
         return urljoin(url, response.headers.get("Location", url))
 
 

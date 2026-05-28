@@ -161,15 +161,7 @@ async def download_video(result: VideoResult) -> Path:
         raise DownloadError(f"视频时长超过限制：{int(result.duration)} 秒")
 
     if not result.audio_url:
-        last_error: DownloadError | None = None
-        for url in _video_url_candidates(result):
-            try:
-                return await download_file(url, suffix=".mp4", headers=result.headers)
-            except DownloadError as exc:
-                last_error = exc
-        if last_error is not None:
-            raise last_error
-        raise DownloadError("媒体下载失败")
+        return await download_file(result.video_url, suffix=".mp4", headers=result.headers)
 
     video_path, audio_path = await asyncio.gather(
         download_file(result.video_url, suffix=".m4s", headers=result.headers),
@@ -177,17 +169,6 @@ async def download_video(result: VideoResult) -> Path:
     )
     output = CACHE_DIR / f"{hashlib.sha1((result.video_url + result.audio_url).encode('utf-8')).hexdigest()}.mp4"
     return await _merge_av(video_path, audio_path, output)
-
-
-def _video_url_candidates(result: VideoResult) -> tuple[str, ...]:
-    """生成视频下载候选 URL。"""
-    urls = [result.video_url, *result.video_urls]
-    candidates: list[str] = []
-    for url in urls:
-        if not url:
-            continue
-        candidates.extend(_url_candidates(url))
-    return tuple(dict.fromkeys(candidates))
 
 
 async def download_images(result: VideoResult) -> list[Path]:
