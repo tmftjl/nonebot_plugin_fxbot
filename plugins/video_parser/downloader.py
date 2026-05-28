@@ -8,6 +8,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 import httpx
+import curl_cffi
 
 from ...utils.paths import cache_dir
 from .config import cfg_general, cfg_network
@@ -53,26 +54,75 @@ async def download_file(url: str, *, suffix: str = ".mp4", headers: dict[str, st
     if file_path.exists() and file_path.stat().st_size > 0:
         return file_path
 
-    max_bytes = int(cfg_general().get("max_file_mb", 80)) * 1024 * 1024
-    total = 0
+    headers = headers or {}
     try:
-        async with httpx.AsyncClient(timeout=_timeout(), proxy=_proxy(), follow_redirects=True, verify=False) as client:
-            async with client.stream("GET", url, headers=headers or {}) as response:
-                response.raise_for_status()
-                content_length = response.headers.get("Content-Length")
-                if content_length and int(content_length) > max_bytes:
-                    raise DownloadError(f"文件大小超过限制：{int(content_length) / 1024 / 1024:.1f} MB")
-                with file_path.open("wb") as file:
-                    async for chunk in response.aiter_bytes(1024 * 1024):
-                        total += len(chunk)
-                        if total > max_bytes:
-                            raise DownloadError(f"文件大小超过限制：{max_bytes // 1024 // 1024} MB")
-                        file.write(chunk)
-    except Exception:
+        return await _download_file_httpx(url, file_path=file_path, headers=headers)
+    except DownloadError:
         if file_path.exists():
             file_path.unlink(missing_ok=True)
         raise
+    except httpx.HTTPError:
+        if file_path.exists():
+            file_path.unlink(missing_ok=True)
+        try:
+            return await _download_file_curl(url, file_path=file_path, headers=headers)
+        except Exception as exc:
+            if file_path.exists():
+                file_path.unlink(missing_ok=True)
+            raise DownloadError("媒体下载失败") from exc
 
+
+async def _download_file_httpx(url: str, *, file_path: Path, headers: dict[str, str]) -> Path:
+    """使用 httpx 下载文件。"""
+    max_bytes = int(cfg_general().get("max_file_mb", 80)) * 1024 * 1024
+    total = 0
+    async with httpx.AsyncClient(timeout=_timeout(), proxy=_proxy(), follow_redirects=True, verify=False) as client:
+        async with client.stream("GET", url, headers=headers) as response:
+            response.raise_for_status()
+            _check_content_length(response.headers.get("Content-Length"), max_bytes)
+            with file_path.open("wb") as file:
+                async for chunk in response.aiter_bytes(1024 * 1024):
+                    total += len(chunk)
+                    _check_total_size(total, max_bytes)
+                    file.write(chunk)
+    return _ensure_downloaded(file_path)
+
+
+async def _download_file_curl(url: str, *, file_path: Path, headers: dict[str, str]) -> Path:
+    """使用 curl_cffi 下载文件。"""
+    max_bytes = int(cfg_general().get("max_file_mb", 80)) * 1024 * 1024
+    total = 0
+    async with curl_cffi.AsyncSession(allow_redirects=True) as session:
+        response = await session.get(
+            url,
+            headers=headers,
+            timeout=float(cfg_general().get("request_timeout_seconds", 20)),
+            stream=True,
+        )
+        response.raise_for_status()
+        _check_content_length(response.headers.get("Content-Length"), max_bytes)
+        with file_path.open("wb") as file:
+            async for chunk in response.aiter_content(chunk_size=1024 * 1024):
+                total += len(chunk)
+                _check_total_size(total, max_bytes)
+                file.write(chunk)
+    return _ensure_downloaded(file_path)
+
+
+def _check_content_length(content_length: str | None, max_bytes: int) -> None:
+    """检查响应声明大小。"""
+    if content_length and int(content_length) > max_bytes:
+        raise DownloadError(f"文件大小超过限制：{int(content_length) / 1024 / 1024:.1f} MB")
+
+
+def _check_total_size(total: int, max_bytes: int) -> None:
+    """检查已下载大小。"""
+    if total > max_bytes:
+        raise DownloadError(f"文件大小超过限制：{max_bytes // 1024 // 1024} MB")
+
+
+def _ensure_downloaded(file_path: Path) -> Path:
+    """确认文件有效。"""
     if file_path.stat().st_size == 0:
         file_path.unlink(missing_ok=True)
         raise DownloadError("文件为空")
@@ -125,8 +175,31 @@ async def download_images(result: VideoResult) -> list[Path]:
     """下载解析结果中的图片。"""
     if not result.image_urls:
         raise DownloadError("解析结果没有图片")
-    tasks = [
-        download_file(url, suffix=".jpg", headers=result.headers)
-        for url in result.image_urls
-    ]
-    return await asyncio.gather(*tasks)
+    tasks = [_download_image(url, headers=result.headers) for url in result.image_urls]
+    paths = [path for path in await asyncio.gather(*tasks) if path is not None]
+    if not paths:
+        raise DownloadError("图片下载失败")
+    return paths
+
+
+async def _download_image(url: str, *, headers: dict[str, str]) -> Path | None:
+    """下载图片，失败时尝试常见无样式原图地址。"""
+    for candidate in _image_url_candidates(url):
+        try:
+            return await download_file(candidate, suffix=".jpg", headers=headers)
+        except Exception:
+            continue
+    return None
+
+
+def _image_url_candidates(url: str) -> tuple[str, ...]:
+    """生成图片下载候选 URL。"""
+    candidates = [url]
+    if url.startswith("http://"):
+        candidates.append("https://" + url[7:])
+    base = url.split("!", 1)[0]
+    if base != url:
+        candidates.append(base)
+        if base.startswith("http://"):
+            candidates.append("https://" + base[7:])
+    return tuple(dict.fromkeys(candidates))

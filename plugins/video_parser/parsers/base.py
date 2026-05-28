@@ -9,16 +9,25 @@ from urllib.parse import unquote
 from ..config import cfg_platforms
 from ..types import VideoResult
 
-URL_RE = re.compile(r"https?://[^\s<>\"']+|(?:v\.douyin|jx\.douyin|v\.kuaishou|xhslink)\.com/[A-Za-z0-9._?%&+=/#@-]+|(?:b23\.tv|bili2233\.cn)/[A-Za-z0-9._?%&+=/#@-]+")
+URL_RE = re.compile(
+    r"https?://[^\s<>\"']+|"
+    r"(?:v\.douyin|jx\.douyin|jingxuan\.douyin|v\.kuaishou|xhslink)\.com/[A-Za-z0-9._?%&+=/#@-]+|"
+    r"(?:v\.m\.)?chenzhongtech\.com/fw/[A-Za-z0-9._?%&+=/#@-]+|"
+    r"mapp\.api\.weibo\.cn/fx/[A-Za-z0-9]+\.html|"
+    r"(?:b23\.tv|bili2233\.cn)/[A-Za-z0-9._?%&+=/#@-]+"
+)
 SUPPORTED_URL_MARKERS = (
     "douyin.com",
     "iesdouyin.com",
+    "jingxuan.douyin.com",
     "kuaishou.com",
     "chenzhongtech.com",
     "xiaohongshu.com",
     "xhslink.com",
     "weibo.com",
     "weibo.cn",
+    "mapp.api.weibo.cn",
+    "card.weibo.com",
     "bilibili.com",
     "b23.tv",
     "bili2233.cn",
@@ -41,6 +50,9 @@ def find_url(text: str) -> str | None:
     bv = re.search(r"\bBV[0-9A-Za-z]{10}\b", text)
     if bv:
         return bv.group(0)
+    av = re.search(r"\bav\d{6,}\b", text, re.I)
+    if av:
+        return av.group(0)
     return None
 
 
@@ -79,7 +91,13 @@ async def parse_url(url: str) -> VideoResult:
         from .weibo import parse
 
         return await parse(url)
-    if platforms.get("bilibili", True) and ("bilibili.com" in lower or "b23.tv" in lower or "bili2233.cn" in lower or re.fullmatch(r"BV[0-9A-Za-z]{10}", url)):
+    if platforms.get("bilibili", True) and (
+        "bilibili.com" in lower
+        or "b23.tv" in lower
+        or "bili2233.cn" in lower
+        or re.fullmatch(r"BV[0-9A-Za-z]{10}", url)
+        or re.fullmatch(r"av\d{6,}", url, re.I)
+    ):
         from .bilibili import parse
 
         return await parse(url)

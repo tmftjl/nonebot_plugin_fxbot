@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import re
 from pathlib import Path
-from typing import Any
 from collections.abc import Awaitable, Callable
+from typing import Any
 
 from ....utils.paths import data_dir
 from ..types import VideoResult
@@ -24,32 +25,63 @@ _qr_login: Any | None = None
 
 
 async def parse(url: str) -> VideoResult:
-    """解析 B 站视频。"""
+    """解析 B 站视频或图文。"""
     if "b23.tv" in url or "bili2233.cn" in url:
         url = await final_url(url, headers=BILI_HEADERS)
     matched = re.search(r"(?P<bvid>BV[0-9A-Za-z]{10})", url)
-    if not matched:
-        raise ParseError("无法识别 B 站 BV 号")
-    bvid = matched.group("bvid")
-    page_num = 1
-    page = re.search(r"[?&]p=(\d{1,3})", url)
-    if page:
-        page_num = max(1, int(page.group(1)))
-    return await _parse_video(bvid, page_num, source=url)
+    if matched:
+        bvid = matched.group("bvid")
+        page_num = 1
+        page = re.search(r"[?&]p=(\d{1,3})", url)
+        if page:
+            page_num = max(1, int(page.group(1)))
+        return await _parse_video(bvid=bvid, page_num=page_num, source=_clean_video_source(bvid, page_num))
+
+    av = re.search(r"(?:bilibili\.com(?:/video)?/)?av(?P<avid>\d{6,})(?:.*?[?&]p=(?P<page>\d{1,3}))?", url, re.I)
+    if av:
+        page_num = max(1, int(av.group("page") or 1))
+        avid = int(av.group("avid"))
+        return await _parse_video(avid=avid, page_num=page_num, source=_clean_av_source(avid, page_num))
+
+    dynamic = re.search(r"(?:bilibili\.com/(?:opus|dynamic)/|t\.bilibili\.com/)(?P<id>\d+)", url)
+    if dynamic:
+        return await _parse_dynamic_or_opus(int(dynamic.group("id")), source=url)
+
+    read = re.search(r"bilibili\.com/read/cv(?P<id>\d+)", url)
+    if read:
+        return await _parse_article(int(read.group("id")), source=url)
+
+    raise ParseError("无法识别 B 站链接")
 
 
-async def _parse_video(bvid: str, page_num: int, *, source: str) -> VideoResult:
+def _setup_client() -> None:
+    """按原插件方式设置 bilibili_api HTTP 客户端。"""
+    from bilibili_api import request_settings, select_client
+
+    select_client("curl_cffi")
+    request_settings.set("impersonate", "chrome131")
+
+
+def _clean_video_source(bvid: str, page_num: int) -> str:
+    """构造干净的视频源地址。"""
+    return f"https://www.bilibili.com/video/{bvid}" + (f"?p={page_num}" if page_num > 1 else "")
+
+
+def _clean_av_source(avid: int, page_num: int) -> str:
+    """构造干净的 av 源地址。"""
+    return f"https://www.bilibili.com/video/av{avid}" + (f"?p={page_num}" if page_num > 1 else "")
+
+
+async def _parse_video(*, bvid: str | None = None, avid: int | None = None, page_num: int, source: str) -> VideoResult:
     """解析 B 站视频信息和下载流。"""
     try:
-        from bilibili_api import request_settings, select_client
         from bilibili_api.video import Video, VideoStreamDownloadURL, AudioStreamDownloadURL, VideoDownloadURLDataDetecter
     except Exception as exc:
         raise ParseError("缺少 bilibili-api-python 依赖，请先安装 requirements.txt") from exc
 
-    select_client("curl_cffi")
-    request_settings.set("impersonate", "chrome131")
+    _setup_client()
     credential = await load_credential()
-    video = Video(bvid=bvid, credential=credential)
+    video = Video(bvid=bvid, aid=avid, credential=credential)
     info = await video.get_info()
     pages = info.get("pages") or []
     page_index = min(max(page_num - 1, 0), max(len(pages) - 1, 0))
@@ -82,8 +114,110 @@ async def _parse_video(bvid: str, page_num: int, *, source: str) -> VideoResult:
         audio_url=audio_url,
         cover_url=cover,
         duration=duration,
-        source_url=f"https://www.bilibili.com/video/{bvid}" + (f"?p={page_num}" if page_num > 1 else ""),
+        source_url=source,
         text=str((info.get("owner") or {}).get("name") or ""),
+        headers=BILI_HEADERS.copy(),
+    )
+
+
+async def _parse_dynamic_or_opus(dynamic_id: int, *, source: str) -> VideoResult:
+    """解析 B 站动态或图文。"""
+    try:
+        from bilibili_api.dynamic import Dynamic
+    except Exception as exc:
+        raise ParseError("缺少 bilibili-api-python 依赖，请先安装 requirements.txt") from exc
+
+    _setup_client()
+    dynamic = Dynamic(dynamic_id, await load_credential())
+    try:
+        if await dynamic.is_article():
+            return await _parse_bili_opus(await _maybe_await(dynamic.turn_to_opus()), source=source)
+        info = await dynamic.get_info()
+    except Exception as exc:
+        raise ParseError("B站动态解析失败") from exc
+    return await _result_from_dynamic((info.get("item") or info), source=source)
+
+
+async def _parse_article(read_id: int, *, source: str) -> VideoResult:
+    """解析 B 站专栏转图文。"""
+    try:
+        from bilibili_api.article import Article
+    except Exception as exc:
+        raise ParseError("缺少 bilibili-api-python 依赖，请先安装 requirements.txt") from exc
+
+    _setup_client()
+    article = Article(read_id)
+    return await _parse_bili_opus(await _maybe_await(article.turn_to_opus()), source=source)
+
+
+async def _maybe_await(value: Any) -> Any:
+    """兼容 bilibili_api 不同对象的同步/异步返回。"""
+    if inspect.isawaitable(value):
+        return await value
+    return value
+
+
+async def _parse_bili_opus(opus: Any, *, source: str) -> VideoResult:
+    """解析 B 站图文动态。"""
+    try:
+        info = await opus.get_info()
+    except Exception as exc:
+        raise ParseError("B站图文解析失败") from exc
+    item = info.get("item") or {}
+    modules = item.get("modules") or []
+    title = ((item.get("basic") or {}).get("title")) or "B站图文"
+    text_parts: list[str] = []
+    image_urls: list[str] = []
+    author = ""
+    for module in modules:
+        if module.get("module_author"):
+            author = str((module.get("module_author") or {}).get("name") or "")
+        content = module.get("module_content") or {}
+        for paragraph in content.get("paragraphs") or []:
+            text = paragraph.get("text") or {}
+            nodes = text.get("nodes") or []
+            words = "".join(str(((node.get("word") or {}).get("words")) or "") for node in nodes)
+            if words.strip():
+                text_parts.append(words.strip())
+            pic = paragraph.get("pic") or {}
+            for image in pic.get("pics") or []:
+                if isinstance(image, dict) and image.get("url"):
+                    image_urls.append(str(image["url"]))
+    if not image_urls:
+        raise ParseError("B站图文没有图片")
+    return VideoResult(
+        platform="B站",
+        title=str(title or (text_parts[0][:40] if text_parts else "B站图文")),
+        image_urls=image_urls,
+        cover_url=image_urls[0],
+        source_url=source,
+        text=author,
+        headers=BILI_HEADERS.copy(),
+    )
+
+
+async def _result_from_dynamic(item: dict[str, Any], *, source: str) -> VideoResult:
+    """从 B 站动态结构构造解析结果。"""
+    modules = item.get("modules") or {}
+    author = modules.get("module_author") or {}
+    dynamic = modules.get("module_dynamic") or {}
+    major = dynamic.get("major") or {}
+    archive = major.get("archive") or {}
+    if archive.get("bvid"):
+        return await _parse_video(bvid=str(archive["bvid"]), page_num=1, source=source)
+    opus = major.get("opus") or {}
+    pics = opus.get("pics") or []
+    image_urls = [str(pic["url"]) for pic in pics if isinstance(pic, dict) and pic.get("url")]
+    title = opus.get("title") or ((opus.get("summary") or {}).get("text")) or ((dynamic.get("desc") or {}).get("text")) or "B站动态"
+    if not image_urls:
+        raise ParseError("B站动态没有可发送的媒体")
+    return VideoResult(
+        platform="B站",
+        title=str(title),
+        image_urls=image_urls,
+        cover_url=image_urls[0],
+        source_url=source,
+        text=str(author.get("name") or ""),
         headers=BILI_HEADERS.copy(),
     )
 

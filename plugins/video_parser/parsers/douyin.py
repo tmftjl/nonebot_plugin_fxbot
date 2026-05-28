@@ -8,7 +8,7 @@ import httpx
 
 from ..types import VideoResult
 from .base import ParseError
-from .common import COMMON_HEADERS, extract_json, final_url, first, get_text, proxy, timeout
+from .common import ANDROID_HEADERS, COMMON_HEADERS, IOS_HEADERS, extract_json, final_url, first, get_text, proxy, timeout
 
 
 async def parse(url: str) -> VideoResult:
@@ -31,7 +31,7 @@ async def parse(url: str) -> VideoResult:
 
 async def _parse_page(url: str, *, source_url: str) -> VideoResult:
     """解析抖音分享页。"""
-    html = await get_text(url, headers=COMMON_HEADERS, follow_redirects=False)
+    html = await get_text(url, headers=IOS_HEADERS, follow_redirects=False)
     router = extract_json(html, r"window\._ROUTER_DATA\s*=\s*(.*?)</script>")
     loader = router.get("loaderData") or {}
     page = loader.get("video_(id)/page") or loader.get("note_(id)/page") or {}
@@ -57,7 +57,7 @@ async def _parse_page(url: str, *, source_url: str) -> VideoResult:
             cover_url=image_urls[0],
             source_url=source_url,
             text=str(author.get("nickname") or ""),
-            headers=COMMON_HEADERS.copy(),
+            headers=IOS_HEADERS.copy(),
         )
 
     video_url = str(video_url).replace("playwm", "play")
@@ -70,7 +70,7 @@ async def _parse_page(url: str, *, source_url: str) -> VideoResult:
         duration=(float(video.get("duration")) / 1000) if video.get("duration") else None,
         source_url=source_url,
         text=str(author.get("nickname") or ""),
-        headers=COMMON_HEADERS.copy(),
+        headers=IOS_HEADERS.copy(),
     )
 
 
@@ -82,13 +82,28 @@ async def _parse_slides(video_id: str, *, source_url: str) -> VideoResult:
         "request_source": "200",
     }
     async with httpx.AsyncClient(timeout=timeout(), proxy=proxy(), verify=False) as client:
-        response = await client.get(url, params=params, headers=COMMON_HEADERS)
+        response = await client.get(url, params=params, headers=ANDROID_HEADERS)
         response.raise_for_status()
         data = response.json()
 
     item = first(data.get("aweme_details"))
     if not isinstance(item, dict):
         raise ParseError("抖音图文接口没有作品信息")
+
+    dynamic_urls = _dynamic_urls(item.get("images") or [])
+    if dynamic_urls:
+        video = item.get("video") or {}
+        cover = video.get("cover") or {}
+        author = item.get("author") or {}
+        return VideoResult(
+            platform="抖音",
+            title=str(item.get("desc") or "抖音图文"),
+            video_url=dynamic_urls[0],
+            cover_url=first(cover.get("url_list")),
+            source_url=source_url,
+            text=str(author.get("nickname") or ""),
+            headers=ANDROID_HEADERS.copy(),
+        )
 
     image_urls = _image_urls(item.get("images") or [])
     if not image_urls:
@@ -102,7 +117,7 @@ async def _parse_slides(video_id: str, *, source_url: str) -> VideoResult:
         cover_url=image_urls[0],
         source_url=source_url,
         text=str(author.get("nickname") or ""),
-        headers=COMMON_HEADERS.copy(),
+        headers=ANDROID_HEADERS.copy(),
     )
 
 
@@ -115,4 +130,20 @@ def _image_urls(images: list[object]) -> list[str]:
         url = first(image.get("url_list"))
         if url:
             urls.append(str(url))
+    return urls
+
+
+def _dynamic_urls(images: list[object]) -> list[str]:
+    """提取抖音 slides 动图视频。"""
+    urls: list[str] = []
+    for image in images:
+        if not isinstance(image, dict):
+            continue
+        video = image.get("video")
+        if not isinstance(video, dict):
+            continue
+        play_addr = video.get("play_addr") or {}
+        url = first(play_addr.get("url_list"))
+        if url:
+            urls.append(str(url).replace("playwm", "play"))
     return urls

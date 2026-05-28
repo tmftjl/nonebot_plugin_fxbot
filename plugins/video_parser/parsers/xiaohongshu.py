@@ -7,26 +7,43 @@ from typing import Any
 
 from ..types import VideoResult
 from .base import ParseError
-from .common import COMMON_HEADERS, extract_json, final_url, first, get_text
+from .common import COMMON_HEADERS, IOS_HEADERS as SHARED_IOS_HEADERS, extract_json, final_url, first, get_text
 
 HEADERS = {
     **COMMON_HEADERS,
     "Referer": "https://www.xiaohongshu.com/",
+    "Accept": (
+        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,"
+        "image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+    ),
+}
+
+IOS_HEADERS = {
+    **SHARED_IOS_HEADERS,
+    "Referer": "https://www.xiaohongshu.com/",
+    "origin": "https://www.xiaohongshu.com",
+    "x-requested-with": "XMLHttpRequest",
+    "sec-fetch-site": "same-origin",
+    "sec-fetch-mode": "cors",
+    "sec-fetch-dest": "empty",
 }
 
 
 async def parse(url: str) -> VideoResult:
     """解析小红书视频或图文。"""
-    resolved = await final_url(url, headers=HEADERS) if "xhslink.com" in url else url
-    matched = re.search(r"(?:explore|discovery/item)/(?P<id>[0-9a-zA-Z]+)", resolved)
+    resolved = await final_url(url, headers=IOS_HEADERS) if "xhslink.com" in url else url
+    matched = re.search(r"(?:explore|discovery/item)/(?P<query>(?P<id>[0-9a-zA-Z]+)(?:\?[^#\s]+)?)", resolved)
     if not matched:
         raise ParseError("无法识别小红书笔记 ID")
 
     note_id = matched.group("id")
+    query = matched.group("query")
+    explore_url = f"https://www.xiaohongshu.com/explore/{query}"
+    discovery_url = f"https://www.xiaohongshu.com/discovery/item/{query}"
     try:
-        return await _parse_explore(resolved, note_id)
+        return await _parse_explore(explore_url, note_id)
     except Exception:
-        return await _parse_discovery(resolved)
+        return await _parse_discovery(discovery_url)
 
 
 async def _parse_explore(url: str, note_id: str) -> VideoResult:
@@ -42,7 +59,7 @@ async def _parse_explore(url: str, note_id: str) -> VideoResult:
 
 async def _parse_discovery(url: str) -> VideoResult:
     """解析 discovery 页面。"""
-    html = await get_text(url, headers=HEADERS)
+    html = await get_text(url, headers=IOS_HEADERS)
     state = extract_json(html, r"window\.__INITIAL_STATE__=(.*?)</script>", undefined_to_null=True)
     container = state.get("noteData") or {}
     note = (((container.get("data") or {}).get("noteData")) or {})

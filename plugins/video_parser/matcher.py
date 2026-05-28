@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
 from typing import Any
 
+import httpx
 from nonebot.adapters import Bot, Event
 from nonebot.matcher import Matcher
 from nonebot.permission import SUPERUSER
@@ -24,89 +24,37 @@ from .sender import send_image_result, send_video_result
 from .state import is_group_enabled, set_group_enabled
 
 STATE_URL_KEY = "video_parser_url"
-CARD_URL_KEYS = (
-    "qqdocurl",
-    "jumpUrl",
-    "jumpurl",
-    "url",
-    "appUrl",
-    "appurl",
-    "schema",
-    "scheme",
-    "targetUrl",
-    "targeturl",
-    "shareUrl",
-    "shareurl",
-)
-
-
-def _iter_payload_strings(payload: Any) -> Iterator[str]:
-    """递归提取消息段数据里的文本内容。"""
-    if payload is None:
-        return
-    if isinstance(payload, str):
-        yield payload
-        value = payload.strip()
-        if value.startswith(("{", "[")):
-            try:
-                decoded = json.loads(value)
-            except json.JSONDecodeError:
-                return
-            yield from _iter_payload_strings(decoded)
-        return
-    if isinstance(payload, dict):
-        for key in CARD_URL_KEYS:
-            if key in payload:
-                yield from _iter_payload_strings(payload[key])
-        for value in payload.values():
-            yield from _iter_payload_strings(value)
-        return
-    if isinstance(payload, list | tuple):
-        for value in payload:
-            yield from _iter_payload_strings(value)
 
 
 def _find_event_url(event: Event) -> str | None:
     """从普通文本和卡片消息段中寻找可解析链接。"""
-    for text in _iter_event_texts(event):
-        if url := find_url(text):
-            return url
-    return None
+    if url := _find_card_url(event):
+        return url
+    return find_url(event.get_plaintext())
 
 
-def _iter_event_texts(event: Event) -> Iterator[str]:
-    """遍历事件里的普通文本、原始消息和卡片消息段。"""
-    plain_text = event.get_plaintext()
-    if plain_text:
-        yield plain_text
-    raw_message = getattr(event, "raw_message", None)
-    if isinstance(raw_message, str) and raw_message:
-        yield raw_message
+def _find_card_url(event: Event) -> str | None:
+    """按原插件逻辑从 JSON 卡片 meta 字段提取跳转链接。"""
     try:
         message = event.get_message()
     except Exception:
-        message = None
-    if message is not None:
-        for segment in message:
-            yield str(segment)
-            yield from _iter_payload_strings(getattr(segment, "data", None))
-    dump = _event_dump(event)
-    if dump:
-        yield from _iter_payload_strings(dump)
-
-
-def _event_dump(event: Event) -> dict[str, Any] | None:
-    """兼容 pydantic v1/v2 的事件字典。"""
-    if hasattr(event, "model_dump"):
+        return None
+    for segment in message:
+        data = getattr(segment, "data", {}) or {}
+        raw = data.get("raw") or data.get("data")
+        if not isinstance(raw, str):
+            continue
         try:
-            return event.model_dump()
-        except Exception:
-            return None
-    if hasattr(event, "dict"):
-        try:
-            return event.dict()
-        except Exception:
-            return None
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        meta = payload.get("meta")
+        if not isinstance(meta, dict):
+            continue
+        for key, field in (("detail_1", "qqdocurl"), ("news", "jumpUrl"), ("music", "jumpUrl")):
+            item = meta.get(key)
+            if isinstance(item, dict) and isinstance(item.get(field), str):
+                return item[field]
     return None
 
 
@@ -183,6 +131,8 @@ async def _handle_video(matcher: Matcher, bot: Bot, event: Event, state: T_State
             raise ParseError("解析结果没有可发送的媒体")
     except (ParseError, DownloadError) as exc:
         await matcher.finish(f"解析失败：{exc}")
+    except httpx.HTTPStatusError as exc:
+        await matcher.finish(f"解析失败：平台接口返回 {exc.response.status_code}")
     except Exception as exc:
         await matcher.finish(f"解析失败：{type(exc).__name__}: {exc}")
 

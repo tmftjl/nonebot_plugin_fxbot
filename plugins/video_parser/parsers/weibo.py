@@ -4,24 +4,40 @@ from __future__ import annotations
 
 import html
 import re
+from html.parser import HTMLParser
 from math import ceil
 from time import time
 from typing import Any
+from uuid import uuid4
 
 import httpx
 
 from ..types import VideoResult
 from .base import ParseError
-from .common import COMMON_HEADERS, proxy, timeout
+from .common import COMMON_HEADERS, final_url, proxy, timeout
 
 HEADERS = {
     **COMMON_HEADERS,
+    "accept": (
+        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,"
+        "image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9"
+    ),
     "Referer": "https://weibo.com/",
 }
 
 
 async def parse(url: str) -> VideoResult:
-    """解析微博视频。"""
+    """解析微博视频或图文。"""
+    if "mapp.api.weibo.cn/fx/" in url:
+        resolved = await final_url(url, headers=HEADERS)
+        if resolved == url:
+            raise ParseError("微博短链无法跳转")
+        return await parse(resolved)
+
+    article = re.search(r"ttarticle/.+?id=(?P<id>\d+)", url) or re.search(r"article/.+?/id/(?P<id>\d+)", url)
+    if article:
+        return await _parse_article(article.group("id"), source=url)
+
     tv = re.search(r"weibo\.com/tv/show/\d{4}:\d+\?mid=(?P<mid>\d+)", url)
     if tv:
         return await _parse_status(_mid2id(tv.group("mid")), source=url)
@@ -35,6 +51,38 @@ async def parse(url: str) -> VideoResult:
         return await _parse_status(status.group("wid"), source=url)
 
     raise ParseError("无法识别微博视频链接")
+
+
+async def _parse_article(article_id: str, *, source: str) -> VideoResult:
+    """解析微博文章图文。"""
+    params = {
+        "_rid": str(uuid4()),
+        "id": article_id,
+        "_t": int(time() * 1000),
+    }
+    async with httpx.AsyncClient(timeout=timeout(), proxy=proxy(), verify=False) as client:
+        response = await client.get("https://card.weibo.com/article/m/aj/detail", params=params, headers=HEADERS)
+        response.raise_for_status()
+        payload = response.json()
+
+    if payload.get("msg") != "success":
+        raise ParseError("微博文章请求失败")
+    data = payload.get("data") or {}
+    parsed = _ArticleContentParser()
+    parsed.feed(str(data.get("content") or ""))
+    image_urls = parsed.image_urls
+    if not image_urls:
+        raise ParseError("微博文章没有可发送的媒体")
+    user = data.get("userinfo") or {}
+    return VideoResult(
+        platform="微博",
+        title=str(data.get("title") or (parsed.text[:40] if parsed.text else "微博文章")),
+        image_urls=image_urls,
+        cover_url=image_urls[0],
+        source_url=str(data.get("url") or source),
+        text=str(user.get("screen_name") or ""),
+        headers=HEADERS.copy(),
+    )
 
 
 async def _parse_fid(fid: str, *, source: str) -> VideoResult:
@@ -127,6 +175,50 @@ def _collect_status(data: dict[str, Any], *, source: str) -> VideoResult:
 def _strip_html(text: str) -> str:
     """去除微博 HTML 标签。"""
     return html.unescape(re.sub(r"<[^>]*>", "", text.replace("<br />", "\n"))).strip()
+
+
+class _ArticleContentParser(HTMLParser):
+    """提取微博文章中的段落和图片。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.image_urls: list[str] = []
+        self._paragraphs: list[str] = []
+        self._current: list[str] = []
+        self._in_paragraph = False
+
+    @property
+    def text(self) -> str:
+        """返回文章纯文本。"""
+        return "\n".join(self._paragraphs).strip()
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        """处理开始标签。"""
+        if tag == "p":
+            self._in_paragraph = True
+            self._current = []
+            return
+        if tag != "img":
+            return
+        attr_map = dict(attrs)
+        src = _normalize_scheme(attr_map.get("src"))
+        if src:
+            self.image_urls.append(src)
+
+    def handle_data(self, data: str) -> None:
+        """处理文本内容。"""
+        if self._in_paragraph:
+            self._current.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        """处理结束标签。"""
+        if tag != "p" or not self._in_paragraph:
+            return
+        text = html.unescape("".join(self._current)).replace("\u200b", "").strip()
+        if text:
+            self._paragraphs.append(text)
+        self._current = []
+        self._in_paragraph = False
 
 
 def _image_urls(pics: list[object]) -> list[str]:

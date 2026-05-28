@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from ..types import VideoResult
 from .base import ParseError
-from .common import COMMON_HEADERS, extract_json, final_url, first, get_text
+from .common import IOS_HEADERS, extract_json, final_url, first, get_text
 
-HEADERS = {**COMMON_HEADERS, "Referer": "https://v.kuaishou.com/"}
+HEADERS = {**IOS_HEADERS, "Referer": "https://v.kuaishou.com/"}
 
 
 async def parse(url: str) -> VideoResult:
