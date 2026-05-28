@@ -17,6 +17,15 @@ def _as_str_list(value: Any) -> list[str]:
     return [str(item) for item in value if item is not None]
 
 
+def _ensure_dict(entry: dict[str, Any], key: str) -> dict[str, Any]:
+    """确保权限子配置为字典。"""
+    value = entry.get(key)
+    if not isinstance(value, dict):
+        value = {}
+        entry[key] = value
+    return value
+
+
 def _update_entry(
     entry: dict[str, Any],
     *,
@@ -29,20 +38,22 @@ def _update_entry(
     bl_groups: list[str] | None = None,
 ) -> None:
     """按传入参数更新权限条目。"""
-    if enabled is not None:
+    if enabled is not None and "enabled" not in entry:
         entry["enabled"] = bool(enabled)
-    if level is not None:
+    if level is not None and "level" not in entry:
         entry["level"] = level
-    if scene is not None:
+    if scene is not None and "scene" not in entry:
         entry["scene"] = scene
-    if wl_users is not None:
-        entry.setdefault("whitelist", {})["users"] = _as_str_list(wl_users)
-    if wl_groups is not None:
-        entry.setdefault("whitelist", {})["groups"] = _as_str_list(wl_groups)
-    if bl_users is not None:
-        entry.setdefault("blacklist", {})["users"] = _as_str_list(bl_users)
-    if bl_groups is not None:
-        entry.setdefault("blacklist", {})["groups"] = _as_str_list(bl_groups)
+    whitelist = _ensure_dict(entry, "whitelist")
+    blacklist = _ensure_dict(entry, "blacklist")
+    if wl_users is not None and "users" not in whitelist:
+        whitelist["users"] = _as_str_list(wl_users)
+    if wl_groups is not None and "groups" not in whitelist:
+        whitelist["groups"] = _as_str_list(wl_groups)
+    if bl_users is not None and "users" not in blacklist:
+        blacklist["users"] = _as_str_list(bl_users)
+    if bl_groups is not None and "groups" not in blacklist:
+        blacklist["groups"] = _as_str_list(bl_groups)
 
 
 def upsert_plugin_defaults(

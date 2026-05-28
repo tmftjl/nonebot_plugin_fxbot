@@ -120,6 +120,10 @@ class PermissionChecker:
             return parts[0], None
         return None, None
 
+    def _disabled_by_switch(self, layers: list[Any]) -> bool:
+        """功能开关关闭时对所有用户生效，包括超级用户。"""
+        return any(isinstance(layer, dict) and not layer.get("enabled", True) for layer in layers)
+
     async def check(self, feature: str, bot: Bot, event: Event) -> bool:
         """检查指定 feature 是否允许当前事件调用。"""
         config = get_storage().load()
@@ -132,14 +136,17 @@ class PermissionChecker:
         plugin_node = sub_plugins.get(plugin, {}) if plugin else {}
         commands = plugin_node.get("commands") if isinstance(plugin_node.get("commands"), dict) else {}
 
-        if context.user_level == PermLevel.SUPERUSER:
-            return True
-
         layers = [
             config.get("top"),
             plugin_node.get("top") if plugin else None,
             commands.get(command) if command else None,
         ]
+
+        if self._disabled_by_switch(layers):
+            return False
+
+        if context.user_level == PermLevel.SUPERUSER:
+            return True
 
         for layer in layers:
             if not isinstance(layer, dict):
