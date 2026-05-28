@@ -26,6 +26,7 @@ def _system_config_tab() -> dict[str, Any]:
                 "title": "会员系统",
                 "schemas": [
                     {"field": "enabled", "label": "启用会员门禁", "component": "Switch", "default": SYSTEM_DEFAULTS["membership"]["enabled"], "helpMessage": "关闭后，群会员门禁不再拦截消息。"},
+                    {"field": "free_bot_ids", "label": "免费 Bot", "component": "GTags", "default": SYSTEM_DEFAULTS["membership"]["free_bot_ids"], "helpMessage": "这些 Bot 自编号不执行会员门禁。"},
                     {"field": "expire_notice_days", "label": "到期提醒天数", "component": "GTags", "default": SYSTEM_DEFAULTS["membership"]["expire_notice_days"], "helpMessage": "剩余多少天时发送到期提醒。"},
                     {"field": "auto_leave_expired_groups", "label": "过期自动退群", "component": "Switch", "default": SYSTEM_DEFAULTS["membership"]["auto_leave_expired_groups"], "helpMessage": "到期后自动让托管 Bot 退群。"},
                     {"field": "enable_scheduler", "label": "启用定时任务", "component": "Switch", "default": SYSTEM_DEFAULTS["membership"]["enable_scheduler"], "helpMessage": "关闭后不会自动执行到期检查。"},

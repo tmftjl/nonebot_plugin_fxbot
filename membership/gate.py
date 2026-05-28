@@ -64,10 +64,24 @@ def _membership_enabled() -> bool:
     return bool(membership_cfg["enabled"])
 
 
+def _free_bot_ids() -> set[str]:
+    """读取免会员门禁 Bot 列表。"""
+    cfg = get_config_manager().get_system()
+    membership_cfg = cfg["membership"]
+    value = membership_cfg["free_bot_ids"]
+    if isinstance(value, (list, tuple, set)):
+        return {str(item).strip() for item in value if item is not None and str(item).strip()}
+    return set()
+
+
 @event_preprocessor
 async def _fxbot_membership_gate(bot: Bot, event: Event) -> None:
     """群消息会员门禁。"""
     if not _membership_enabled():
+        return
+
+    bot_id = _normalize_id(getattr(bot, "self_id", None))
+    if bot_id and bot_id in _free_bot_ids():
         return
 
     group_id = _gid(event)
@@ -79,7 +93,6 @@ async def _fxbot_membership_gate(bot: Bot, event: Event) -> None:
         return
 
     user_id = _uid(event) or ""
-    bot_id = _normalize_id(getattr(bot, "self_id", None))
 
     try:
         allowed, reason = await membership_guard.check_membership(
