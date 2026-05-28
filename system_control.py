@@ -58,11 +58,12 @@ update_cmd = P.on_regex(
 )
 
 
-def _save_restart_info(bot: Bot, event: Event) -> None:
+def _save_restart_info(bot: Bot, event: Event, success_message: str = "✅ FxBot 重启成功") -> None:
     """保存重启后通知目标。"""
     try:
         restart_info: dict[str, Any] = {
             "bot_id": str(bot.self_id),
+            "success_message": success_message,
             **extract_message_target(event),
         }
         _RESTART_FLAG_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -135,14 +136,16 @@ def _git_already_up_to_date(output: str) -> bool:
     return any(marker.lower() in normalized for marker in _GIT_UP_TO_DATE_MARKERS)
 
 
-def _build_update_report(ok: bool, output: str) -> list[str]:
+def _build_update_report(ok: bool, output: str, logs: list[str] | None = None) -> list[str]:
     """构造更新结果转发摘要，不暴露 git 文件变更列表。"""
     if ok:
         if _git_already_up_to_date(output):
-            return ["✅ FxBot 本次无更新内容！"]
+            return [
+                "✅ FxBot 本次无更新内容！",
+            ]
         return [
             "✅ FxBot 更新完成！",
-            "已拉取最新代码，正在重启 NoneBot。",
+            *(logs or ["未读取到本次提交日志"]),
         ]
 
     if str(output or "").strip():
@@ -156,6 +159,49 @@ def _build_update_report(ok: bool, output: str) -> list[str]:
     ]
 
 
+async def _run_git(args: list[str]) -> tuple[int, str]:
+    """执行 git 命令并返回输出。"""
+    process = await asyncio.create_subprocess_exec(
+        "git",
+        *args,
+        cwd=str(package_root()),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await process.communicate()
+    output = "\n".join(
+        part.decode("utf-8", errors="replace").strip()
+        for part in (stdout, stderr)
+        if part
+    ).strip()
+    return process.returncode, output
+
+
+async def _git_head() -> str:
+    """读取当前 HEAD。"""
+    code, output = await _run_git(["rev-parse", "HEAD"])
+    return output.strip() if code == 0 else ""
+
+
+async def _git_log_messages(before: str, after: str) -> list[str]:
+    """读取本次更新新增提交信息。"""
+    if not before or not after or before == after:
+        return []
+    code, output = await _run_git([
+        "log",
+        "--reverse",
+        "--pretty=format:%B%x1e",
+        f"{before}..{after}",
+    ])
+    if code != 0 or not output:
+        return []
+    return [
+        item.strip()
+        for item in output.split("\x1e")
+        if item.strip()
+    ]
+
+
 async def _send_update_report(matcher: Matcher, bot: Bot, event: Event, lines: list[str]) -> None:
     """优先用合并转发发送更新结果，失败时退回普通文本。"""
     if await send_forward_texts(bot, event, lines, nickname="小助手"):
@@ -163,14 +209,14 @@ async def _send_update_report(matcher: Matcher, bot: Bot, event: Event, lines: l
     await matcher.send("\n".join(lines))
 
 
-async def _git_pull_plugin() -> tuple[bool, str]:
+async def _git_pull_plugin() -> tuple[bool, str, list[str]]:
     """在当前插件目录执行 git pull。"""
-    workdir = package_root()
+    before = await _git_head()
     process = await asyncio.create_subprocess_exec(
         "git",
         "pull",
         "--ff-only",
-        cwd=str(workdir),
+        cwd=str(package_root()),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
@@ -179,7 +225,7 @@ async def _git_pull_plugin() -> tuple[bool, str]:
     except asyncio.TimeoutError:
         process.kill()
         await process.communicate()
-        return False, "git pull 超时"
+        return False, "git pull 超时", []
 
     output = "\n".join(
         part.decode("utf-8", errors="replace").strip()
@@ -187,8 +233,10 @@ async def _git_pull_plugin() -> tuple[bool, str]:
         if part
     ).strip()
     if process.returncode == 0:
-        return True, output or "Already up to date."
-    return False, output or f"git pull 失败，退出码 {process.returncode}"
+        after = await _git_head()
+        logs = await _git_log_messages(before, after)
+        return True, output or "Already up to date.", logs
+    return False, output or f"git pull 失败，退出码 {process.returncode}", []
 
 
 @restart_cmd.handle()
@@ -221,19 +269,19 @@ async def _handle_update(matcher: Matcher, bot: Bot, event: Event) -> None:
     """处理更新并重启命令。"""
     logger.warning(f"{_UPDATE_LOG_PREFIX} 超级用户触发更新命令: {event.get_user_id()}")
     await matcher.send("🔔 正在尝试更新 FxBot，请稍等片刻。")
-    ok, output = await _git_pull_plugin()
+    ok, output, logs = await _git_pull_plugin()
     if not ok:
         logger.error(f"{_UPDATE_LOG_PREFIX} git pull 失败: {_truncate_output(output)}")
-        await _send_update_report(matcher, bot, event, _build_update_report(False, output))
+        await _send_update_report(matcher, bot, event, _build_update_report(False, output, logs))
         await matcher.finish()
 
     try:
         status = "无更新" if _git_already_up_to_date(output) else "已更新"
         logger.info(f"{_UPDATE_LOG_PREFIX} git pull 完成: {status}")
-        await _send_update_report(matcher, bot, event, _build_update_report(True, output))
+        await _send_update_report(matcher, bot, event, _build_update_report(True, output, logs))
     except Exception as exc:
         logger.error(f"{_UPDATE_LOG_PREFIX} 发送更新提示失败: {exc}")
-    _save_restart_info(bot, event)
+    _save_restart_info(bot, event, "✅ FxBot 更新重启成功")
     await asyncio.sleep(0.5)
     await _execute_restart()
 
@@ -255,7 +303,8 @@ async def _check_restart_flag(bot: Bot) -> None:
 
     try:
         await asyncio.sleep(1)
-        await send_text_to_target(bot, restart_info, "✅ NoneBot 重启成功")
+        message = str(restart_info.get("success_message") or "✅ FxBot 重启成功")
+        await send_text_to_target(bot, restart_info, message)
         logger.info("[system_control] 重启成功通知已发送")
     except Exception as exc:
         logger.error(f"[system_control] 发送重启成功通知失败: {exc}")
