@@ -25,7 +25,7 @@ _qr_login: Any | None = None
 
 async def parse(url: str) -> VideoResult:
     """解析 B 站视频。"""
-    if "b23.tv" in url:
+    if "b23.tv" in url or "bili2233.cn" in url:
         url = await final_url(url, headers=BILI_HEADERS)
     matched = re.search(r"(?P<bvid>BV[0-9A-Za-z]{10})", url)
     if not matched:

@@ -61,12 +61,12 @@ async def download_file(url: str, *, suffix: str = ".mp4", headers: dict[str, st
                 response.raise_for_status()
                 content_length = response.headers.get("Content-Length")
                 if content_length and int(content_length) > max_bytes:
-                    raise DownloadError(f"视频大小超过限制：{int(content_length) / 1024 / 1024:.1f} MB")
+                    raise DownloadError(f"文件大小超过限制：{int(content_length) / 1024 / 1024:.1f} MB")
                 with file_path.open("wb") as file:
                     async for chunk in response.aiter_bytes(1024 * 1024):
                         total += len(chunk)
                         if total > max_bytes:
-                            raise DownloadError(f"视频大小超过限制：{max_bytes // 1024 // 1024} MB")
+                            raise DownloadError(f"文件大小超过限制：{max_bytes // 1024 // 1024} MB")
                         file.write(chunk)
     except Exception:
         if file_path.exists():
@@ -75,7 +75,7 @@ async def download_file(url: str, *, suffix: str = ".mp4", headers: dict[str, st
 
     if file_path.stat().st_size == 0:
         file_path.unlink(missing_ok=True)
-        raise DownloadError("视频为空文件")
+        raise DownloadError("文件为空")
     return file_path
 
 
@@ -104,6 +104,8 @@ async def _merge_av(video_path: Path, audio_path: Path, output_path: Path) -> Pa
 
 async def download_video(result: VideoResult) -> Path:
     """下载解析结果中的视频。"""
+    if not result.video_url:
+        raise DownloadError("解析结果没有视频直链")
     max_duration = float(cfg_general().get("max_duration_seconds", 480))
     if result.duration and result.duration > max_duration:
         raise DownloadError(f"视频时长超过限制：{int(result.duration)} 秒")
@@ -117,3 +119,14 @@ async def download_video(result: VideoResult) -> Path:
     )
     output = CACHE_DIR / f"{hashlib.sha1((result.video_url + result.audio_url).encode('utf-8')).hexdigest()}.mp4"
     return await _merge_av(video_path, audio_path, output)
+
+
+async def download_images(result: VideoResult) -> list[Path]:
+    """下载解析结果中的图片。"""
+    if not result.image_urls:
+        raise DownloadError("解析结果没有图片")
+    tasks = [
+        download_file(url, suffix=".jpg", headers=result.headers)
+        for url in result.image_urls
+    ]
+    return await asyncio.gather(*tasks)

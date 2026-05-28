@@ -11,8 +11,9 @@ class VideoResult:
 
     platform: str
     title: str
-    video_url: str
+    video_url: str | None = None
     cover_url: str | None = None
+    image_urls: list[str] = field(default_factory=list)
     duration: float | None = None
     source_url: str | None = None
     text: str | None = None
@@ -23,4 +24,4 @@ class VideoResult:
     def display_title(self) -> str:
         """返回可展示标题。"""
         title = self.title.strip() if self.title else ""
-        return title or f"{self.platform}视频"
+        return title or f"{self.platform}内容"

@@ -27,7 +27,18 @@ async def parse(url: str) -> VideoResult:
 
     video_url = _cdn_url(first(photo.get("mainMvUrls")))
     if not video_url:
-        raise ParseError("快手页面没有视频直链")
+        image_urls = _atlas_urls(photo)
+        if not image_urls:
+            raise ParseError("快手页面没有可发送的媒体")
+        return VideoResult(
+            platform="快手",
+            title=str(photo.get("caption") or "快手图集"),
+            image_urls=image_urls,
+            cover_url=image_urls[0],
+            source_url=resolved,
+            text=str(photo.get("userName") or ""),
+            headers=HEADERS.copy(),
+        )
 
     return VideoResult(
         platform="快手",
@@ -47,3 +58,22 @@ def _cdn_url(item: object) -> str | None:
         return None
     value = item.get("url")
     return str(value) if value else None
+
+
+def _atlas_urls(photo: dict[str, object]) -> list[str]:
+    """提取快手图集图片。"""
+    ext_params = photo.get("ext_params") or {}
+    if not isinstance(ext_params, dict):
+        return []
+    atlas = ext_params.get("atlas") or {}
+    if not isinstance(atlas, dict):
+        return []
+    cdn_items = atlas.get("cdnList") or []
+    routes = atlas.get("list") or []
+    cdn_item = first(cdn_items)
+    if not isinstance(cdn_item, dict) or not isinstance(routes, list):
+        return []
+    cdn = str(cdn_item.get("cdn") or "").strip("/")
+    if not cdn:
+        return []
+    return [f"https://{cdn}/{str(route).lstrip('/')}" for route in routes if route]

@@ -2,12 +2,27 @@
 
 from __future__ import annotations
 
+import html
 import re
+from urllib.parse import unquote
 
 from ..config import cfg_platforms
 from ..types import VideoResult
 
-URL_RE = re.compile(r"https?://[^\s<>\"']+|(?:v\.douyin|jx\.douyin|v\.kuaishou|xhslink)\.com/[A-Za-z0-9._?%&+=/#@-]+|b23\.tv/[A-Za-z0-9._?%&+=/#@-]+")
+URL_RE = re.compile(r"https?://[^\s<>\"']+|(?:v\.douyin|jx\.douyin|v\.kuaishou|xhslink)\.com/[A-Za-z0-9._?%&+=/#@-]+|(?:b23\.tv|bili2233\.cn)/[A-Za-z0-9._?%&+=/#@-]+")
+SUPPORTED_URL_MARKERS = (
+    "douyin.com",
+    "iesdouyin.com",
+    "kuaishou.com",
+    "chenzhongtech.com",
+    "xiaohongshu.com",
+    "xhslink.com",
+    "weibo.com",
+    "weibo.cn",
+    "bilibili.com",
+    "b23.tv",
+    "bili2233.cn",
+)
 
 
 class ParseError(RuntimeError):
@@ -16,14 +31,31 @@ class ParseError(RuntimeError):
 
 def find_url(text: str) -> str | None:
     """从文本中寻找候选链接。"""
-    matched = URL_RE.search(text)
-    if matched:
-        url = matched.group(0).strip()
-        return url if url.startswith("http") else f"https://{url}"
+    variants = _text_variants(text)
+    for candidate in variants:
+        for matched in URL_RE.finditer(candidate):
+            url = matched.group(0).strip().rstrip("，。；;)")
+            url = url if url.startswith("http") else f"https://{url}"
+            if _is_supported_url(url):
+                return url
     bv = re.search(r"\bBV[0-9A-Za-z]{10}\b", text)
     if bv:
         return bv.group(0)
     return None
+
+
+def _text_variants(text: str) -> tuple[str, ...]:
+    """生成常见卡片转义文本变体。"""
+    first = html.unescape(text).replace("\\/", "/")
+    second = unquote(first)
+    third = unquote(second)
+    return tuple(dict.fromkeys((first, second, third)))
+
+
+def _is_supported_url(url: str) -> bool:
+    """判断 URL 是否属于已支持的平台。"""
+    lower = url.lower()
+    return any(marker in lower for marker in SUPPORTED_URL_MARKERS)
 
 
 async def parse_url(url: str) -> VideoResult:
@@ -47,7 +79,7 @@ async def parse_url(url: str) -> VideoResult:
         from .weibo import parse
 
         return await parse(url)
-    if platforms.get("bilibili", True) and ("bilibili.com" in lower or "b23.tv" in lower or re.fullmatch(r"BV[0-9A-Za-z]{10}", url)):
+    if platforms.get("bilibili", True) and ("bilibili.com" in lower or "b23.tv" in lower or "bili2233.cn" in lower or re.fullmatch(r"BV[0-9A-Za-z]{10}", url)):
         from .bilibili import parse
 
         return await parse(url)

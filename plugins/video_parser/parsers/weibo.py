@@ -92,14 +92,26 @@ def _collect_status(data: dict[str, Any], *, source: str) -> VideoResult:
     urls = page.get("urls") or {}
     video_url = urls.get("mp4_720p_mp4") or urls.get("mp4_hd_mp4") or urls.get("mp4_ld_mp4")
     video_url = video_url or media.get("stream_url") or media.get("stream_urls_hd")
-    if not video_url and isinstance(data.get("retweeted_status"), dict):
-        return _collect_status(data["retweeted_status"], source=source)
-    if not video_url:
-        raise ParseError("该微博没有视频")
-
     user = data.get("user") or {}
     title = page.get("title") or _strip_html(str(data.get("text") or ""))[:40] or "微博视频"
     cover = (page.get("page_pic") or {}).get("url")
+
+    if not video_url:
+        image_urls = _image_urls(data.get("pics") or [])
+        if image_urls:
+            return VideoResult(
+                platform="微博",
+                title=str(title or "微博图文"),
+                image_urls=image_urls,
+                cover_url=_normalize_scheme(cover) or image_urls[0],
+                source_url=source,
+                text=str(user.get("screen_name") or ""),
+                headers=HEADERS.copy(),
+            )
+        if isinstance(data.get("retweeted_status"), dict):
+            return _collect_status(data["retweeted_status"], source=source)
+        raise ParseError("该微博没有可发送的媒体")
+
     return VideoResult(
         platform="微博",
         title=str(title),
@@ -115,6 +127,21 @@ def _collect_status(data: dict[str, Any], *, source: str) -> VideoResult:
 def _strip_html(text: str) -> str:
     """去除微博 HTML 标签。"""
     return html.unescape(re.sub(r"<[^>]*>", "", text.replace("<br />", "\n"))).strip()
+
+
+def _image_urls(pics: list[object]) -> list[str]:
+    """提取微博图片。"""
+    urls: list[str] = []
+    for pic in pics:
+        if not isinstance(pic, dict):
+            continue
+        large = pic.get("large")
+        url = large.get("url") if isinstance(large, dict) else None
+        url = url or pic.get("url")
+        normalized = _normalize_scheme(url)
+        if normalized:
+            urls.append(normalized)
+    return urls
 
 
 def _normalize_scheme(url: object) -> str | None:

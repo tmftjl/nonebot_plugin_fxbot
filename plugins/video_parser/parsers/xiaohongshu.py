@@ -1,4 +1,4 @@
-"""小红书视频解析。"""
+"""小红书媒体解析。"""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ HEADERS = {
 
 
 async def parse(url: str) -> VideoResult:
-    """解析小红书视频。"""
+    """解析小红书视频或图文。"""
     resolved = await final_url(url, headers=HEADERS) if "xhslink.com" in url else url
     matched = re.search(r"(?:explore|discovery/item)/(?P<id>[0-9a-zA-Z]+)", resolved)
     if not matched:
@@ -53,17 +53,13 @@ async def _parse_discovery(url: str) -> VideoResult:
         image = first(images)
         if isinstance(image, dict):
             result.cover_url = image.get("urlSizeLarge") or image.get("url")
+    if images and not result.image_urls:
+        result.image_urls = _image_urls(images)
     return result
 
 
 def _result_from_note(note: dict[str, Any], *, source_url: str, discovery: bool) -> VideoResult:
     """从笔记结构构造结果。"""
-    if note.get("type") != "video" or not isinstance(note.get("video"), dict):
-        raise ParseError("该小红书笔记不是视频")
-    video_url, duration = _video_url_and_duration(note["video"])
-    if not video_url:
-        raise ParseError("小红书页面没有视频直链")
-
     user = note.get("user") or {}
     images = note.get("imageList") or []
     cover = None
@@ -73,12 +69,31 @@ def _result_from_note(note: dict[str, Any], *, source_url: str, discovery: bool)
 
     nickname = user.get("nickname") or user.get("nickName") or ""
     timestamp = note.get("time") if discovery else None
+    title = str(note.get("title") or note.get("desc") or "小红书笔记")
+
+    if note.get("type") == "video" and isinstance(note.get("video"), dict):
+        video_url, duration = _video_url_and_duration(note["video"])
+        if not video_url:
+            raise ParseError("小红书页面没有视频直链")
+        return VideoResult(
+            platform="小红书",
+            title=title,
+            video_url=video_url,
+            cover_url=cover,
+            duration=duration,
+            source_url=source_url,
+            text=str(nickname or timestamp or ""),
+            headers=HEADERS.copy(),
+        )
+
+    image_urls = _image_urls(images)
+    if not image_urls:
+        raise ParseError("该小红书笔记没有可发送的媒体")
     return VideoResult(
         platform="小红书",
-        title=str(note.get("title") or note.get("desc") or "小红书视频"),
-        video_url=video_url,
+        title=title,
         cover_url=cover,
-        duration=duration,
+        image_urls=image_urls,
         source_url=source_url,
         text=str(nickname or timestamp or ""),
         headers=HEADERS.copy(),
@@ -95,3 +110,15 @@ def _video_url_and_duration(video: dict[str, Any]) -> tuple[str | None, float | 
             duration = item.get("duration")
             return str(item["masterUrl"]), (float(duration) / 1000) if duration else None
     return None, None
+
+
+def _image_urls(images: list[Any]) -> list[str]:
+    """提取小红书图文图片。"""
+    urls: list[str] = []
+    for image in images:
+        if not isinstance(image, dict):
+            continue
+        url = image.get("urlDefault") or image.get("urlSizeLarge") or image.get("url")
+        if url:
+            urls.append(str(url))
+    return urls
