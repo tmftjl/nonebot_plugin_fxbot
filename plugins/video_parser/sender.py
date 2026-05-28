@@ -31,7 +31,12 @@ async def send_video_result(matcher: Matcher, bot: Bot, event: Event, result: Vi
     video_seg = build_message_segment(bot, "video", _video_payload(video_path))
     message = build_message(bot, text_seg, image_seg, video_seg)
 
-    if is_onebot_v11(bot) and await _try_send_onebot_forward(bot, event, message):
+    forward_messages = [build_message(bot, text_seg)]
+    if image_seg is not None:
+        forward_messages.append(build_message(bot, image_seg))
+    forward_messages.append(build_message(bot, video_seg))
+
+    if is_onebot_v11(bot) and await _try_send_onebot_forward(bot, event, forward_messages):
         return
 
     await matcher.finish(message)
@@ -45,7 +50,7 @@ def _video_payload(video_path: Path) -> Path | str:
     return video_path
 
 
-async def _try_send_onebot_forward(bot: Bot, event: Event, message: Any) -> bool:
+async def _try_send_onebot_forward(bot: Bot, event: Event, messages: list[Any]) -> bool:
     """尝试发送 OneBot V11 合并转发。"""
     try:
         from nonebot.adapters.onebot.v11 import MessageSegment
@@ -57,8 +62,10 @@ async def _try_send_onebot_forward(bot: Bot, event: Event, message: Any) -> bool
     nickname = "FxBot"
     if not hasattr(MessageSegment, "node_custom"):
         return False
-    node = MessageSegment.node_custom(user_id=user_id, nickname=nickname, content=message)
-    nodes = [node]
+    nodes = [
+        MessageSegment.node_custom(user_id=user_id, nickname=nickname, content=message)
+        for message in messages
+    ]
 
     try:
         group_id = getattr(event, "group_id", None)

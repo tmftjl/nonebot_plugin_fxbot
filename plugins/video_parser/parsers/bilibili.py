@@ -54,7 +54,12 @@ async def _parse_video(bvid: str, page_num: int, *, source: str) -> VideoResult:
     pages = info.get("pages") or []
     page_index = min(max(page_num - 1, 0), max(len(pages) - 1, 0))
     page_info = pages[page_index] if pages else {}
-    title = str(page_info.get("part") or info.get("title") or "B站视频")
+    base_title = str(info.get("title") or "B站视频")
+    part_title = str(page_info.get("part") or "").strip()
+    if len(pages) > 1 and part_title and part_title != base_title:
+        title = f"{base_title} - {part_title}"
+    else:
+        title = base_title
     duration = float(page_info.get("duration") or info.get("duration") or 0) or None
     cover = page_info.get("first_frame") or info.get("pic")
 
