@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +10,7 @@ from nonebot.adapters import Bot, Event
 from nonebot.matcher import Matcher
 
 from ...adapter import build_message, build_message_segment, is_onebot_v11
+from .config import cfg_general
 from .types import VideoResult
 
 
@@ -26,13 +28,21 @@ async def send_video_result(matcher: Matcher, bot: Bot, event: Event, result: Vi
     """发送标题、封面、视频组成的转发消息。"""
     text_seg = build_message_segment(bot, "text", _summary(result) + "\n")
     image_seg = build_message_segment(bot, "image", result.cover_url) if result.cover_url else None
-    video_seg = build_message_segment(bot, "video", video_path)
+    video_seg = build_message_segment(bot, "video", _video_payload(video_path))
     message = build_message(bot, text_seg, image_seg, video_seg)
 
     if is_onebot_v11(bot) and await _try_send_onebot_forward(bot, event, message):
         return
 
     await matcher.finish(message)
+
+
+def _video_payload(video_path: Path) -> Path | str:
+    """根据配置决定视频发送载荷。"""
+    if bool(cfg_general().get("use_base64", False)):
+        raw = base64.b64encode(video_path.read_bytes()).decode("ascii")
+        return "base64://" + raw
+    return video_path
 
 
 async def _try_send_onebot_forward(bot: Bot, event: Event, message: Any) -> bool:

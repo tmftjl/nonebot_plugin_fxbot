@@ -7,6 +7,7 @@ from typing import Any
 DEFAULTS: dict[str, Any] = {
     "general": {
         "global_enabled": True,
+        "use_base64": False,
         "max_file_mb": 80,
         "max_duration_seconds": 480,
         "request_timeout_seconds": 20,
@@ -35,6 +36,7 @@ def get_ui_schema() -> dict[str, Any]:
                 "title": "通用",
                 "schemas": [
                     {"field": "global_enabled", "label": "全局启用", "component": "Switch", "default": DEFAULTS["general"]["global_enabled"], "helpMessage": "关闭后不自动解析任何链接。"},
+                    {"field": "use_base64", "label": "Base64 发送视频", "component": "Switch", "default": DEFAULTS["general"]["use_base64"], "helpMessage": "开启后视频内容直接随消息发送；关闭后发送本地路径，需让 NapCat 能访问同一路径。"},
                     {"field": "max_file_mb", "label": "最大文件 MB", "component": "InputNumber", "default": DEFAULTS["general"]["max_file_mb"], "helpMessage": "超过大小的视频不会下载发送。", "componentProps": {"min": 1, "max": 500}},
                     {"field": "max_duration_seconds", "label": "最大时长秒", "component": "InputNumber", "default": DEFAULTS["general"]["max_duration_seconds"], "helpMessage": "超过时长的视频不会下载发送。", "componentProps": {"min": 1, "max": 7200}},
                     {"field": "request_timeout_seconds", "label": "请求超时秒", "component": "InputNumber", "default": DEFAULTS["general"]["request_timeout_seconds"], "helpMessage": "解析和下载请求的超时时间。", "componentProps": {"min": 5, "max": 120}},
