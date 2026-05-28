@@ -19,8 +19,6 @@ def _summary(result: VideoResult) -> str:
     lines = [f"{result.platform} | {result.display_title}"]
     if result.duration:
         lines.append(f"时长：{int(result.duration)} 秒")
-    if result.source_url:
-        lines.append(result.source_url)
     return "\n".join(lines)
 
 
