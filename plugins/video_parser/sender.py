@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import base64
 from pathlib import Path
-from typing import Any
 
 from nonebot.adapters import Bot, Event
 from nonebot.matcher import Matcher
 
-from ...adapter import build_message, build_message_segment, is_onebot_v11
+from ...adapter import build_message, build_message_segment, send_forward_messages
 from .config import cfg_general
 from .types import VideoResult
 
@@ -34,7 +33,7 @@ async def send_video_result(matcher: Matcher, bot: Bot, event: Event, result: Vi
         forward_messages.append(build_message(bot, image_seg))
     forward_messages.append(build_message(bot, video_seg))
 
-    if is_onebot_v11(bot) and await _try_send_onebot_forward(bot, event, forward_messages):
+    if await send_forward_messages(bot, event, forward_messages):
         return
 
     await matcher.finish(message)
@@ -52,7 +51,7 @@ async def send_image_result(matcher: Matcher, bot: Bot, event: Event, result: Vi
     forward_messages = [build_message(bot, text_seg)]
     forward_messages.extend(build_message(bot, image_seg) for image_seg in image_segments)
 
-    if is_onebot_v11(bot) and await _try_send_onebot_forward(bot, event, forward_messages):
+    if await send_forward_messages(bot, event, forward_messages):
         return
 
     await matcher.finish(message)
@@ -64,41 +63,3 @@ def _video_payload(video_path: Path) -> Path | str:
         raw = base64.b64encode(video_path.read_bytes()).decode("ascii")
         return "base64://" + raw
     return video_path
-
-
-async def _try_send_onebot_forward(bot: Bot, event: Event, messages: list[Any]) -> bool:
-    """尝试发送 OneBot V11 合并转发。"""
-    try:
-        from nonebot.adapters.onebot.v11 import MessageSegment
-    except Exception:
-        return False
-
-    user_id_raw = str(getattr(bot, "self_id", "0") or "0")
-    user_id: int | str = int(user_id_raw) if user_id_raw.isdigit() else user_id_raw
-    nickname = "FxBot"
-    if not hasattr(MessageSegment, "node_custom"):
-        return False
-    nodes = [
-        MessageSegment.node_custom(user_id=user_id, nickname=nickname, content=message)
-        for message in messages
-    ]
-
-    try:
-        group_id = getattr(event, "group_id", None)
-        if group_id is not None:
-            if hasattr(bot, "send_group_forward_msg"):
-                await bot.send_group_forward_msg(group_id=int(group_id), messages=nodes)
-            else:
-                await bot.call_api("send_group_forward_msg", group_id=int(group_id), messages=nodes)
-            return True
-
-        user = getattr(event, "user_id", None)
-        if user is not None:
-            if hasattr(bot, "send_private_forward_msg"):
-                await bot.send_private_forward_msg(user_id=int(user), messages=nodes)
-            else:
-                await bot.call_api("send_private_forward_msg", user_id=int(user), messages=nodes)
-            return True
-    except Exception:
-        return False
-    return False

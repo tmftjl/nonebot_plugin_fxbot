@@ -13,6 +13,8 @@ from .message import (
     is_onebot_v11,
     is_qq_official,
     register_message_adapter,
+    send_forward_messages,
+    send_forward_texts,
     send_ark_message,
     send_text_to_target,
 )
@@ -34,6 +36,8 @@ __all__ = [
     "is_onebot_v11",
     "is_qq_official",
     "register_message_adapter",
+    "send_forward_messages",
+    "send_forward_texts",
     "send_ark_message",
     "send_text_to_target",
 ]

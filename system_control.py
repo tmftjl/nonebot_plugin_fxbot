@@ -14,13 +14,15 @@ from nonebot.matcher import Matcher
 
 from .permission import PermLevel, PermScene
 from .plugin import Plugin
-from .adapter import extract_message_target, send_text_to_target
+from .adapter import extract_message_target, send_forward_texts, send_text_to_target
 from .utils.paths import data_dir, package_root
 
 P = Plugin("system", category="system", display_name="系统命令")
 
 _RESTART_FLAG_FILE = data_dir("system") / "restart_flag.json"
 _PROC_CMDLINE = "/proc/self/cmdline"
+_UPDATE_LOG_PREFIX = "[系统命令·更新并重启]"
+_GIT_UP_TO_DATE_MARKERS = ("Already up to date", "Already up-to-date", "已经是最新")
 
 restart_cmd = P.on_regex(
     r"^#重启$",
@@ -127,6 +129,40 @@ def _truncate_output(text: str, limit: int = 1200) -> str:
     return clean_text[-limit:]
 
 
+def _git_already_up_to_date(output: str) -> bool:
+    """判断 git 输出是否表示无更新。"""
+    normalized = str(output or "").lower()
+    return any(marker.lower() in normalized for marker in _GIT_UP_TO_DATE_MARKERS)
+
+
+def _build_update_report(ok: bool, output: str) -> list[str]:
+    """构造更新结果转发摘要，不暴露 git 文件变更列表。"""
+    if ok:
+        if _git_already_up_to_date(output):
+            return ["✅ FxBot 本次无更新内容！"]
+        return [
+            "✅ FxBot 更新完成！",
+            "已拉取最新代码，正在重启 NoneBot。",
+        ]
+
+    if str(output or "").strip():
+        return [
+            "❌ FxBot 更新失败！",
+            "git pull 返回错误，完整信息已记录到后台日志。",
+        ]
+    return [
+        "❌ FxBot 更新失败！",
+        "git pull 未返回错误信息，请查看后台日志。",
+    ]
+
+
+async def _send_update_report(matcher: Matcher, bot: Bot, event: Event, lines: list[str]) -> None:
+    """优先用合并转发发送更新结果，失败时退回普通文本。"""
+    if await send_forward_texts(bot, event, lines, nickname="小助手"):
+        return
+    await matcher.send("\n".join(lines))
+
+
 async def _git_pull_plugin() -> tuple[bool, str]:
     """在当前插件目录执行 git pull。"""
     workdir = package_root()
@@ -183,16 +219,20 @@ async def _handle_shutdown(matcher: Matcher, event: Event) -> None:
 @update_cmd.handle()
 async def _handle_update(matcher: Matcher, bot: Bot, event: Event) -> None:
     """处理更新并重启命令。"""
-    logger.warning(f"[system_control] 超级用户触发 Bot 更新命令: {event.get_user_id()}")
-    await matcher.send("收到更新指令，正在拉取插件代码...")
+    logger.warning(f"{_UPDATE_LOG_PREFIX} 超级用户触发更新命令: {event.get_user_id()}")
+    await matcher.send("🔔 正在尝试更新 FxBot，请稍等片刻。")
     ok, output = await _git_pull_plugin()
     if not ok:
-        await matcher.finish("更新失败：\n" + _truncate_output(output))
+        logger.error(f"{_UPDATE_LOG_PREFIX} git pull 失败: {_truncate_output(output)}")
+        await _send_update_report(matcher, bot, event, _build_update_report(False, output))
+        await matcher.finish()
 
     try:
-        await matcher.send("更新完成，正在重启 NoneBot...\n" + _truncate_output(output))
+        status = "无更新" if _git_already_up_to_date(output) else "已更新"
+        logger.info(f"{_UPDATE_LOG_PREFIX} git pull 完成: {status}")
+        await _send_update_report(matcher, bot, event, _build_update_report(True, output))
     except Exception as exc:
-        logger.error(f"[system_control] 发送更新提示失败: {exc}")
+        logger.error(f"{_UPDATE_LOG_PREFIX} 发送更新提示失败: {exc}")
     _save_restart_info(bot, event)
     await asyncio.sleep(0.5)
     await _execute_restart()

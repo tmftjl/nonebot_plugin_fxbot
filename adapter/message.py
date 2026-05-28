@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
 
-from nonebot.adapters import Bot
+from nonebot.adapters import Bot, Event
 
 from .support import adapter_name, extract_message_target, is_onebot_v11, is_qq_official
 
@@ -163,6 +163,57 @@ async def send_text_to_target(bot: Bot, target: dict[str, Any], text: str) -> An
     return await require_message_adapter(bot).send_text_to_target(bot, target, text)
 
 
+async def send_forward_messages(bot: Bot, event: Event, messages: list[Any], *, nickname: str = "FxBot") -> bool:
+    """尝试发送 OneBot V11 合并转发消息。"""
+    if not is_onebot_v11(bot):
+        return False
+    try:
+        from nonebot.adapters.onebot.v11 import MessageSegment
+    except Exception:
+        return False
+
+    if not hasattr(MessageSegment, "node_custom"):
+        return False
+
+    user_id_raw = str(getattr(bot, "self_id", "0") or "0")
+    user_id: int | str = int(user_id_raw) if user_id_raw.isdigit() else user_id_raw
+    nodes = [
+        MessageSegment.node_custom(user_id=user_id, nickname=nickname, content=message)
+        for message in messages
+    ]
+
+    try:
+        group_id = getattr(event, "group_id", None)
+        if group_id is not None:
+            if hasattr(bot, "send_group_forward_msg"):
+                await bot.send_group_forward_msg(group_id=int(group_id), messages=nodes)
+            else:
+                await bot.call_api("send_group_forward_msg", group_id=int(group_id), messages=nodes)
+            return True
+
+        user_id_value = getattr(event, "user_id", None)
+        if user_id_value is not None:
+            if hasattr(bot, "send_private_forward_msg"):
+                await bot.send_private_forward_msg(user_id=int(user_id_value), messages=nodes)
+            else:
+                await bot.call_api("send_private_forward_msg", user_id=int(user_id_value), messages=nodes)
+            return True
+    except Exception:
+        return False
+    return False
+
+
+async def send_forward_texts(bot: Bot, event: Event, texts: list[str], *, nickname: str = "FxBot") -> bool:
+    """尝试把多段文本作为 OneBot V11 合并转发发送。"""
+    if not is_onebot_v11(bot):
+        return False
+    messages = [
+        build_message(bot, build_message_segment(bot, "text", text))
+        for text in texts
+    ]
+    return await send_forward_messages(bot, event, messages, nickname=nickname)
+
+
 def _image_bytes(data: Any) -> bytes:
     """将本地图片输入转换为字节。"""
     import io
@@ -223,6 +274,8 @@ __all__ = [
     "is_onebot_v11",
     "is_qq_official",
     "register_message_adapter",
+    "send_forward_messages",
+    "send_forward_texts",
     "send_ark_message",
     "send_text_to_target",
 ]

@@ -210,10 +210,12 @@ class Plugin:
             raise TypeError(f"NoneBot matcher 工厂返回了无效类型: {type(matcher).__name__}")
 
         if log:
+            plugin_display = _PLUGIN_DISPLAY_NAMES.get(self.name, self.name)
+            command_display = display_name or name
 
             async def _log_command_entry() -> None:
                 logger.opt(colors=True).info(
-                    f"plugin <y>{self.name}</y> | command <g>{name}</g> triggered"
+                    f"[<y>{plugin_display}</y>·<g>{command_display}</g>] 命令触发"
                 )
 
             matcher.append_handler(_log_command_entry)
