@@ -18,26 +18,11 @@
       "list": [
         {"icon": 2, "title": "#点歌", "desc": "点歌演员"},
         {"icon": 4, "title": "#今日运势", "desc": "今日运势"},
-        {"icon": 5, "title": "#doro结局", "desc": "抽取doro结局"},
         {"icon": 6, "title": "#看看腿", "desc": "看看腿"},
         {"icon": 8, "title": "#随机doro", "desc": "随机doro"},
         {"icon": 10, "title": "#来张黑丝", "desc": "随机黑丝"},
-        {"icon": 11, "title": "#发病语录", "desc": "发病语录"},
         {"icon": 12, "title": "#盒", "desc": "开盒自己或群友"},
-        {"icon": 13, "title": "#注册时间", "desc": "查询qq信息"},
         {"icon": 14, "title": "#联系主人", "desc": "联系主人"}
-      ]
-    },
-    {
-      "group": "ai对话（需联系主人开启功能）",
-      "list": [
-        {"icon": 12, "title": "#开启AI", "desc": "开启AI（群管可用）"},
-        {"icon": 13, "title": "#关闭AI", "desc": "关闭AI（群管可用）"},
-        {"icon": 16, "title": "@机器人", "desc": "群聊需 @ 机器人触发；私聊直接发送"},
-        {"icon": 17, "title": "#清空会话", "desc": "清空会话记录（群管可用）"},
-        {"icon": 18, "title": "#会话信息", "desc": "查看会话信息（群管可用）"},
-        {"icon": 19, "title": "#人格列表", "desc": "查看人格列表（群管可用）"},
-        {"icon": 20, "title": "#切换人格", "desc": "切换人格（群管可用）"}
       ]
     },
     {
@@ -47,14 +32,6 @@
         {"icon": 17, "title": "#查看欢迎", "desc": "查看本群欢迎语"},
         {"icon": 18, "title": "#开启欢迎", "desc": "启用入群欢迎"},
         {"icon": 19, "title": "#关闭欢迎", "desc": "禁用入群欢迎"}
-      ]
-    },
-    {
-      "group": "机器人续费",
-      "list": [
-        {"icon": 18, "title": "ww拉群", "desc": "获取拉群/续费帮助信息"},
-        {"icon": 19, "title": "ww到期", "desc": "获取到期时间"},
-        {"icon": 20, "title": "ww续费", "desc": "ww续费<时长><单位>-<生成的代码>"}
       ]
     }
   ]
