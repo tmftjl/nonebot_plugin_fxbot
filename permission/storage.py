@@ -54,9 +54,27 @@ def _scan_file_for_commands(file_path: Path, commands: dict[str, Any]) -> None:
             continue
 
         if func.attr == "on" or func.attr.startswith("on_"):
+            command_name: str | None = None
+            level = "member"
+            scene = "all"
             for kw in node.keywords:
                 if kw.arg == "name" and isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
-                    commands.setdefault(kw.value.value, perm_entry_default())
+                    command_name = kw.value.value
+                elif kw.arg == "level":
+                    level = _scan_enum_value(kw.value, "PermLevel") or level
+                elif kw.arg == "scene":
+                    scene = _scan_enum_value(kw.value, "PermScene") or scene
+            if command_name:
+                commands.setdefault(command_name, perm_entry_default(level=level, scene=scene))
+
+
+def _scan_enum_value(node: ast.AST, enum_name: str) -> str | None:
+    """读取 PermLevel/PermScene 的枚举字面量。"""
+    if not isinstance(node, ast.Attribute):
+        return None
+    if not isinstance(node.value, ast.Name) or node.value.id != enum_name:
+        return None
+    return node.attr.lower()
 
 
 class PermissionStorage:
