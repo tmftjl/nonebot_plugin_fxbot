@@ -15,11 +15,6 @@ def get_config() -> dict[str, Any]:
     return REG.load()
 
 
-def cfg_taffy() -> dict[str, Any]:
-    """获取 Taffy 查询配置。"""
-    return get_config()["taffy"]
-
-
 def cfg_waves_analyze() -> dict[str, Any]:
     """获取鸣潮评分配置。"""
     return get_config()["waves_analyze"]

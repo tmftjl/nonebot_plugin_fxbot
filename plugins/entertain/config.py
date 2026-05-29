@@ -15,11 +15,6 @@ def get_config() -> dict[str, Any]:
     return REG.load()
 
 
-def cfg_reg_time() -> dict[str, Any]:
-    """获取 QQ 注册时间配置。"""
-    return get_config()["reg_time"]
-
-
 def cfg_api_urls() -> dict[str, Any]:
     """获取娱乐插件 API 地址配置。"""
     return get_config()["api_urls"]

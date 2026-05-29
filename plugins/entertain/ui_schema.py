@@ -20,10 +20,6 @@ DEFAULTS: dict[str, Any] = {
         "auto_box_groups": [],
         "avatar_api_url": "https://q4.qlogo.cn/headimg_dl?dst_uin={user_id}&spec=640",
     },
-    "reg_time": {
-        "qq_reg_time_api_url": "https://api.s01s.cn/API/zcsj/",
-        "qq_reg_time_api_key": "",
-    },
     "api_urls": {
         "sick_quote_api": "https://oiapi.net/API/SickL/",
         "doro_api": "https://doro-api.hxxn.cc/get",
@@ -83,14 +79,6 @@ def get_ui_schema() -> dict[str, Any]:
                     {"field": "box_blacklist", "label": "黑名单用户", "component": "GArrayInput", "default": DEFAULTS["box"]["box_blacklist"], "helpMessage": "这些 QQ 号不会被开盒。"},
                     {"field": "auto_box_groups", "label": "自动开盒群", "component": "GArrayInput", "default": DEFAULTS["box"]["auto_box_groups"], "helpMessage": "仅这些群会触发入群自动开盒。"},
                     {"field": "avatar_api_url", "label": "头像 API", "component": "Input", "default": DEFAULTS["box"]["avatar_api_url"], "helpMessage": "获取 QQ 头像的接口模板。"},
-                ],
-            },
-            {
-                "key": "entertain.reg_time",
-                "title": "注册时间",
-                "schemas": [
-                    {"field": "qq_reg_time_api_url", "label": "接口地址", "component": "Input", "default": DEFAULTS["reg_time"]["qq_reg_time_api_url"], "helpMessage": "QQ 注册时间查询接口。"},
-                    {"field": "qq_reg_time_api_key", "label": "接口密钥", "component": "InputPassword", "default": DEFAULTS["reg_time"]["qq_reg_time_api_key"], "helpMessage": "注册时间接口的访问密钥。"},
                 ],
             },
             {
