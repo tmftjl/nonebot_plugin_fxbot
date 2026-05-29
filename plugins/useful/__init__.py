@@ -2,19 +2,13 @@
 
 from __future__ import annotations
 
-import base64
 from typing import Any
 from urllib.parse import urlencode
 
-import httpx
-from nonebot.adapters import Event
 from nonebot.matcher import Matcher
-from nonebot.params import RegexGroup
 
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
-from ...utils.http import get_shared_async_client
-from .config import cfg_taffy
 from . import cos_upload as cos_upload
 from . import waves_analyze as waves_analyze
 
