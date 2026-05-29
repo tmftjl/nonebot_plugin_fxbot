@@ -76,7 +76,7 @@ except Exception:  # pragma: no cover
 MEME_TRIGGER_KEY = "_memes_trigger"
 MEME_MSG_KEY = "_memes_msg"
 
-memes_cache_dir = cache_dir("nonebot_plugin_memes_api")
+memes_cache_dir = cache_dir("memes")
 
 _trigger_map: dict[str, list[str]] = {}
 
