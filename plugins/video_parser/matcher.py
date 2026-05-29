@@ -19,7 +19,7 @@ from ...permission import PermLevel, PermScene
 from . import P
 from .config import is_global_enabled, set_global_enabled
 from .downloader import DownloadError, download_images, download_video
-from .parsers import ParseError, find_url, parse_url
+from .parsers import ParseError, can_parse_url, find_url, parse_url
 from .sender import send_image_result, send_video_result
 from .state import is_group_enabled, set_group_enabled
 
@@ -66,6 +66,8 @@ async def _has_video_url(event: Event, state: T_State) -> bool:
         return False
     url = _find_event_url(event)
     if not url:
+        return False
+    if not can_parse_url(url):
         return False
     state[STATE_URL_KEY] = url
     return True
@@ -118,6 +120,8 @@ bili_login_cmd = P.on_regex(
 async def _handle_video(matcher: Matcher, bot: Bot, event: Event, state: T_State) -> None:
     """处理视频解析。"""
     url = str(state.get(STATE_URL_KEY) or "")
+    if not can_parse_url(url):
+        return
     await matcher.send("正在解析媒体，请稍候...")
     try:
         result = await parse_url(url)

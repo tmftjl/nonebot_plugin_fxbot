@@ -70,27 +70,24 @@ def _is_supported_url(url: str) -> bool:
     return any(marker in lower for marker in SUPPORTED_URL_MARKERS)
 
 
-async def parse_url(url: str) -> VideoResult:
-    """按平台解析链接。"""
+def can_parse_url(url: str) -> bool:
+    """判断 URL 当前是否可以解析。"""
+    return _match_enabled_platform(url) is not None
+
+
+def _match_enabled_platform(url: str) -> str | None:
+    """匹配当前启用的平台。"""
     platforms = cfg_platforms()
     lower = url.lower()
 
     if platforms.get("douyin", True) and ("douyin.com" in lower or "iesdouyin.com" in lower):
-        from .douyin import parse
-
-        return await parse(url)
+        return "douyin"
     if platforms.get("kuaishou", True) and ("kuaishou.com" in lower or "chenzhongtech.com" in lower):
-        from .kuaishou import parse
-
-        return await parse(url)
+        return "kuaishou"
     if platforms.get("xiaohongshu", True) and ("xiaohongshu.com" in lower or "xhslink.com" in lower):
-        from .xiaohongshu import parse
-
-        return await parse(url)
+        return "xiaohongshu"
     if platforms.get("weibo", True) and ("weibo.com" in lower or "weibo.cn" in lower):
-        from .weibo import parse
-
-        return await parse(url)
+        return "weibo"
     if platforms.get("bilibili", True) and (
         "bilibili.com" in lower
         or "b23.tv" in lower
@@ -98,6 +95,31 @@ async def parse_url(url: str) -> VideoResult:
         or re.fullmatch(r"BV[0-9A-Za-z]{10}", url)
         or re.fullmatch(r"av\d{6,}", url, re.I)
     ):
+        return "bilibili"
+    return None
+
+
+async def parse_url(url: str) -> VideoResult:
+    """按平台解析链接。"""
+    platform = _match_enabled_platform(url)
+
+    if platform == "douyin":
+        from .douyin import parse
+
+        return await parse(url)
+    if platform == "kuaishou":
+        from .kuaishou import parse
+
+        return await parse(url)
+    if platform == "xiaohongshu":
+        from .xiaohongshu import parse
+
+        return await parse(url)
+    if platform == "weibo":
+        from .weibo import parse
+
+        return await parse(url)
+    if platform == "bilibili":
         from .bilibili import parse
 
         return await parse(url)
