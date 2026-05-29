@@ -6,7 +6,8 @@ SYSTEM_DEFAULTS = {
     "membership": {
         "enabled": True,
         "free_bot_ids": [],
-        "expire_notice_days": [7, 3, 1],
+        "expire_notice_days": 7,
+        "expire_prompt_text_prefixes": ["ww"],
         "auto_leave_expired_groups": False,
         "enable_scheduler": True,
         "schedule_time": "12:00",

@@ -27,7 +27,8 @@ def _system_config_tab() -> dict[str, Any]:
                 "schemas": [
                     {"field": "enabled", "label": "启用会员门禁", "component": "Switch", "default": SYSTEM_DEFAULTS["membership"]["enabled"], "helpMessage": "关闭后，群会员门禁不再拦截消息。"},
                     {"field": "free_bot_ids", "label": "免费 Bot", "component": "GTags", "default": SYSTEM_DEFAULTS["membership"]["free_bot_ids"], "helpMessage": "这些 Bot 自编号不执行会员门禁。"},
-                    {"field": "expire_notice_days", "label": "到期提醒天数", "component": "GTags", "default": SYSTEM_DEFAULTS["membership"]["expire_notice_days"], "helpMessage": "剩余多少天时发送到期提醒。"},
+                    {"field": "expire_notice_days", "label": "到期提示天数", "component": "InputNumber", "default": SYSTEM_DEFAULTS["membership"]["expire_notice_days"], "helpMessage": "会员剩余多少天内，在命令消息中提示续费。", "componentProps": {"min": 0}},
+                    {"field": "expire_prompt_text_prefixes", "label": "提示文本前缀", "component": "GTags", "default": SYSTEM_DEFAULTS["membership"]["expire_prompt_text_prefixes"], "helpMessage": "普通消息以这些文本开头时，也触发会员快到期提示。"},
                     {"field": "auto_leave_expired_groups", "label": "过期自动退群", "component": "Switch", "default": SYSTEM_DEFAULTS["membership"]["auto_leave_expired_groups"], "helpMessage": "到期后自动让托管 Bot 退群。"},
                     {"field": "enable_scheduler", "label": "启用定时任务", "component": "Switch", "default": SYSTEM_DEFAULTS["membership"]["enable_scheduler"], "helpMessage": "关闭后不会自动执行到期检查。"},
                     {"field": "schedule_time", "label": "定时任务时间", "component": "Input", "default": SYSTEM_DEFAULTS["membership"]["schedule_time"], "helpMessage": "每日执行会员检查的时间，格式 HH:MM。", "componentProps": {"placeholder": "12:00"}},

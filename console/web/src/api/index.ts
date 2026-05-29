@@ -110,7 +110,7 @@ export const renewalApi = {
     api.post<{ left: number }>('/membership/leave', { group_id: groupId }),
   notify: (groupIds: number[], text: string, images?: string[]) =>
     api.post<{ sent: number }>('/membership/notify', { group_ids: groupIds, text, images }),
-  runJob: () => api.post<{ reminded: number; left: number }>('/membership/job/run'),
+  runJob: () => api.post<{ expired: number; left: number }>('/membership/job/run'),
 }
 
 // 插件/命令显示名 API

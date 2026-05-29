@@ -379,4 +379,4 @@ async def _handle_manual_check(matcher: Matcher, event: Event) -> None:
     from .tasks import check_and_process_memberships
 
     result = await check_and_process_memberships()
-    await matcher.finish(f"已提醒{result.reminded}个群，退出{result.left}个群")
+    await matcher.finish(f"已处理过期{result.expired}个群，退出{result.left}个群")

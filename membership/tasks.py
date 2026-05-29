@@ -1,4 +1,4 @@
-"""到期提醒、自动退群和缓存刷新任务。"""
+"""到期检查、自动退群和缓存刷新任务。"""
 
 from __future__ import annotations
 
@@ -22,7 +22,6 @@ from .service import membership_service
 class MembershipTaskResult:
     """会员任务执行结果。"""
 
-    reminded: int = 0
     left: int = 0
     expired: int = 0
 
@@ -36,11 +35,8 @@ class _MembershipTaskStore:
         session: AsyncSession,
         groups: list[MembershipGroup],
         *,
-        notice_days: set[int],
         auto_leave: bool,
         delay: float,
-        contact: str,
-        today: str,
     ) -> MembershipTaskResult:
         result = MembershipTaskResult()
         for group in groups:
@@ -50,11 +46,11 @@ class _MembershipTaskStore:
             if expires_at is None:
                 continue
             days = _days_remaining(expires_at)
-            group_in_session = await session.get(MembershipGroup, group.id)
-            if group_in_session is None:
-                continue
 
             if days < 0:
+                group_in_session = await session.get(MembershipGroup, group.id)
+                if group_in_session is None:
+                    continue
                 group_in_session.status = "expired"
                 group_in_session.expired_at = utc_now()
                 group_in_session.updated_at = utc_now()
@@ -64,17 +60,6 @@ class _MembershipTaskStore:
                 if delay:
                     await asyncio.sleep(delay)
                 continue
-
-            if days in notice_days and group.last_reminder_on != today:
-                message = f"本群会员将在 {days} 天后到期，到期时间：{_format_dt(expires_at)}"
-                if contact:
-                    message += f"\n{contact}"
-                if await _send_group_message(group.managed_by_bot, group.group_id, message):
-                    group_in_session.last_reminder_on = today
-                    group_in_session.updated_at = utc_now()
-                    result.reminded += 1
-                if delay:
-                    await asyncio.sleep(delay)
 
         return result
 
@@ -91,47 +76,16 @@ def _as_utc(value: datetime | None) -> datetime | None:
     return value.astimezone(timezone.utc)
 
 
-def _today_key() -> str:
-    """返回当前 UTC 日期键。"""
-    return utc_now().date().isoformat()
-
-
 def _days_remaining(expires_at: datetime) -> int:
     """计算剩余天数。"""
     delta = _as_utc(expires_at) - utc_now()  # type: ignore[operator]
     return delta.days
 
 
-def _format_dt(value: datetime | None) -> str:
-    """格式化日期时间。"""
-    if value is None:
-        return "永久"
-    return _as_utc(value).astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")  # type: ignore[union-attr]
-
-
 def _membership_cfg() -> dict[str, Any]:
     """读取会员任务配置。"""
     cfg = get_config_manager().get_system()
     return cfg["membership"]
-
-
-async def _send_group_message(bot_id: str | None, group_id: str, message: str) -> bool:
-    """向指定群发送消息。"""
-    bots = get_bots()
-    bot = bots.get(str(bot_id)) if bot_id else None
-    if bot is None and bots:
-        bot = next(iter(bots.values()))
-    if bot is None:
-        return False
-    try:
-        if hasattr(bot, "send_group_msg"):
-            await bot.send_group_msg(group_id=int(group_id), message=message)
-        else:
-            await bot.send(message=message)
-        return True
-    except Exception as exc:
-        logger.warning(f"[MembershipTask] 群 {group_id} 消息发送失败: {exc}")
-        return False
 
 
 async def _leave_group(bot_id: str | None, group_id: str) -> bool:
@@ -149,21 +103,15 @@ async def _leave_group(bot_id: str | None, group_id: str) -> bool:
 
 
 async def check_and_process_memberships() -> MembershipTaskResult:
-    """检查会员到期状态，执行提醒和自动退群。"""
+    """检查会员到期状态，执行自动退群。"""
     cfg = _membership_cfg()
-    notice_days = {int(item) for item in cfg["expire_notice_days"]}
     auto_leave = bool(cfg["auto_leave_expired_groups"])
     delay = max(float(cfg["batch_delay_seconds"] or 0), 0.0)
-    contact = str(cfg["contact_info"] or "")
-    today = _today_key()
     groups = await membership_service.list_groups()
     result = await _task_store.process(
         groups,
-        notice_days=notice_days,
         auto_leave=auto_leave,
         delay=delay,
-        contact=contact,
-        today=today,
     )
 
     await membership_guard.reload_all_cache()
@@ -174,7 +122,7 @@ async def membership_task_job() -> MembershipTaskResult:
     """会员定时任务入口。"""
     result = await check_and_process_memberships()
     logger.info(
-        f"[MembershipTask] 检查完成，提醒={result.reminded}，过期={result.expired}，退群={result.left}"
+        f"[MembershipTask] 检查完成，过期={result.expired}，退群={result.left}"
     )
     return result
 

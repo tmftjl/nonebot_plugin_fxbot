@@ -140,7 +140,7 @@ async def extend_from_console(payload: dict[str, Any]) -> dict[str, Any]:
 
 @router.post("/remind")
 async def remind_group(payload: dict[str, Any]) -> dict[str, int]:
-    """向会员群发送到期提醒。"""
+    """向会员群发送续费提示。"""
     group_id = str(payload.get("group_id") or "").strip()
     row = await membership_service.get_group(group_id)
     if row is None:
@@ -199,7 +199,7 @@ async def run_membership_job() -> dict[str, int]:
     from ...membership.tasks import membership_task_job
 
     result = await membership_task_job()
-    return {"reminded": result.reminded, "left": result.left}
+    return {"expired": result.expired, "left": result.left}
 
 
 @router.post("/codes")

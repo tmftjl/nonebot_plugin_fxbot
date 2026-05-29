@@ -41,9 +41,9 @@ const loadData = async () => {
       configApi.getAll().catch(() => ({}))
     ])
 
-    const noticeDays = config?.membership?.expire_notice_days
-    if (Array.isArray(noticeDays) && noticeDays.length) {
-      soonThresholdDays.value = Math.max(...noticeDays.map(Number).filter(Number.isFinite))
+    const noticeDays = Number(config?.membership?.expire_notice_days)
+    if (Number.isFinite(noticeDays)) {
+      soonThresholdDays.value = noticeDays
     }
 
     groups.value = Object.entries(data)
