@@ -8,5 +8,7 @@ from . import doro as doro
 from . import fortune as fortune
 from . import musicshare as musicshare
 from . import sick as sick
+from . import status_monitor as status_monitor
+from . import bot_status as bot_status
 from . import tools as tools
 from . import welcome as welcome

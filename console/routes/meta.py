@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from ...plugin.builder import get_command_display_names, get_plugin_display_names
 from ...chat.personas import delete_persona, list_personas, save_persona_text
+from ...config import get_manager
+from ...utils.http import get_shared_async_client
 from ..auth import bearer_auth
 
 router = APIRouter(tags=["fxbot-meta"], dependencies=[Depends(bearer_auth)])
@@ -27,8 +29,19 @@ async def get_commands() -> dict[str, dict[str, str]]:
 
 @router.get("/stats/today")
 async def get_stats_today() -> dict[str, Any]:
-    """返回消息统计占位数据。"""
-    return {"bots": {}}
+    """转发获取消息统计服务的今日数据。"""
+    cfg = get_manager().get_system()
+    stats_api_url = str((cfg.get("console") or {}).get("stats_api_url") or "").strip().rstrip("/")
+    if not stats_api_url:
+        raise HTTPException(status_code=400, detail="未配置消息统计 API 地址")
+    try:
+        client = await get_shared_async_client()
+        response = await client.get(f"{stats_api_url}/stats/today", timeout=5.0)
+        response.raise_for_status()
+        data = response.json()
+        return data if isinstance(data, dict) else {"bots": {}}
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"获取消息统计失败: {exc}") from exc
 
 
 @router.get("/ai_chat/personas")

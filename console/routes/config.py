@@ -43,6 +43,7 @@ def _system_config_tab() -> dict[str, Any]:
                     {"field": "enabled", "label": "启用控制台", "component": "Switch", "default": SYSTEM_DEFAULTS["console"]["enabled"], "helpMessage": "关闭后不会挂载控制台页面和接口。"},
                     {"field": "mount_path", "label": "挂载路径", "component": "Input", "default": SYSTEM_DEFAULTS["console"]["mount_path"], "helpMessage": "控制台页面访问路径。"},
                     {"field": "token", "label": "访问 Token", "component": "InputPassword", "default": SYSTEM_DEFAULTS["console"]["token"], "helpMessage": "留空时会在首次登录时自动生成。"},
+                    {"field": "stats_api_url", "label": "消息统计 API", "component": "Input", "default": SYSTEM_DEFAULTS["console"]["stats_api_url"], "helpMessage": "用于控制台消息统计和 #状态 上报的统计服务地址。", "componentProps": {"placeholder": "http://127.0.0.1:8000"}},
                 ],
             },
             {
