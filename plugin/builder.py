@@ -222,39 +222,6 @@ class Plugin:
 
         return matcher
 
-    def on_message(
-        self,
-        *,
-        name: str,
-        display_name: str | None = None,
-        enabled: bool | None = None,
-        level: PermLevel | None = None,
-        scene: PermScene | None = None,
-        wl_users: list[str] | None = None,
-        wl_groups: list[str] | None = None,
-        bl_users: list[str] | None = None,
-        bl_groups: list[str] | None = None,
-        log: bool = True,
-        **kwargs: Any,
-    ) -> type[Matcher]:
-        """注册消息 matcher 并注入权限。"""
-        import nonebot
-
-        return self._create_matcher(
-            nonebot.on_message,
-            name=name,
-            display_name=display_name,
-            enabled=enabled,
-            level=level,
-            scene=scene,
-            wl_users=wl_users,
-            wl_groups=wl_groups,
-            bl_users=bl_users,
-            bl_groups=bl_groups,
-            log=log,
-            **kwargs,
-        )
-
     if TYPE_CHECKING:
 
         def on_command(
@@ -270,7 +237,7 @@ class Plugin:
             wl_groups: list[str] | None = None,
             bl_users: list[str] | None = None,
             bl_groups: list[str] | None = None,
-            log: bool = True,
+            log: bool = False,
             **kwargs: Any,
         ) -> type[Matcher]: ...
 
