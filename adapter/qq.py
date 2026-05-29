@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+from pathlib import Path
 from typing import Any
 
 from nonebot.adapters import Bot
@@ -40,7 +41,19 @@ class QQOfficialMessageAdapter(MessageAdapter):
         if seg_type == "video":
             if isinstance(data, str) and data.startswith(("http://", "https://")):
                 return MessageSegment.video(data)
-            raise ValueError("QQ 官方适配器暂只支持视频 URL")
+            if not hasattr(MessageSegment, "file_video"):
+                raise ValueError("当前 QQ 官方适配器版本不支持本地视频发送，请升级 nonebot-adapter-qq")
+            if isinstance(data, str) and data.startswith("base64://"):
+                return MessageSegment.file_video(base64.b64decode(data[9:]))
+            if isinstance(data, Path):
+                return MessageSegment.file_video(data)
+            if isinstance(data, bytes):
+                return MessageSegment.file_video(data)
+            if isinstance(data, str):
+                path = Path(data)
+                if path.exists():
+                    return MessageSegment.file_video(path)
+            raise ValueError("QQ 官方适配器视频发送仅支持 URL、base64、本地路径或字节数据")
         raise ValueError(f"不支持的消息段类型: {seg_type}")
 
     def build_message(self, bot: Bot, segments: list[Any]) -> Any:
