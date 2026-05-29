@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from pathlib import Path
+from re import Match, Pattern
 from typing import Any
 
 from nonebot.adapters import Bot, Event
@@ -121,6 +122,81 @@ def build_message(bot: Bot, *segments: Any) -> Any:
     return "".join(str(segment) for segment in filtered)
 
 
+def event_message(event: Any) -> Any:
+    """提取事件消息对象。"""
+    if hasattr(event, "get_message"):
+        try:
+            return event.get_message()
+        except Exception:
+            pass
+    return getattr(event, "message", None)
+
+
+def iter_message_segments(message: Any) -> list[Any]:
+    """遍历消息段。"""
+    if message is None:
+        return []
+    try:
+        return list(message)
+    except Exception:
+        return []
+
+
+def segment_type(segment: Any) -> str:
+    """提取消息段类型。"""
+    if isinstance(segment, dict):
+        return str(segment.get("type") or "")
+    return str(getattr(segment, "type", "") or "")
+
+
+def segment_data(segment: Any) -> dict[str, Any]:
+    """提取消息段数据。"""
+    if isinstance(segment, dict):
+        data = segment.get("data") or {}
+    else:
+        data = getattr(segment, "data", {}) or {}
+    return data if isinstance(data, dict) else {}
+
+
+def segment_text(segment: Any) -> str:
+    """提取文本消息段内容。"""
+    if isinstance(segment, str):
+        return segment
+    seg_type = segment_type(segment)
+    if seg_type and seg_type not in {"text", "plain"}:
+        return ""
+    if hasattr(segment, "is_text"):
+        try:
+            if not segment.is_text():
+                return ""
+        except Exception:
+            return ""
+    data = segment_data(segment)
+    for key in ("text", "content"):
+        value = data.get(key)
+        if value is not None:
+            return str(value)
+    return str(segment) if seg_type in {"text", "plain"} else ""
+
+
+def extract_first_text_match(
+    message: Any,
+    pattern: Pattern[str],
+    *,
+    ignored_segment_types: set[str] | None = None,
+) -> Match[str] | None:
+    """从首个有效文本段中提取正则匹配结果。"""
+    ignored = ignored_segment_types or {"image", "reply", "at", "mention"}
+    for segment in iter_message_segments(message):
+        if segment_type(segment) in ignored:
+            continue
+        text = segment_text(segment).strip()
+        if not text:
+            continue
+        return pattern.match(text)
+    return None
+
+
 def extract_image_sources(message: Any) -> list[str]:
     """从消息对象中提取图片来源。"""
     if isinstance(message, str) and is_onebot_v11_string_available():
@@ -131,6 +207,25 @@ def extract_image_sources(message: Any) -> list[str]:
         except Exception:
             pass
     return _generic_adapter().extract_image_sources(message)
+
+
+def extract_raw_image_sources(message: Any) -> list[str | bytes]:
+    """从消息对象中提取图片来源，保留 base64 和字节输入。"""
+    sources: list[str | bytes] = []
+    for segment in iter_message_segments(message):
+        if segment_type(segment) != "image":
+            continue
+        data = segment_data(segment)
+        url = data.get("url")
+        if isinstance(url, str) and url.strip():
+            sources.append(url.strip())
+            continue
+        file_value = data.get("file")
+        if isinstance(file_value, bytes):
+            sources.append(file_value)
+        elif isinstance(file_value, str) and file_value.strip():
+            sources.append(file_value.strip())
+    return sources
 
 
 def extract_reply_message_id(message: Any) -> int | None:
@@ -265,7 +360,10 @@ __all__ = [
     "MessageAdapter",
     "build_message",
     "build_message_segment",
+    "event_message",
+    "extract_first_text_match",
     "extract_image_sources",
+    "extract_raw_image_sources",
     "extract_message_target",
     "extract_reply_message_id",
     "get_message_adapter",

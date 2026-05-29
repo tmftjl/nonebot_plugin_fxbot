@@ -7,23 +7,42 @@ import base64
 import re
 from collections.abc import Iterable
 from io import BytesIO
-from typing import Any
 
 from nonebot import logger
 from nonebot.adapters import Bot, Event
 from nonebot.matcher import Matcher
+from nonebot.rule import Rule
+from nonebot.typing import T_State
 from PIL import Image
 
+from ...adapter import (
+    build_message,
+    build_message_segment,
+    event_message,
+    extract_first_text_match,
+    extract_raw_image_sources,
+)
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
-from ...adapter import build_message, build_message_segment
 from ...utils.http import get_shared_async_client
 from .config import cfg_waves_analyze
 
 P = Plugin("useful", display_name="实用工具", enabled=True, level=PermLevel.LOW, scene=PermScene.ALL)
+_WAVES_ANALYZE_PATTERN = re.compile(r"^ww(?:评分|分析)\s*(.*)$")
+_WAVES_ANALYZE_COMMAND_STATE = "_waves_analyze_command"
 
-waves_analyze_cmd = P.on_regex(
-    r"^(.*)ww(评分|分析)\s*(.+)",
+
+async def _waves_analyze_rule(event: Event, state: T_State) -> bool:
+    """匹配鸣潮评分命令。"""
+    matched = extract_first_text_match(event_message(event), _WAVES_ANALYZE_PATTERN)
+    if matched is None:
+        return False
+    state[_WAVES_ANALYZE_COMMAND_STATE] = matched.group(1).strip()
+    return True
+
+
+waves_analyze_cmd = P.on_message(
+    rule=Rule(_waves_analyze_rule),
     name="waves_analyze",
     display_name="鸣潮分析评分",
     priority=5,
@@ -116,59 +135,22 @@ async def _post_score(images_b64: list[str], command_str: str) -> tuple[bytes | 
         return None, f"结果图片解析失败: {exc}"
 
 
-def _iter_message_segments(message: Any) -> list[Any]:
-    """遍历消息段。"""
-    if message is None:
-        return []
-    try:
-        return list(message)
-    except Exception:
-        return []
-
-
-def _extract_image_sources(message: Any) -> list[str | bytes]:
-    """从消息中提取图片来源。"""
-    sources: list[str | bytes] = []
-    for segment in _iter_message_segments(message):
-        seg_type = getattr(segment, "type", None)
-        data = getattr(segment, "data", {}) or {}
-        if isinstance(segment, dict):
-            seg_type = segment.get("type")
-            data = segment.get("data") or {}
-        if seg_type != "image":
-            continue
-        url = data.get("url")
-        if isinstance(url, str) and url.strip():
-            sources.append(url.strip())
-            continue
-        file_value = data.get("file")
-        if isinstance(file_value, (bytes, str)) and (file_value if isinstance(file_value, bytes) else file_value.strip()):
-            sources.append(file_value)
-    return sources
-
-
 async def _get_images_from_event_or_reply(bot: Bot, event: Event) -> list[str | bytes]:  # noqa: ARG001
     """从当前消息或回复消息中提取图片。"""
-    try:
-        message = event.get_message()
-    except Exception:
-        message = getattr(event, "message", None)
-    sources = _extract_image_sources(message)
+    sources = extract_raw_image_sources(event_message(event))
     if sources:
         return sources
     reply = getattr(event, "reply", None)
     reply_message = getattr(reply, "message", None) if reply else None
-    return _extract_image_sources(reply_message)
+    return extract_raw_image_sources(reply_message)
 
 
 @waves_analyze_cmd.handle()
-async def _handle_waves_analyze(matcher: Matcher, bot: Bot, event: Event) -> None:
+async def _handle_waves_analyze(matcher: Matcher, bot: Bot, event: Event, state: T_State) -> None:
     """处理鸣潮评分命令。"""
-    plain_text = event.get_plaintext().strip() if hasattr(event, "get_plaintext") else ""
-    match = re.search(r"ww(?:评分|分析)\s*(.+)", plain_text)
-    if not match:
+    command_str = str(state.get(_WAVES_ANALYZE_COMMAND_STATE) or "").strip()
+    if not command_str:
         await matcher.finish("命令格式错误，参考：ww评分 土豆 1c")
-    command_str = match.group(1).strip()
 
     image_sources = await _get_images_from_event_or_reply(bot, event)
     if not image_sources:
