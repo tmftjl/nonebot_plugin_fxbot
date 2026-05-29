@@ -7,6 +7,7 @@ from typing import Any
 
 import httpx
 from nonebot.adapters import Bot, Event
+from nonebot.exception import MatcherException
 from nonebot.matcher import Matcher
 from nonebot.permission import SUPERUSER
 from nonebot.rule import Rule
@@ -137,6 +138,8 @@ async def _handle_video(matcher: Matcher, bot: Bot, event: Event, state: T_State
         await matcher.finish(f"解析失败：{exc}")
     except httpx.HTTPStatusError as exc:
         await matcher.finish(f"解析失败：平台接口返回 {exc.response.status_code}")
+    except MatcherException:
+        raise
     except Exception as exc:
         await matcher.finish(f"解析失败：{type(exc).__name__}: {exc}")
 
