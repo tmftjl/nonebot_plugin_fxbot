@@ -12,12 +12,10 @@ from nonebot import get_driver, logger
 from nonebot.adapters import Bot, Event
 from nonebot.matcher import Matcher
 
-from .permission import PermLevel, PermScene
-from .plugin import Plugin
-from .adapter import extract_message_target, send_forward_texts, send_text_to_target
-from .utils.paths import data_dir, package_root
-
-P = Plugin("system", category="system", display_name="系统命令")
+from ..permission import PermLevel, PermScene
+from ..adapter import extract_message_target, send_forward_texts, send_text_to_target
+from ..utils.paths import data_dir, package_root
+from .registry import P
 
 _RESTART_FLAG_FILE = data_dir("system") / "restart_flag.json"
 _PROC_CMDLINE = "/proc/self/cmdline"
@@ -310,3 +308,7 @@ async def _check_restart_flag(bot: Bot) -> None:
         logger.error(f"[system_control] 发送重启成功通知失败: {exc}")
     finally:
         _RESTART_FLAG_FILE.unlink(missing_ok=True)
+
+
+# 导入状态命令和监控 hooks，使 system_control 成为系统控制统一入口。
+from . import bot_status as bot_status

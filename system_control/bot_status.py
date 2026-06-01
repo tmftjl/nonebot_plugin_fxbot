@@ -21,12 +21,12 @@ from nonebot.adapters import Bot, Event
 from playwright.async_api import Browser, async_playwright
 from playwright.async_api._generated import Playwright as PlaywrightType
 
-from ...adapter import build_message, build_message_segment
-from ...config import get_manager
-from ...permission import PermLevel, PermScene
-from ...plugin import Plugin
-from ...utils.http import get_shared_async_client
-from ...utils.paths import data_dir
+from ..adapter import build_message, build_message_segment
+from ..config import get_manager
+from ..permission import PermLevel, PermScene
+from ..utils.http import get_shared_async_client
+from ..utils.paths import data_dir
+from .registry import P
 from .status_monitor import get_monitor
 
 # ========== 背景图片配置 ==========
@@ -34,7 +34,7 @@ _BG_DIR = Path(__file__).parent / "resource" / "status_bg"
 _DEFAULT_BG_FILE = "1.jpg"
 
 # ========== 消息统计缓存文件 ==========
-_MESSAGE_CACHE_FILE = data_dir("entertain") / "status_message_cache.json"
+_MESSAGE_CACHE_FILE = data_dir("system") / "status_message_cache.json"
 
 # ========== 浏览器资源管理 ==========
 _PW: Optional[PlaywrightType] = None
@@ -49,12 +49,9 @@ _MESSAGE_CACHE_DATE = datetime.now().strftime("%Y-%m-%d")
 # ========== 中央API统计配置 ==========
 _DEFAULT_STATS_API_URL = "http://127.0.0.1:8000"
 
-# ========== 命令注册 ==========
-P = Plugin("entertain", display_name="娱乐", enabled=True, level=PermLevel.LOW, scene=PermScene.ALL)
-
 status_cmd = P.on_regex(
     r"^#状态$",
-    name="status",
+    name="system_status",
     display_name="Bot状态",
     priority=5,
     block=True,
