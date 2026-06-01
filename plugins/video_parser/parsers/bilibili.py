@@ -20,6 +20,12 @@ BILI_HEADERS = {
     **COMMON_HEADERS,
     "Referer": "https://www.bilibili.com/",
 }
+BILI_MAX_VIDEO_QUALITY = 80
+VIDEO_CODEC_RANK = {
+    "avc": 3,
+    "av01": 2,
+    "hev": 1,
+}
 
 _qr_login: Any | None = None
 
@@ -96,21 +102,18 @@ async def _parse_video(*, bvid: str | None = None, avid: int | None = None, page
     cover = page_info.get("first_frame") or info.get("pic")
 
     download_data = await video.get_download_url(page_index=page_index)
-    detector = VideoDownloadURLDataDetecter(download_data)
-    streams = detector.detect_best_streams(no_dolby_video=True, no_hdr=True)
-    if not streams:
-        raise ParseError("B 站没有可下载的视频流")
-    video_stream = streams[0]
-    if not isinstance(video_stream, VideoStreamDownloadURL):
-        raise ParseError("B 站没有可下载的视频流")
-    audio_url = None
-    if len(streams) > 1 and isinstance(streams[1], AudioStreamDownloadURL):
-        audio_url = streams[1].url
+    try:
+        detector = VideoDownloadURLDataDetecter(download_data)
+        video_url, audio_url = _select_download_urls(detector, VideoStreamDownloadURL, AudioStreamDownloadURL)
+    except ParseError:
+        raise
+    except Exception as exc:
+        raise ParseError("B 站下载流解析失败") from exc
 
     return VideoResult(
         platform="B站",
         title=title,
-        video_url=video_stream.url,
+        video_url=video_url,
         audio_url=audio_url,
         cover_url=cover,
         duration=duration,
@@ -118,6 +121,71 @@ async def _parse_video(*, bvid: str | None = None, avid: int | None = None, page
         text=str((info.get("owner") or {}).get("name") or ""),
         headers=BILI_HEADERS.copy(),
     )
+
+
+def _select_download_urls(detector: Any, video_stream_type: type[Any], audio_stream_type: type[Any]) -> tuple[str, str | None]:
+    """从 bilibili_api 解析结果中选择可下载流。"""
+    streams = detector.detect(no_dolby_video=True, no_hdr=True)
+    video_streams = [stream for stream in streams if isinstance(stream, video_stream_type) and _stream_url(stream)]
+    if video_streams:
+        preferred_video_streams = [
+            stream
+            for stream in video_streams
+            if 0 < _enum_int(getattr(stream, "video_quality", None)) <= BILI_MAX_VIDEO_QUALITY
+        ]
+        video_stream = max(preferred_video_streams or video_streams, key=_video_stream_rank)
+        video_url = _stream_url(video_stream)
+        if not video_url:
+            raise ParseError("B 站没有可下载的视频流")
+        audio_streams = [stream for stream in streams if isinstance(stream, audio_stream_type) and _stream_url(stream)]
+        audio_stream = max(audio_streams, key=_audio_stream_rank) if audio_streams else None
+        return video_url, _stream_url(audio_stream) if audio_stream is not None else None
+
+    merged_streams = [stream for stream in streams if _stream_url(stream)]
+    if merged_streams:
+        merged_stream = max(merged_streams, key=_merged_stream_rank)
+        merged_url = _stream_url(merged_stream)
+        if merged_url:
+            return merged_url, None
+    raise ParseError("B 站没有可下载的视频流")
+
+
+def _stream_url(stream: Any) -> str | None:
+    """读取 bilibili_api 流对象的 URL。"""
+    url = getattr(stream, "url", None)
+    return str(url) if url else None
+
+
+def _video_stream_rank(stream: Any) -> tuple[int, int]:
+    """给视频流排序，允许依赖返回未知编码。"""
+    codec = getattr(stream, "video_codecs", None)
+    codec_value = str(getattr(codec, "value", "") or "").lower()
+    return (
+        _enum_int(getattr(stream, "video_quality", None)),
+        VIDEO_CODEC_RANK.get(codec_value, 0),
+    )
+
+
+def _audio_stream_rank(stream: Any) -> tuple[int, int]:
+    """给音频流排序。"""
+    quality = getattr(stream, "audio_quality", None)
+    quality_name = str(getattr(quality, "name", "") or "")
+    special_rank = 2 if quality_name == "DOLBY" else 1 if quality_name == "HI_RES" else 0
+    return special_rank, _enum_int(quality)
+
+
+def _merged_stream_rank(stream: Any) -> int:
+    """给 FLV/MP4 合并流排序。"""
+    return _enum_int(getattr(stream, "video_quality", None))
+
+
+def _enum_int(value: Any) -> int:
+    """读取枚举或原始数值的整数值。"""
+    raw = getattr(value, "value", value)
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return 0
 
 
 async def _parse_dynamic_or_opus(dynamic_id: int, *, source: str) -> VideoResult:
