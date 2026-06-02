@@ -8,7 +8,7 @@ from pathlib import Path
 from nonebot.adapters import Bot, Event
 from nonebot.matcher import Matcher
 
-from ...adapter import build_message, build_message_segment, send_forward_messages
+from ...adapter import build_message, build_message_segment, is_qq_official, send_forward_messages
 from .config import cfg_general
 from .types import VideoResult
 
@@ -22,11 +22,10 @@ def _summary(result: VideoResult) -> str:
 
 
 async def send_video_result(matcher: Matcher, bot: Bot, event: Event, result: VideoResult, video_path: Path) -> None:
-    """发送标题、封面、视频组成的转发消息。"""
+    """发送标题、封面和视频。"""
     text_seg = build_message_segment(bot, "text", _summary(result) + "\n")
     image_seg = build_message_segment(bot, "image", result.cover_url) if result.cover_url else None
     video_seg = build_message_segment(bot, "video", _video_payload(video_path))
-    message = build_message(bot, text_seg, image_seg, video_seg)
 
     forward_messages = [build_message(bot, text_seg)]
     if image_seg is not None:
@@ -36,17 +35,20 @@ async def send_video_result(matcher: Matcher, bot: Bot, event: Event, result: Vi
     if await send_forward_messages(bot, event, forward_messages):
         return
 
-    await matcher.finish(message)
+    if is_qq_official(bot):
+        await _finish_segments_separately(matcher, bot, [text_seg, image_seg, video_seg])
+        return
+
+    await matcher.finish(build_message(bot, text_seg, image_seg, video_seg))
 
 
 async def send_image_result(matcher: Matcher, bot: Bot, event: Event, result: VideoResult, image_paths: list[Path]) -> None:
-    """发送标题和图片组成的转发消息。"""
+    """发送标题和图片。"""
     text_seg = build_message_segment(bot, "text", _summary(result) + "\n")
     image_segments = [
         build_message_segment(bot, "image", image_path)
         for image_path in image_paths
     ]
-    message = build_message(bot, text_seg, *image_segments)
 
     forward_messages = [build_message(bot, text_seg)]
     forward_messages.extend(build_message(bot, image_seg) for image_seg in image_segments)
@@ -54,7 +56,21 @@ async def send_image_result(matcher: Matcher, bot: Bot, event: Event, result: Vi
     if await send_forward_messages(bot, event, forward_messages):
         return
 
-    await matcher.finish(message)
+    if is_qq_official(bot):
+        await _finish_segments_separately(matcher, bot, [text_seg, *image_segments])
+        return
+
+    await matcher.finish(build_message(bot, text_seg, *image_segments))
+
+
+async def _finish_segments_separately(matcher: Matcher, bot: Bot, segments: list[object | None]) -> None:
+    """逐条发送消息段，适配 QQ 官方 Bot 的媒体消息限制。"""
+    messages = [build_message(bot, segment) for segment in segments if segment is not None]
+    if not messages:
+        await matcher.finish()
+    for message in messages[:-1]:
+        await matcher.send(message)
+    await matcher.finish(messages[-1])
 
 
 def _video_payload(video_path: Path) -> Path | str:
