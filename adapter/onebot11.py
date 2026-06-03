@@ -65,3 +65,37 @@ class OneBotV11MessageAdapter(MessageAdapter):
                 return await bot.send_private_msg(user_id=user_id, message=text)
             return await bot.call_api("send_private_msg", user_id=user_id, message=text)
         raise RuntimeError("无法识别消息目标")
+
+    async def send_forward_messages(self, bot: Bot, event: Any, messages: list[Any], *, nickname: str = "FxBot") -> bool:
+        """发送 OneBot V11 合并转发消息。"""
+        from nonebot.adapters.onebot.v11 import MessageSegment
+
+        if not hasattr(MessageSegment, "node_custom"):
+            return False
+
+        user_id_raw = str(getattr(bot, "self_id", "0") or "0")
+        user_id: int | str = int(user_id_raw) if user_id_raw.isdigit() else user_id_raw
+        nodes = [
+            MessageSegment.node_custom(user_id=user_id, nickname=nickname, content=message)
+            for message in messages
+        ]
+
+        try:
+            group_id = getattr(event, "group_id", None)
+            if group_id is not None:
+                if hasattr(bot, "send_group_forward_msg"):
+                    await bot.send_group_forward_msg(group_id=int(group_id), messages=nodes)
+                else:
+                    await bot.call_api("send_group_forward_msg", group_id=int(group_id), messages=nodes)
+                return True
+
+            user_id_value = getattr(event, "user_id", None)
+            if user_id_value is not None:
+                if hasattr(bot, "send_private_forward_msg"):
+                    await bot.send_private_forward_msg(user_id=int(user_id_value), messages=nodes)
+                else:
+                    await bot.call_api("send_private_forward_msg", user_id=int(user_id_value), messages=nodes)
+                return True
+        except Exception:
+            return False
+        return False

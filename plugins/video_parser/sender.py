@@ -8,7 +8,7 @@ from pathlib import Path
 from nonebot.adapters import Bot, Event
 from nonebot.matcher import Matcher
 
-from ...adapter import build_message, build_message_segment, is_qq_official, send_forward_messages
+from ...adapter import build_message, build_message_segment, send_forward_messages
 from .config import cfg_general
 from .types import VideoResult
 
@@ -32,14 +32,8 @@ async def send_video_result(matcher: Matcher, bot: Bot, event: Event, result: Vi
         forward_messages.append(build_message(bot, image_seg))
     forward_messages.append(build_message(bot, video_seg))
 
-    if await send_forward_messages(bot, event, forward_messages):
-        return
-
-    if is_qq_official(bot):
-        await _finish_segments_separately(matcher, bot, [text_seg, image_seg, video_seg])
-        return
-
-    await matcher.finish(build_message(bot, text_seg, image_seg, video_seg))
+    if not await send_forward_messages(bot, event, forward_messages):
+        await matcher.finish("当前适配器不支持发送转发消息")
 
 
 async def send_image_result(matcher: Matcher, bot: Bot, event: Event, result: VideoResult, image_paths: list[Path]) -> None:
@@ -53,24 +47,8 @@ async def send_image_result(matcher: Matcher, bot: Bot, event: Event, result: Vi
     forward_messages = [build_message(bot, text_seg)]
     forward_messages.extend(build_message(bot, image_seg) for image_seg in image_segments)
 
-    if await send_forward_messages(bot, event, forward_messages):
-        return
-
-    if is_qq_official(bot):
-        await _finish_segments_separately(matcher, bot, [text_seg, *image_segments])
-        return
-
-    await matcher.finish(build_message(bot, text_seg, *image_segments))
-
-
-async def _finish_segments_separately(matcher: Matcher, bot: Bot, segments: list[object | None]) -> None:
-    """逐条发送消息段，适配 QQ 官方 Bot 的媒体消息限制。"""
-    messages = [build_message(bot, segment) for segment in segments if segment is not None]
-    if not messages:
-        await matcher.finish()
-    for message in messages[:-1]:
-        await matcher.send(message)
-    await matcher.finish(messages[-1])
+    if not await send_forward_messages(bot, event, forward_messages):
+        await matcher.finish("当前适配器不支持发送转发消息")
 
 
 def _video_payload(video_path: Path) -> Path | str:

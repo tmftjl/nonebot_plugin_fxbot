@@ -66,3 +66,11 @@ class QQOfficialMessageAdapter(MessageAdapter):
             message = self.build_message(bot, [self.build_segment(bot, "text", text)])
             return await bot.send_to_group(group_openid=str(target["group_openid"]), message=message)
         raise RuntimeError("无法识别消息目标")
+
+    async def send_forward_messages(self, bot: Bot, event: Any, messages: list[Any], *, nickname: str = "FxBot") -> bool:
+        """QQ 官方适配器按顺序发送转发消息。"""
+        if not messages:
+            return False
+        for message in messages:
+            await bot.send(event, message)
+        return True

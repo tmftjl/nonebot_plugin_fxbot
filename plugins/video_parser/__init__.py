@@ -17,7 +17,6 @@ __plugin_meta__ = PluginMetadata(
         "#B站登录：扫码保存 B 站登录凭据"
     ),
     type="application",
-    supported_adapters={"~onebot.v11"},
 )
 
 P = Plugin("video_parser", display_name="视频解析", enabled=True, level=PermLevel.LOW, scene=PermScene.ALL)

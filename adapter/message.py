@@ -31,6 +31,10 @@ class MessageAdapter(ABC):
     async def send_text_to_target(self, bot: Bot, target: dict[str, Any], text: str) -> Any:
         """向持久化目标发送文本消息。"""
 
+    async def send_forward_messages(self, bot: Bot, event: Event, messages: list[Any], *, nickname: str = "FxBot") -> bool:
+        """发送一组转发消息。"""
+        return False
+
     def extract_image_sources(self, message: Any) -> list[str]:
         """从消息对象中提取图片来源。"""
         try:
@@ -259,43 +263,11 @@ async def send_text_to_target(bot: Bot, target: dict[str, Any], text: str) -> An
 
 
 async def send_forward_messages(bot: Bot, event: Event, messages: list[Any], *, nickname: str = "FxBot") -> bool:
-    """尝试发送 OneBot V11 合并转发消息。"""
-    if not is_onebot_v11(bot):
+    """通过当前适配器发送一组转发消息。"""
+    adapter = get_message_adapter(bot)
+    if adapter is None:
         return False
-    try:
-        from nonebot.adapters.onebot.v11 import MessageSegment
-    except Exception:
-        return False
-
-    if not hasattr(MessageSegment, "node_custom"):
-        return False
-
-    user_id_raw = str(getattr(bot, "self_id", "0") or "0")
-    user_id: int | str = int(user_id_raw) if user_id_raw.isdigit() else user_id_raw
-    nodes = [
-        MessageSegment.node_custom(user_id=user_id, nickname=nickname, content=message)
-        for message in messages
-    ]
-
-    try:
-        group_id = getattr(event, "group_id", None)
-        if group_id is not None:
-            if hasattr(bot, "send_group_forward_msg"):
-                await bot.send_group_forward_msg(group_id=int(group_id), messages=nodes)
-            else:
-                await bot.call_api("send_group_forward_msg", group_id=int(group_id), messages=nodes)
-            return True
-
-        user_id_value = getattr(event, "user_id", None)
-        if user_id_value is not None:
-            if hasattr(bot, "send_private_forward_msg"):
-                await bot.send_private_forward_msg(user_id=int(user_id_value), messages=nodes)
-            else:
-                await bot.call_api("send_private_forward_msg", user_id=int(user_id_value), messages=nodes)
-            return True
-    except Exception:
-        return False
-    return False
+    return await adapter.send_forward_messages(bot, event, messages, nickname=nickname)
 
 
 async def send_forward_texts(bot: Bot, event: Event, texts: list[str], *, nickname: str = "FxBot") -> bool:
