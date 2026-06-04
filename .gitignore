@@ -10,7 +10,7 @@ temp/
 .ruff_cache/
 
 # Runtime data and local config
-data/
+/data/
 .env
 .env.*
 
