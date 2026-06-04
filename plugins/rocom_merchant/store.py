@@ -43,7 +43,7 @@ def get_subscriptions() -> list[dict[str, Any]]:
     return subs if isinstance(subs, list) else []
 
 
-def upsert_subscription(group_key: str, target: dict[str, Any], keywords: list[str], operator_id: str) -> None:
+def upsert_subscription(group_key: str, target: dict[str, Any], operator_id: str) -> None:
     """新增或更新群订阅。"""
     state = load_state()
     subs = [item for item in get_subscriptions() if item.get("group_key") != group_key]
@@ -51,7 +51,6 @@ def upsert_subscription(group_key: str, target: dict[str, Any], keywords: list[s
         {
             "group_key": group_key,
             "target": target,
-            "keywords": keywords,
             "operator_id": operator_id,
         }
     )

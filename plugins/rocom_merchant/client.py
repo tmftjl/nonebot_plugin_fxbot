@@ -310,11 +310,3 @@ def format_snapshot(snapshot: MerchantSnapshot) -> str:
     lines.append(f"来源：{snapshot.source_url}")
     return "\n".join(lines)
 
-
-def snapshot_matches(snapshot: MerchantSnapshot, keywords: list[str]) -> bool:
-    """判断快照是否命中订阅关键词。"""
-    cleaned = [item.strip() for item in keywords if item and item.strip()]
-    if not cleaned:
-        return True
-    haystack = "\n".join([snapshot.plain_text, *[item.detail or item.name for item in snapshot.products]])
-    return any(keyword in haystack for keyword in cleaned)

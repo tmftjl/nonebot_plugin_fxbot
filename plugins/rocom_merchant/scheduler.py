@@ -5,7 +5,7 @@ from __future__ import annotations
 from nonebot import get_bots, logger
 
 from ...adapter import build_message, build_message_segment, send_message_to_target
-from .client import fetch_merchant_snapshot, snapshot_matches
+from .client import fetch_merchant_snapshot
 from .config import cfg_merchant
 from .renderer import render_merchant_image
 from .store import get_last_signature, get_subscriptions, set_last_signature
@@ -28,7 +28,7 @@ async def _send_to_subscription(subscription: dict, image: bytes) -> bool:
 
 
 async def check_and_push() -> None:
-    """检查远行商人变化并推送命中的订阅。"""
+    """检查远行商人变化并推送所有订阅。"""
     global _started_once
     cfg = cfg_merchant()
     if not bool(cfg.get("enabled", True)):
@@ -50,9 +50,6 @@ async def check_and_push() -> None:
     image = await render_merchant_image(snapshot)
     pushed = 0
     for subscription in subscriptions:
-        keywords = [str(item) for item in subscription.get("keywords") or []]
-        if not snapshot_matches(snapshot, keywords):
-            continue
         if await _send_to_subscription(subscription, image):
             pushed += 1
     set_last_signature(snapshot.signature)

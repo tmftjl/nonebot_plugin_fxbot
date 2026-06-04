@@ -2,18 +2,14 @@
 
 from __future__ import annotations
 
-import re
-
 from nonebot.adapters import Bot, Event
 from nonebot.matcher import Matcher
-from nonebot.params import RegexGroup
 
 from ...adapter import build_message, build_message_segment, extract_message_target
 from ...adapter.support import event_group_id, event_user_id
 from ...permission import PermLevel, PermScene
 from . import P
 from .client import fetch_merchant_snapshot
-from .config import cfg_merchant
 from .renderer import render_merchant_image
 from .store import get_subscription, remove_subscription, upsert_subscription
 
@@ -28,7 +24,7 @@ merchant_query = P.on_regex(
 )
 
 merchant_subscribe = P.on_regex(
-    r"^(?:#|/)开启远行商人\s*(.*)$",
+    r"^(?:#|/)开启远行商人$",
     name="rocom_merchant_subscribe",
     display_name="订阅远行商人",
     priority=5,
@@ -63,14 +59,6 @@ def _group_key(event: Event) -> str:
     return str(group_id or "")
 
 
-def _parse_keywords(raw: str) -> list[str]:
-    values = [item.strip() for item in re.split(r"[\s,，、]+", raw or "") if item.strip()]
-    if values:
-        return values
-    defaults = cfg_merchant().get("default_keywords") or []
-    return [str(item).strip() for item in defaults if str(item).strip()]
-
-
 @merchant_query.handle()
 async def _handle_query(matcher: Matcher, bot: Bot) -> None:
     """查询当前远行商人信息。"""
@@ -83,15 +71,13 @@ async def _handle_query(matcher: Matcher, bot: Bot) -> None:
 
 
 @merchant_subscribe.handle()
-async def _handle_subscribe(matcher: Matcher, bot: Bot, event: Event, args: tuple[str, ...] = RegexGroup()) -> None:  # noqa: ARG001
+async def _handle_subscribe(matcher: Matcher, bot: Bot, event: Event) -> None:  # noqa: ARG001
     """订阅本群远行商人推送。"""
     group_key = _group_key(event)
     if not group_key:
         await matcher.finish("只能在群聊中订阅远行商人推送")
-    keywords = _parse_keywords(args[0] if args else "")
-    upsert_subscription(group_key, extract_message_target(event), keywords, event_user_id(event))
-    label = "、".join(keywords) if keywords else "全部商品刷新"
-    await matcher.finish(f"已订阅远行商人推送：{label}")
+    upsert_subscription(group_key, extract_message_target(event), event_user_id(event))
+    await matcher.finish("已开启远行商人推送，将在远行商人数据更新时推送")
 
 
 @merchant_unsubscribe.handle()
@@ -113,6 +99,4 @@ async def _handle_status(matcher: Matcher, event: Event) -> None:
     sub = get_subscription(group_key)
     if not sub:
         await matcher.finish("本群没有远行商人推送订阅")
-    keywords = sub.get("keywords") or []
-    label = "、".join(str(item) for item in keywords) if keywords else "全部商品刷新"
-    await matcher.finish(f"本群远行商人推送：{label}")
+    await matcher.finish("本群已开启远行商人推送，远行商人数据更新时会推送")
