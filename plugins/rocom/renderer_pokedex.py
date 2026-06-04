@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import textwrap
 from io import BytesIO
 from pathlib import Path
@@ -10,33 +11,28 @@ from typing import Any
 from PIL import Image, ImageDraw
 
 from ...utils.fonts import load_font
-from .data import SKILL_LIST_FIELDS
+from ...utils.paths import data_dir
 
 RESOURCE_DIR = Path(__file__).parent / "resources"
+RUNTIME_RESOURCE_DIR = data_dir("rocom") / "resources"
 POKEDEX_DIR = RESOURCE_DIR / "pokedex"
 FONT_DIR = RESOURCE_DIR / "fonts"
+PET_ICON_DIR = RUNTIME_RESOURCE_DIR / "rocomicon"
+SKILL_ICON_DIR = RUNTIME_RESOURCE_DIR / "skillicon"
+CHARACTER_ICON_DIR = RUNTIME_RESOURCE_DIR / "characteristicicon"
 
-FONT_TITLE = load_font(FONT_DIR / "rocom_origin.ttf", 68)
-FONT_SUBTITLE = load_font(FONT_DIR / "rocom_origin.ttf", 42)
-FONT_SECTION = load_font(FONT_DIR / "rocom_origin.ttf", 32)
-FONT_TEXT = load_font(FONT_DIR / "skill_origin.ttf", 26)
-FONT_SMALL = load_font(FONT_DIR / "skill_origin.ttf", 22)
-FONT_TINY = load_font(FONT_DIR / "skill_origin.ttf", 18)
+RC_28 = load_font(FONT_DIR / "rocom_origin.ttf", 28)
+RC_30 = load_font(FONT_DIR / "rocom_origin.ttf", 30)
+RC_32 = load_font(FONT_DIR / "rocom_origin.ttf", 32)
+RC_34 = load_font(FONT_DIR / "rocom_origin.ttf", 34)
+RC_40 = load_font(FONT_DIR / "rocom_origin.ttf", 40)
+RC_64 = load_font(FONT_DIR / "rocom_origin.ttf", 64)
+RC_72 = load_font(FONT_DIR / "rocom_origin.ttf", 72)
+SKILL_22 = load_font(FONT_DIR / "skill_origin.ttf", 22)
+SKILL_32 = load_font(FONT_DIR / "skill_origin.ttf", 32)
 
 TEXT_COLOR = (100, 92, 79)
-SUB_TEXT_COLOR = (116, 126, 142)
 WHITE = (255, 255, 255)
-PANEL = (255, 250, 236)
-PANEL_LINE = (225, 204, 166)
-
-ATTR_LABELS = [
-    ("HP", "attr_hp"),
-    ("物攻", "attr_atk"),
-    ("魔攻", "attr_spatk"),
-    ("物防", "attr_def"),
-    ("魔防", "attr_spdef"),
-    ("速度", "attr_spd"),
-]
 
 TYPE_COLORS = {
     "冰": (95, 173, 221),
@@ -60,180 +56,246 @@ TYPE_COLORS = {
     "幽": (148, 70, 236),
 }
 
+TAG_X_ADD = [0, 132, 143]
+TAG_FIELDS = ["attr_hp", "attr_atk", "attr_spatk", "attr_def", "attr_spdef", "attr_spd"]
+TAG_TITLES = ["HP", "物攻", "魔攻", "物防", "魔防", "速度"]
+EVOLUTION_X = {
+    "1_0": 220,
+    "2_0": 70,
+    "2_1": 290,
+    "3_0": 0,
+    "3_1": 220,
+    "3_2": 440,
+}
 
-def _round_rect(draw: ImageDraw.ImageDraw, xy: tuple[int, int, int, int], fill: tuple[int, int, int], outline: tuple[int, int, int] | None = None) -> None:
-    draw.rounded_rectangle(xy, radius=8, fill=fill, outline=outline, width=2 if outline else 1)
+
+def _asset(name: str) -> Image.Image:
+    return Image.open(POKEDEX_DIR / name).convert("RGBA")
 
 
 def _wrap(text: str, width: int) -> list[str]:
     if not text:
         return []
     lines: list[str] = []
-    for paragraph in text.splitlines():
-        lines.extend(textwrap.wrap(paragraph, width=width, break_long_words=False, replace_whitespace=False) or [""])
+    for part in str(text).splitlines():
+        lines.extend(textwrap.wrap(part, width=width, break_long_words=False, replace_whitespace=False) or [""])
     return lines
 
 
-def _display_name(pet: dict[str, Any]) -> str:
+def _min_attr(value: int, title: str = "") -> int:
+    base = value / 2 + 10
+    factor = value / 100
+    growth = 50
+    if title == "HP":
+        factor = factor * 2 + 1
+        growth = 100
+    return math.floor((base + factor * 60) * 0.9 + growth)
+
+
+def _max_attr(value: int, title: str = "") -> int:
+    base = (value + 30) / 2 + 10
+    factor = (value + 30) / 100
+    growth = 50
+    if title == "HP":
+        factor = factor * 2 + 1
+        growth = 100
+    return math.floor((base + factor * 60) * 1.2 + growth)
+
+
+def _pet_name(pet: dict[str, Any]) -> str:
     name = str(pet.get("name") or "")
     form = str(pet.get("form") or "")
-    return f"{name}{form}" if form else name
+    return f"{name} - {form}" if form else name
 
 
-def _section(draw: ImageDraw.ImageDraw, title: str, x: int, y: int, width: int) -> None:
-    color = (88, 148, 202)
-    draw.rounded_rectangle((x, y, x + width, y + 44), radius=8, fill=color)
-    draw.text((x + 24, y + 22), title, WHITE, FONT_SECTION, "lm")
+def _load_pet_icon(icon: str, size: int, fallback_text: str = "") -> Image.Image:
+    path = PET_ICON_DIR / f"{icon}.png"
+    if path.is_file():
+        return Image.open(path).convert("RGBA").resize((size, size))
+    fallback = Image.new("RGBA", (size, size), (255, 255, 255, 0))
+    draw = ImageDraw.Draw(fallback)
+    draw.text((size // 2, size // 2), fallback_text or "暂无立绘", WHITE, RC_34, "mm")
+    return fallback
 
 
-def _draw_type_badge(img: Image.Image, draw: ImageDraw.ImageDraw, name: str, x: int, y: int) -> int:
-    icon_path = POKEDEX_DIR / f"{name}.png"
-    if icon_path.is_file():
-        icon = Image.open(icon_path).convert("RGBA").resize((62, 62))
-        img.paste(icon, (x, y), icon)
-        return 70
-    color = TYPE_COLORS.get(name, (140, 151, 166))
-    draw.rounded_rectangle((x, y + 10, x + 92, y + 52), radius=8, fill=color)
-    draw.text((x + 46, y + 31), name, WHITE, FONT_SMALL, "mm")
-    return 100
+def _load_skill_icon(name: str) -> Image.Image:
+    path = SKILL_ICON_DIR / f"{name}.png"
+    if path.is_file():
+        return Image.open(path).convert("RGBA").resize((67, 67))
+    icon = Image.open(POKEDEX_DIR / "icon.png").convert("RGBA").resize((67, 67))
+    return icon
 
 
-def _draw_stats(draw: ImageDraw.ImageDraw, pet: dict[str, Any], x: int, y: int) -> None:
+def _load_character_icon(name: str) -> Image.Image:
+    path = CHARACTER_ICON_DIR / f"{name}.png"
+    if path.is_file():
+        return Image.open(path).convert("RGBA").resize((121, 121))
+    icon = Image.open(POKEDEX_DIR / "icon.png").convert("RGBA").resize((121, 121))
+    return icon
+
+
+def _section(img: Image.Image, draw: ImageDraw.ImageDraw, y: int, title: str) -> int:
+    rocom_title = _asset("a_title.png")
+    img.paste(rocom_title, (68, y), rocom_title)
+    draw.text((134, y + 30), title, WHITE, RC_28, "lm")
+    return y + 70
+
+
+def _draw_type_badges(img: Image.Image, draw: ImageDraw.ImageDraw, pet: dict[str, Any]) -> None:
+    mask_bar = _asset("mask_bar.png")
+    for index, type_name in enumerate([str(item) for item in pet.get("unit_type") or []]):
+        color = TYPE_COLORS.get(type_name, TYPE_COLORS["无"])
+        type_img = Image.new("RGBA", (142, 38), color)
+        type_icon_path = POKEDEX_DIR / f"{type_name}.png"
+        if type_icon_path.is_file():
+            icon = Image.open(type_icon_path).convert("RGBA").resize((42, 42))
+            type_img.paste(icon, (-2, -2), icon)
+        masked = Image.new("RGBA", (142, 38), (255, 255, 255, 0))
+        masked.paste(type_img, (0, 0), mask_bar)
+        type_draw = ImageDraw.Draw(masked)
+        type_draw.text((91, 19), type_name, WHITE, RC_32, "mm")
+        img.paste(masked, (150 * index + 90, 970), masked)
+
+
+def _draw_stats(img: Image.Image, draw: ImageDraw.ImageDraw, pet: dict[str, Any]) -> None:
+    rocom_title = _asset("a_title.png")
+    table_img = _asset("table.png")
+    tags_img = _asset("tags.png")
+    img.paste(rocom_title, (565, 334), rocom_title)
+    draw.text((631, 363), "精灵种族", WHITE, RC_28, "lm")
+    img.paste(table_img, (550, 405), table_img)
     attr = pet.get("attribute") or {}
-    max_value = max([int(attr.get(field) or 0) for _, field in ATTR_LABELS] + [1])
-    for index, (label, field) in enumerate(ATTR_LABELS):
-        row_y = y + index * 48
-        value = int(attr.get(field) or 0)
-        draw.text((x, row_y + 22), label, TEXT_COLOR, FONT_SMALL, "lm")
-        draw.rounded_rectangle((x + 92, row_y + 9, x + 350, row_y + 35), radius=6, fill=(235, 225, 205))
-        bar_width = int(258 * value / max_value)
-        draw.rounded_rectangle((x + 92, row_y + 9, x + 92 + bar_width, row_y + 35), radius=6, fill=(91, 159, 214))
-        draw.text((x + 385, row_y + 22), str(value), TEXT_COLOR, FONT_SMALL, "rm")
+    x_num = 730
+    y_num = 483
+    for col in range(3):
+        x_num += TAG_X_ADD[col]
+        for row, field in enumerate(TAG_FIELDS):
+            tag_x = x_num
+            tag_y = y_num + row * 54
+            img.paste(tags_img, (tag_x, tag_y), tags_img)
+            value = int(attr.get(field) or 0)
+            if col == 0:
+                draw.text((tag_x - 95, tag_y + 22), TAG_TITLES[row], TEXT_COLOR, RC_34, "lm")
+                draw.text((tag_x + 58, tag_y + 22), str(value), (240, 236, 225), RC_32, "mm")
+            elif col == 1:
+                draw.text((tag_x + 58, tag_y + 22), str(_min_attr(value, TAG_TITLES[row])), (240, 236, 225), RC_32, "mm")
+            else:
+                draw.text((tag_x + 58, tag_y + 22), str(_max_attr(value, TAG_TITLES[row])), (240, 236, 225), RC_32, "mm")
 
 
-def _collect_skills(pet: dict[str, Any]) -> list[dict[str, Any]]:
-    skills: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for field in SKILL_LIST_FIELDS:
-        for skill in pet.get(field) or []:
-            if not isinstance(skill, dict):
-                continue
-            name = str(skill.get("name") or "")
-            if not name or name in seen:
-                continue
-            seen.add(name)
-            skills.append(skill)
-    return skills
+def _draw_evolution(img: Image.Image, draw: ImageDraw.ImageDraw, pet: dict[str, Any]) -> None:
+    jinhua_bg = _asset("jinhua_bg.png")
+    right_jinhua = _asset("right_jinhua.png")
+    evolution = [item for item in pet.get("evolution_list") or [] if isinstance(item, dict)]
+    evolution = evolution[:3]
+    count = len(evolution)
+    if not count:
+        return
+    base_x = 565
+    base_y = 820
+    for index, item in enumerate(evolution):
+        icon_x = base_x + EVOLUTION_X.get(f"{count}_{index}", 220)
+        img.paste(jinhua_bg, (icon_x, base_y), jinhua_bg)
+        pet_icon = _load_pet_icon(str(item.get("icon") or ""), 150, str(item.get("name") or ""))
+        img.paste(pet_icon, (icon_x - 5, base_y + 10), pet_icon)
+        draw.text((icon_x + 70, base_y + 220), str(item.get("name") or ""), (60, 60, 60), SKILL_22, "mm")
+        if count > 1 and index > 0:
+            img.paste(right_jinhua, (icon_x - 54, 863), right_jinhua)
+            draw.text((icon_x - 54, 905), str(item.get("level") or ""), TEXT_COLOR, RC_28, "mm")
 
 
-def _draw_skills(draw: ImageDraw.ImageDraw, pet: dict[str, Any], x: int, y: int) -> int:
-    skills = _collect_skills(pet)
+def _draw_skill_group(img: Image.Image, draw: ImageDraw.ImageDraw, y: int, title: str, skills: list[dict[str, Any]]) -> int:
     if not skills:
-        draw.text((x, y), "暂无技能数据", SUB_TEXT_COLOR, FONT_TEXT, "la")
-        return y + 40
-    shown = skills[:18]
-    col_width = 360
-    row_height = 58
-    for index, skill in enumerate(shown):
-        col = index % 3
-        row = index // 3
-        sx = x + col * col_width
-        sy = y + row * row_height
+        return y
+    y = _section(img, draw, y, title)
+    skill_bg = _asset("skill_bg.png")
+    cost_star = _asset("star.png")
+    for index, skill in enumerate(skills):
+        row = index // 5
+        col = index - row * 5
         family = str(skill.get("families") or "无")
-        color = TYPE_COLORS.get(family, (124, 143, 161))
-        draw.rounded_rectangle((sx, sy, sx + 330, sy + 48), radius=8, fill=(248, 242, 226), outline=PANEL_LINE, width=1)
-        draw.rounded_rectangle((sx + 10, sy + 9, sx + 64, sy + 39), radius=6, fill=color)
-        draw.text((sx + 37, sy + 24), family[:2], WHITE, FONT_TINY, "mm")
-        name = str(skill.get("name") or "")[:9]
-        draw.text((sx + 76, sy + 17), name, TEXT_COLOR, FONT_SMALL, "la")
-        power = str(skill.get("power") or "0")
-        cost = str(skill.get("cost") or "0")
-        draw.text((sx + 76, sy + 39), f"威力 {power} / 消耗 {cost}", SUB_TEXT_COLOR, FONT_TINY, "la")
-    bottom = y + ((len(shown) + 2) // 3) * row_height
-    if len(skills) > len(shown):
-        draw.text((x, bottom + 6), f"另有 {len(skills) - len(shown)} 个技能未展示，可用 #技能信息 查询详情", SUB_TEXT_COLOR, FONT_SMALL, "la")
-        bottom += 38
-    return bottom
+        color = TYPE_COLORS.get(family, TYPE_COLORS["无"])
+        card = Image.new("RGBA", (207, 99), color)
+        temp = Image.new("RGBA", (207, 99), (255, 255, 255, 0))
+        temp.paste(card, (0, 0), skill_bg)
+        skill_icon = _load_skill_icon(str(skill.get("name") or ""))
+        temp.paste(skill_icon, (15, 16), skill_icon)
+        family_icon_path = POKEDEX_DIR / f"{family}.png"
+        if family_icon_path.is_file():
+            family_icon = Image.open(family_icon_path).convert("RGBA").resize((45, 45))
+            temp.paste(family_icon, (-5, -5), family_icon)
+        temp_draw = ImageDraw.Draw(temp)
+        temp_draw.text((94, 35), str(skill.get("name") or "")[:6], WHITE, SKILL_22, "lm")
+        temp.paste(cost_star, (92, 52), cost_star)
+        temp_draw.text((120, 65), str(skill.get("cost") or "0"), WHITE, SKILL_22, "lm")
+        img.paste(temp, (208 * col + 82, row * 99 + y), temp)
+    return y + (math.ceil(len(skills) / 5) * 99) + 10
 
 
 async def render_pokedex_image(pet: dict[str, Any], pet_id: str) -> bytes:
-    """生成精灵图鉴图片。"""
-    skills = _collect_skills(pet)
-    skill_rows = max(1, min(6, (min(len(skills), 18) + 2) // 3))
-    desc_lines = _wrap(str(pet.get("description") or ""), 44)
+    """按照 RocomUID 图鉴布局生成图片。"""
+    level_skills = [item for item in pet.get("level_skill_list") or [] if isinstance(item, dict)]
+    blood_skills = [item for item in pet.get("blood_skill_list") or [] if isinstance(item, dict)]
+    machine_skills = [item for item in pet.get("machine_skill_list") or [] if isinstance(item, dict)]
     feature = pet.get("feature") or {}
-    feature_lines = _wrap(str(feature.get("desc") or ""), 42)
-    height = max(1240, 1020 + skill_rows * 58 + len(desc_lines) * 34 + len(feature_lines) * 34)
+    feature_name = str(feature.get("name") or "")
+    feature_lines = _wrap(str(feature.get("desc") or ""), 28)
+    desc_lines = _wrap(str(pet.get("description") or ""), 31)
 
-    bg_path = POKEDEX_DIR / "bg.jpg"
-    if bg_path.is_file():
-        img = Image.open(bg_path).convert("RGB").resize((1200, height))
-    else:
-        img = Image.new("RGB", (1200, height), (235, 229, 207))
+    feature_height = max(210, len(feature_lines) * 40 + 120)
+    info_height = len(desc_lines) * 40 + (40 if pet.get("egg_group") else 0)
+    bg_height = 1030
+    bg_height += math.ceil(len(level_skills) / 5) * 99 + 80 if level_skills else 0
+    bg_height += math.ceil(len(blood_skills) / 5) * 99 + 80 if blood_skills else 0
+    bg_height += math.ceil(len(machine_skills) / 5) * 99 + 80 if machine_skills else 0
+    bg_height += feature_height + 80
+    bg_height += info_height + 80
+    bg_height += 40
+
+    img = Image.open(POKEDEX_DIR / "bg.jpg").convert("RGB").resize((1200, bg_height))
+    title_img = _asset("title.png")
+    pet_bg_mask = _asset("pet_bg.png").resize((575, 575))
+    img.paste(title_img, (0, 0), title_img)
     draw = ImageDraw.Draw(img)
+    draw.text((600, 96), "精灵图鉴", WHITE, RC_72, "mm")
+    draw.text((600, 260), _pet_name(pet), TEXT_COLOR, RC_64, "mm")
+    draw.text((1050, 295), f"#{pet_id}", TEXT_COLOR, RC_30, "rm")
 
-    title_path = POKEDEX_DIR / "title.png"
-    if title_path.is_file():
-        title = Image.open(title_path).convert("RGBA")
-        img.paste(title, (0, 0), title)
-    else:
-        draw.rectangle((0, 0, 1200, 180), fill=(92, 154, 211))
-    draw.text((600, 96), "精灵图鉴", WHITE, FONT_TITLE, "mm")
+    first_type = str((pet.get("unit_type") or ["无"])[0])
+    pet_bg = Image.new("RGBA", (575, 575), TYPE_COLORS.get(first_type, TYPE_COLORS["无"]))
+    img.paste(pet_bg, (-6, 359), pet_bg_mask)
+    pet_icon = _load_pet_icon(str(pet.get("icon") or ""), 552, str(pet.get("name") or ""))
+    img.paste(pet_icon, (0, 371), pet_icon)
 
-    name = _display_name(pet)
-    draw.text((600, 244), name, TEXT_COLOR, FONT_TITLE, "mm")
-    draw.text((600, 300), f"编号 {pet_id}", SUB_TEXT_COLOR, FONT_TEXT, "mm")
+    _draw_stats(img, draw, pet)
+    _draw_evolution(img, draw, pet)
+    _draw_type_badges(img, draw, pet)
 
-    types = [str(item) for item in pet.get("unit_type") or [] if item]
-    tx = 498
-    for type_name in types:
-        tx += _draw_type_badge(img, draw, type_name, tx, 328)
+    y = 1030
+    y = _section(img, draw, y, "精灵信息")
+    if pet.get("egg_group"):
+        draw.text((90, y), f"蛋组：{' '.join(str(item) for item in pet.get('egg_group') or [])}", TEXT_COLOR, RC_34, "lm")
+        y += 40
+    for line in desc_lines:
+        draw.text((90, y), line, TEXT_COLOR, SKILL_32, "lm")
+        y += 40
+    y += 15
 
-    x, y = 70, 405
-    _round_rect(draw, (x, y, x + 470, y + 420), PANEL, PANEL_LINE)
-    primary_type = types[0] if types else "普通"
-    draw.rounded_rectangle((x + 45, y + 40, x + 425, y + 360), radius=16, fill=TYPE_COLORS.get(primary_type, (166, 179, 191)))
-    icon_path = POKEDEX_DIR / "icon.png"
-    if icon_path.is_file():
-        icon = Image.open(icon_path).convert("RGBA").resize((150, 150))
-        img.paste(icon, (x + 185, y + 122), icon)
-    draw.text((x + 235, y + 335), "暂无本地立绘", WHITE, FONT_SECTION, "mm")
+    y = _section(img, draw, y, "精灵特性")
+    skill_mask = _asset("skill_mask.png")
+    tx_img = _load_character_icon(feature_name)
+    img.paste(tx_img, (90, y), skill_mask)
+    y += 20
+    draw.text((220, y), feature_name or "暂无特性", (0, 0, 0), RC_40, "lm")
+    line_y = 20
+    for line in feature_lines or ["暂无特性说明"]:
+        draw.text((220, y + line_y), line, TEXT_COLOR, SKILL_32, "lm")
+        line_y += 40
+    y += max(110, line_y)
 
-    _round_rect(draw, (590, y, 1130, y + 420), PANEL, PANEL_LINE)
-    _section(draw, "种族值", 620, y + 28, 470)
-    _draw_stats(draw, pet, 650, y + 100)
-
-    info_y = y + 460
-    _round_rect(draw, (70, info_y, 1130, info_y + 210), PANEL, PANEL_LINE)
-    _section(draw, "基础信息", 100, info_y + 24, 1000)
-    groups = "、".join(str(item) for item in pet.get("egg_group") or []) or "无"
-    size = f"{(int(pet.get('height_low') or 0) / 100):.2f}~{(int(pet.get('height_high') or 0) / 100):.2f}m"
-    weight = f"{(int(pet.get('weight_low') or 0) / 1000):.2f}~{(int(pet.get('weight_high') or 0) / 1000):.2f}kg"
-    draw.text((120, info_y + 92), f"蛋组：{groups}", TEXT_COLOR, FONT_TEXT, "la")
-    draw.text((120, info_y + 132), f"身高：{size}", TEXT_COLOR, FONT_TEXT, "la")
-    draw.text((520, info_y + 132), f"体重：{weight}", TEXT_COLOR, FONT_TEXT, "la")
-    feature_name = str(feature.get("name") or "无")
-    draw.text((120, info_y + 172), f"特性：{feature_name}", TEXT_COLOR, FONT_TEXT, "la")
-
-    desc_y = info_y + 250
-    desc_height = 128 + max(len(desc_lines), 1) * 34
-    _round_rect(draw, (70, desc_y, 1130, desc_y + desc_height), PANEL, PANEL_LINE)
-    _section(draw, "精灵描述", 100, desc_y + 24, 1000)
-    for index, line in enumerate(desc_lines or ["暂无描述"]):
-        draw.text((120, desc_y + 94 + index * 34), line, TEXT_COLOR, FONT_TEXT, "la")
-
-    feature_y = desc_y + desc_height + 40
-    feature_height = 128 + max(len(feature_lines), 1) * 34
-    _round_rect(draw, (70, feature_y, 1130, feature_y + feature_height), PANEL, PANEL_LINE)
-    _section(draw, "特性说明", 100, feature_y + 24, 1000)
-    for index, line in enumerate(feature_lines or ["暂无特性说明"]):
-        draw.text((120, feature_y + 94 + index * 34), line, TEXT_COLOR, FONT_TEXT, "la")
-
-    skill_y = feature_y + feature_height + 40
-    skill_height = max(150, skill_rows * 58 + 120)
-    _round_rect(draw, (70, skill_y, 1130, skill_y + skill_height), PANEL, PANEL_LINE)
-    _section(draw, "技能预览", 100, skill_y + 24, 1000)
-    _draw_skills(draw, pet, 105, skill_y + 94)
+    y = _draw_skill_group(img, draw, y, "等级技能", level_skills)
+    y = _draw_skill_group(img, draw, y, "血脉技能", blood_skills)
+    y = _draw_skill_group(img, draw, y, "技能石技能", machine_skills)
 
     output = BytesIO()
     img.save(output, format="PNG")

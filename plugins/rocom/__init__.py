@@ -18,7 +18,8 @@ __plugin_meta__ = PluginMetadata(
         "#技能信息 抓挠：查看技能资料\n"
         "#配种 喵喵 火花：查询是否可配种\n"
         "#查蛋 0.23 1.30：按尺寸重量反查精灵蛋\n"
-        "#查找精灵 属性:火 速度:>100：按条件查找精灵"
+        "#查找精灵 属性:火 速度:>100：按条件查找精灵\n"
+        "#洛克下载资源：手动检查并下载运行时资源"
     ),
     type="application",
 )
@@ -28,6 +29,7 @@ P = Plugin("rocom", display_name="洛克王国", enabled=True, level=PermLevel.L
 from . import commands_info as commands_info
 from . import commands_merchant as commands_merchant
 from . import config as config
+from . import resource_downloader as resource_downloader
 from .scheduler import setup_rocom_merchant_tasks
 
 setup_rocom_merchant_tasks()

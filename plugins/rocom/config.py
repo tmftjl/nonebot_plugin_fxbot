@@ -18,3 +18,8 @@ def get_config() -> dict[str, Any]:
 def cfg_merchant() -> dict[str, Any]:
     """获取远行商人推送配置。"""
     return get_config()["merchant"]
+
+
+def cfg_resources() -> dict[str, Any]:
+    """获取运行时资源下载配置。"""
+    return get_config()["resources"]

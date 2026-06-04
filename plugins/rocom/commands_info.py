@@ -11,6 +11,7 @@ from ...permission import PermLevel, PermScene
 from . import P
 from .data import can_breed, find_pet, find_skill, parse_search_criteria, search_eggs, search_pets
 from .renderer_pokedex import render_pokedex_image
+from .resource_downloader import ensure_rocom_resources
 
 pokedex_query = P.on_regex(
     r"^[#＃]图鉴\s+(.+?)\s*$",
@@ -59,6 +60,16 @@ pet_search = P.on_regex(
     priority=5,
     block=True,
     level=PermLevel.MEMBER,
+    scene=PermScene.GROUP,
+)
+
+resource_download = P.on_regex(
+    r"^[#＃]洛克下载资源\s*$",
+    name="rocom_resource_download",
+    display_name="洛克资源下载",
+    priority=5,
+    block=True,
+    level=PermLevel.ADMIN,
     scene=PermScene.GROUP,
 )
 
@@ -140,3 +151,14 @@ async def _handle_pet_search(matcher: Matcher, groups: tuple = RegexGroup()) -> 
     shown = "、".join(names[:60])
     suffix = f"\n仅展示前 60 个，共匹配 {len(results)} 个" if len(results) > 60 else f"\n共匹配 {len(results)} 个"
     await matcher.finish(f"查找结果：\n{shown}{suffix}")
+
+
+@resource_download.handle()
+async def _handle_resource_download(matcher: Matcher) -> None:
+    """手动下载洛克王国运行时资源。"""
+    await matcher.send("开始检查洛克王国资源，首次下载可能需要较久")
+    try:
+        await ensure_rocom_resources(force=True)
+    except Exception as exc:
+        await matcher.finish(f"洛克王国资源下载失败：{exc}")
+    await matcher.finish("洛克王国资源检查完成")
