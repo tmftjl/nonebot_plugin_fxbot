@@ -19,6 +19,7 @@ from .message import (
     send_forward_messages,
     send_forward_texts,
     send_ark_message,
+    send_message_to_target,
     send_text_to_target,
 )
 from .onebot11 import OneBotV11MessageAdapter
@@ -44,6 +45,7 @@ __all__ = [
     "register_message_adapter",
     "send_forward_messages",
     "send_forward_texts",
+    "send_message_to_target",
     "send_ark_message",
     "send_text_to_target",
 ]

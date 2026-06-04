@@ -28,8 +28,13 @@ class MessageAdapter(ABC):
         """构造平台消息对象。"""
 
     @abstractmethod
+    async def send_message_to_target(self, bot: Bot, target: dict[str, Any], message: Any) -> Any:
+        """向持久化目标发送消息。"""
+
     async def send_text_to_target(self, bot: Bot, target: dict[str, Any], text: str) -> Any:
         """向持久化目标发送文本消息。"""
+        message = self.build_message(bot, [self.build_segment(bot, "text", text)])
+        return await self.send_message_to_target(bot, target, message)
 
     async def send_forward_messages(self, bot: Bot, event: Event, messages: list[Any], *, nickname: str = "FxBot") -> bool:
         """发送一组转发消息。"""
@@ -262,6 +267,11 @@ async def send_text_to_target(bot: Bot, target: dict[str, Any], text: str) -> An
     return await require_message_adapter(bot).send_text_to_target(bot, target, text)
 
 
+async def send_message_to_target(bot: Bot, target: dict[str, Any], message: Any) -> Any:
+    """根据保存的目标信息发送消息。"""
+    return await require_message_adapter(bot).send_message_to_target(bot, target, message)
+
+
 async def send_forward_messages(bot: Bot, event: Event, messages: list[Any], *, nickname: str = "FxBot") -> bool:
     """通过当前适配器发送一组转发消息。"""
     adapter = get_message_adapter(bot)
@@ -317,7 +327,7 @@ class _GenericMessageAdapter(MessageAdapter):
     def build_message(self, bot: Bot, segments: list[Any]) -> Any:
         return "".join(str(segment) for segment in segments)
 
-    async def send_text_to_target(self, bot: Bot, target: dict[str, Any], text: str) -> Any:
+    async def send_message_to_target(self, bot: Bot, target: dict[str, Any], message: Any) -> Any:
         raise RuntimeError("无法识别消息目标")
 
 
@@ -346,6 +356,7 @@ __all__ = [
     "register_message_adapter",
     "send_forward_messages",
     "send_forward_texts",
+    "send_message_to_target",
     "send_ark_message",
     "send_text_to_target",
 ]

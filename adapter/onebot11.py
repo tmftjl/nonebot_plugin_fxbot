@@ -53,17 +53,17 @@ class OneBotV11MessageAdapter(MessageAdapter):
 
         return Message(segments)
 
-    async def send_text_to_target(self, bot: Bot, target: dict[str, Any], text: str) -> Any:
+    async def send_message_to_target(self, bot: Bot, target: dict[str, Any], message: Any) -> Any:
         if target.get("group_id") is not None:
             group_id = int(target["group_id"])
             if hasattr(bot, "send_group_msg"):
-                return await bot.send_group_msg(group_id=group_id, message=text)
-            return await bot.call_api("send_group_msg", group_id=group_id, message=text)
+                return await bot.send_group_msg(group_id=group_id, message=message)
+            return await bot.call_api("send_group_msg", group_id=group_id, message=message)
         if target.get("user_id") is not None:
             user_id = int(target["user_id"])
             if hasattr(bot, "send_private_msg"):
-                return await bot.send_private_msg(user_id=user_id, message=text)
-            return await bot.call_api("send_private_msg", user_id=user_id, message=text)
+                return await bot.send_private_msg(user_id=user_id, message=message)
+            return await bot.call_api("send_private_msg", user_id=user_id, message=message)
         raise RuntimeError("无法识别消息目标")
 
     async def send_forward_messages(self, bot: Bot, event: Any, messages: list[Any], *, nickname: str = "FxBot") -> bool:

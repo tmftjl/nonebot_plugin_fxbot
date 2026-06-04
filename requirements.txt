@@ -1,5 +1,6 @@
 nonebot2[fastapi,httpx]
 nonebot-adapter-onebot
+nonebot-plugin-apscheduler
 pydantic
 sqlmodel
 sqlalchemy

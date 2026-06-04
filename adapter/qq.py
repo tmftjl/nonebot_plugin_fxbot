@@ -61,9 +61,8 @@ class QQOfficialMessageAdapter(MessageAdapter):
 
         return Message(segments)
 
-    async def send_text_to_target(self, bot: Bot, target: dict[str, Any], text: str) -> Any:
+    async def send_message_to_target(self, bot: Bot, target: dict[str, Any], message: Any) -> Any:
         if target.get("group_openid") is not None:
-            message = self.build_message(bot, [self.build_segment(bot, "text", text)])
             return await bot.send_to_group(group_openid=str(target["group_openid"]), message=message)
         raise RuntimeError("无法识别消息目标")
 
