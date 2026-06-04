@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import hashlib
 import html
+import json
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from ...utils.http import get_shared_async_client
 from .config import cfg_merchant
+
+SHANGHAI_TZ = timezone(timedelta(hours=8))
 
 
 @dataclass(slots=True)
@@ -72,7 +74,7 @@ def _parse_iso_time(value: str) -> str:
 
 def _current_round() -> tuple[int, str, str]:
     """计算当前北京时间轮次和起止时间。"""
-    now = datetime.now(ZoneInfo("Asia/Shanghai"))
+    now = datetime.now(SHANGHAI_TZ)
     windows = [(1, 8, 11), (2, 12, 15), (3, 16, 19), (4, 20, 23)]
     for round_no, start_hour, end_hour in windows:
         if start_hour <= now.hour <= end_hour:
@@ -90,17 +92,118 @@ def _guess_image(name: str) -> str:
     return ""
 
 
+def _extract_json_object_after_key(body: str, key: str) -> dict[str, Any] | None:
+    """提取页面脚本内指定 key 后面的 JSON 对象。"""
+    marker = f'"{key}":'
+    start = body.find(marker)
+    if start < 0:
+        return None
+    brace_start = body.find("{", start + len(marker))
+    if brace_start < 0:
+        return None
+
+    depth = 0
+    in_string = False
+    escape = False
+    for idx in range(brace_start, len(body)):
+        char = body[idx]
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    data = json.loads(body[brace_start : idx + 1])
+                except Exception:
+                    return None
+                return data if isinstance(data, dict) else None
+    return None
+
+
+def _product_from_mapping(item: dict[str, Any], starttime: str = "", endtime: str = "") -> MerchantProduct | None:
+    """将页面商品对象转换为内部商品结构。"""
+    name = str(item.get("name") or "").strip()
+    if not name:
+        return None
+    price = str(item.get("priceRaw") or item.get("price") or "").strip()
+    limit = str(item.get("limit") or "").strip()
+    detail_parts = [name]
+    if price:
+        detail_parts.append(f"价格 {price}")
+    if limit:
+        detail_parts.append(f"限购 {limit}")
+    return MerchantProduct(
+        name=name,
+        image=str(item.get("image") or "").strip(),
+        starttime=starttime,
+        endtime=endtime,
+        detail=" / ".join(detail_parts),
+    )
+
+
+def _round_window(round_no: int | None) -> tuple[str, str]:
+    """返回轮次起止时间。"""
+    windows = {1: ("08:00", "12:00"), 2: ("12:00", "16:00"), 3: ("16:00", "20:00"), 4: ("20:00", "24:00")}
+    return windows.get(round_no or 0, ("", ""))
+
+
+def _extract_initial_products(body: str, fallback_round: int | None) -> tuple[list[MerchantProduct], str, int | None, str]:
+    """从页面 initial 数据中读取远行商人商品。"""
+    initial = _extract_json_object_after_key(body, "initial")
+    if not initial:
+        return [], "", None, ""
+
+    round_no = initial.get("round")
+    try:
+        round_value = int(round_no) if round_no is not None else None
+    except Exception:
+        round_value = None
+    active_round = round_value or fallback_round
+    starttime, endtime = _round_window(active_round)
+
+    items = initial.get("items")
+    if not isinstance(items, list) or not items:
+        rounds = initial.get("rounds")
+        if isinstance(rounds, dict) and active_round is not None:
+            items = rounds.get(str(active_round)) or rounds.get(active_round) or []
+    products: list[MerchantProduct] = []
+    if isinstance(items, list):
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            product = _product_from_mapping(item, starttime, endtime)
+            if product is not None:
+                products.append(product)
+
+    next_refresh = str(initial.get("nextRefreshBeijing") or "").strip()
+    updated_at = _parse_iso_time(str(initial.get("fetchedAt") or "").strip())
+    return products, next_refresh, active_round, updated_at
+
+
 def _extract_json_products(body: str) -> list[MerchantProduct]:
+    """兜底解析商品 JSON，只匹配带 price/limit/rounds 的商品对象。"""
     products: list[MerchantProduct] = []
     pattern = re.compile(
-        r'"name"\s*:\s*"(?P<name>[^"]{1,40})"(?:(?!\{).){0,900}?"(?:icon|image|imageUrl|icon_url|url)"\s*:\s*"(?P<image>https?://[^"]+)"',
+        r'\{"name"\s*:\s*"(?P<name>[^"]{1,40})"(?:(?!\{).){0,900}?"price(?:Raw)?"\s*:\s*"(?P<price>[^"]*)".{0,900}?"image"\s*:\s*"(?P<image>https?://[^"]+)".{0,900}?"rounds"\s*:\s*\[(?P<rounds>[^\]]*)\]',
         re.S,
     )
     for match in pattern.finditer(body):
         name = html.unescape(match.group("name")).strip()
         if not name or name in {item.name for item in products}:
             continue
-        products.append(MerchantProduct(name=name, image=match.group("image"), starttime="", endtime="", detail=name))
+        price = html.unescape(match.group("price")).strip()
+        detail = f"{name} / 价格 {price}" if price else name
+        products.append(MerchantProduct(name=name, image=match.group("image"), starttime="", endtime="", detail=detail))
         if len(products) >= 8:
             break
     return products
@@ -147,17 +250,22 @@ def parse_merchant_html(source_url: str, body: str) -> MerchantSnapshot:
     round_text = _first([r'"name"\s*:\s*"Current round"\s*,\s*"value"\s*:\s*"?(\d+)"?', r"当前轮次\D+(\d+)"], body)
     next_refresh = _first([r"下一次刷新[^0-9]*(\d{1,2}:\d{2})", r"Next refresh[^0-9]*(\d{1,2}:\d{2})"], body)
     plain_text = _clean_text(body)
-    products = _extract_products(body, plain_text)
     round_no, remaining_time, fallback_next = _current_round()
+    parsed_round = int(round_text) if round_text.isdigit() else round_no or None
+    products, initial_next_refresh, initial_round, initial_updated_at = _extract_initial_products(body, parsed_round)
+    if initial_round is not None:
+        parsed_round = initial_round
+    if not products:
+        products = _extract_products(body, plain_text)
     product_labels = [f"{item.name}|{item.detail}|{item.image}" for item in products]
-    signature_seed = "\n".join([round_text, modified, next_refresh, "\n".join(product_labels)]) or plain_text[:4000]
+    signature_seed = "\n".join([str(parsed_round or ""), modified or initial_updated_at, next_refresh or initial_next_refresh, "\n".join(product_labels)]) or plain_text[:4000]
     signature = hashlib.sha256(signature_seed.encode("utf-8", errors="ignore")).hexdigest()
     return MerchantSnapshot(
         source_url=source_url,
         title=title or "洛克王国世界远行商人",
-        round_no=int(round_text) if round_text.isdigit() else round_no or None,
-        updated_at=modified,
-        next_refresh=next_refresh or fallback_next,
+        round_no=parsed_round,
+        updated_at=initial_updated_at or modified,
+        next_refresh=next_refresh or fallback_next or initial_next_refresh,
         remaining_time=remaining_time,
         products=products,
         plain_text=plain_text,
