@@ -63,7 +63,6 @@ async def render_merchant_image(snapshot: MerchantSnapshot) -> bytes:
     badge = Image.open(TEXTURE_DIR / "badge.png").convert("RGBA")
     banner = Image.open(TEXTURE_DIR / "banner.png").convert("RGBA")
     susume = Image.open(TEXTURE_DIR / "susume.png").convert("RGBA")
-    footer = Image.open(TEXTURE_DIR / "footer.png").convert("RGBA")
     top_img = Image.open(TEXTURE_DIR / "bg_top.jpg").convert("RGB")
     footer_img = Image.open(TEXTURE_DIR / "bg_footer.jpg").convert("RGB")
 
@@ -104,7 +103,6 @@ async def render_merchant_image(snapshot: MerchantSnapshot) -> bytes:
             prop_img.paste(susume, (371, 37), susume)
         img.paste(prop_img, (453 * col + 14, row * 206 + start_height), prop_img)
 
-    img.paste(footer, (277, img_height - 95), footer)
     output = BytesIO()
     img.convert("RGB").save(output, format="PNG")
     return output.getvalue()

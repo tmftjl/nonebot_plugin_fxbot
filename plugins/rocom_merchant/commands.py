@@ -18,7 +18,7 @@ from .renderer import render_merchant_image
 from .store import get_subscription, remove_subscription, upsert_subscription
 
 merchant_query = P.on_regex(
-    r"^远行商人$",
+    r"^#远行商人$",
     name="rocom_merchant_query",
     display_name="远行商人查询",
     priority=5,

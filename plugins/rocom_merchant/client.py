@@ -255,7 +255,7 @@ def parse_merchant_html(source_url: str, body: str) -> MerchantSnapshot:
     products, initial_next_refresh, initial_round, initial_updated_at = _extract_initial_products(body, parsed_round)
     if initial_round is not None:
         parsed_round = initial_round
-    if not products:
+    if not products and not (initial_next_refresh or initial_updated_at or initial_round is not None):
         products = _extract_products(body, plain_text)
     product_labels = [f"{item.name}|{item.detail}|{item.image}" for item in products]
     signature_seed = "\n".join([str(parsed_round or ""), modified or initial_updated_at, next_refresh or initial_next_refresh, "\n".join(product_labels)]) or plain_text[:4000]
