@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from ...utils.http import get_shared_async_client
+from ...utils.http import get_text_with_browser_fallback
 from .config import cfg_merchant
 
 SHANGHAI_TZ = timezone(timedelta(hours=8))
@@ -280,15 +280,16 @@ async def fetch_merchant_snapshot() -> MerchantSnapshot:
     if not source_url:
         raise RuntimeError("未配置远行商人数据页面")
     timeout = max(3.0, float(cfg.get("request_timeout_seconds") or 15))
-    client = await get_shared_async_client()
-    response = await client.get(
-        source_url,
-        timeout=timeout,
-        follow_redirects=True,
-        headers={"User-Agent": "FxBot rocom-merchant/1.0"},
-    )
-    response.raise_for_status()
-    return parse_merchant_html(source_url, response.text)
+    try:
+        body = await get_text_with_browser_fallback(
+            source_url,
+            timeout=timeout,
+            follow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0 FxBot rocom-merchant/1.0"},
+        )
+    except Exception as exc:
+        raise RuntimeError("远行商人数据页面请求失败，请稍后重试") from exc
+    return parse_merchant_html(source_url, body)
 
 
 def format_snapshot(snapshot: MerchantSnapshot) -> str:
@@ -309,4 +310,3 @@ def format_snapshot(snapshot: MerchantSnapshot) -> str:
         lines.append("商品：页面已更新，但未能稳定解析商品明细")
     lines.append(f"来源：{snapshot.source_url}")
     return "\n".join(lines)
-
