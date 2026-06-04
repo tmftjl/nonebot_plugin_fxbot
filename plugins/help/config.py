@@ -3,98 +3,87 @@
 from __future__ import annotations
 
 import json
-from fnmatch import fnmatch
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 RES_DIR = Path(__file__).parent / "resources"
 CFG_DIR = RES_DIR / "help_config"
-CFG_MAP_FILE = CFG_DIR / "command_map.json"
+PLUGIN_DIR = Path(__file__).resolve().parents[1]
 
 
-def _available_configs() -> dict[str, str]:
-    """返回可用帮助配置映射。"""
-    mapping: dict[str, str] = {}
-    if not CFG_DIR.exists():
+@dataclass(frozen=True)
+class HelpConfigRef:
+    """帮助配置引用。"""
+
+    key: str
+    path: Path
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    """读取 JSON 配置。"""
+    data = json.loads(path.read_text(encoding="utf-8-sig"))
+    return data if isinstance(data, dict) else {}
+
+
+def _builtin_config() -> HelpConfigRef:
+    """返回最基础帮助配置。"""
+    return HelpConfigRef("help", CFG_DIR / "help.json")
+
+
+def _plugin_configs() -> dict[str, HelpConfigRef]:
+    """读取各子插件自带帮助配置。"""
+    mapping: dict[str, HelpConfigRef] = {}
+    if not PLUGIN_DIR.exists():
         return mapping
-    for path in CFG_DIR.iterdir():
-        if path.is_file() and path.suffix.lower() == ".json":
-            mapping[path.stem.lower()] = path.name
+    for path in PLUGIN_DIR.iterdir():
+        if path.name == "help" or not path.is_dir():
+            continue
+        config_path = path / "help.json"
+        if not config_path.is_file():
+            continue
+        try:
+            data = _read_json(config_path)
+        except Exception:
+            continue
+        key = str(data.get("key") or path.name).strip().lower()
+        ref = HelpConfigRef(key or path.name.lower(), config_path)
+        if key:
+            mapping[key] = ref
+        for alias in data.get("aliases") or []:
+            if isinstance(alias, str) and alias.strip():
+                mapping[alias.strip().lower()] = ref
     return mapping
 
 
-def _default_cmd_map() -> dict[str, str]:
-    """内置命令到配置文件的映射。"""
-    return {
-        "help": "help.json",
-        "默认": "help.json",
-        "群管": "help.json",
-        "帮助": "help.json",
-        "菜单": "help.json",
-        "功能": "help.json",
-        "admin": "help.json",
-        "fun": "fun.json",
-        "娱乐": "fun.json",
-        "娱乐帮助": "fun.json",
-        "yx": "fun.json",
-        "game": "fun.json",
-        "games": "fun.json",
-    }
+def default_help_config() -> HelpConfigRef:
+    """返回默认帮助配置。"""
+    return _builtin_config()
 
 
-def _load_cmd_map() -> dict[str, str]:
-    """读取帮助图别名映射。"""
-    mapping: dict[str, str] = {}
-    try:
-        if CFG_MAP_FILE.exists():
-            raw = json.loads(CFG_MAP_FILE.read_text(encoding="utf-8-sig"))
-            if isinstance(raw, dict):
-                for key, value in raw.items():
-                    if isinstance(key, str) and isinstance(value, str):
-                        mapping[key.strip().lower()] = value.strip()
-    except Exception:
-        mapping = {}
-    return mapping or _default_cmd_map()
+def resolve_help_config(user_input: str | None) -> HelpConfigRef | None:
+    """根据用户输入解析帮助图配置。"""
+    keyword = str(user_input or "").strip().lower()
+    if not keyword:
+        return _builtin_config()
+    return _plugin_configs().get(keyword)
 
 
-def resolve_help_config(user_input: str | None) -> str | None:
-    """根据用户输入解析帮助图配置文件。"""
-    if not user_input or not str(user_input).strip():
-        return None
-
-    key = str(user_input).strip().lower()
-    cmd_map = _load_cmd_map()
-    if key in cmd_map:
-        return cmd_map[key]
-
-    if key.endswith(".json") and (CFG_DIR / key).exists():
-        return key
-
-    if "*" in key:
-        matched = [cmd_map[item] for item in cmd_map if fnmatch(item, key)]
-        unique = list({item for item in matched})
-        if len(unique) == 1:
-            return unique[0]
+def qq_variant(ref: HelpConfigRef) -> HelpConfigRef | None:
+    """返回 QQ 官方适配器帮助配置变体。"""
+    candidate = ref.path.with_name(f"{ref.path.stem}_qq{ref.path.suffix}")
+    if candidate.is_file():
+        return HelpConfigRef(f"{ref.key}_qq", candidate)
     return None
 
 
-def help_config_filename(config: str | None) -> str:
-    """转换为实际 JSON 文件名。"""
-    if not config or not str(config).strip():
-        return "help.json"
-    name = str(config).strip().lower()
-    if name.endswith(".json"):
-        return name
-    mapped = _load_cmd_map().get(name)
-    if mapped:
-        return mapped
-    return _available_configs().get(name, "help.json")
-
-
-def load_help_config(config: str | None) -> dict[str, Any]:
+def load_help_config(ref: HelpConfigRef | None) -> dict[str, Any]:
     """读取帮助图 JSON 配置。"""
-    file = CFG_DIR / help_config_filename(config)
-    if not file.exists():
+    target = ref or _builtin_config()
+    if not target.path.exists():
         return {}
-    data = json.loads(file.read_text(encoding="utf-8-sig"))
-    return data if isinstance(data, dict) else {}
+    data = _read_json(target.path)
+    data["_config_key"] = target.key
+    data["_config_path"] = str(target.path)
+    data["_base_dir"] = str(target.path.parent)
+    return data

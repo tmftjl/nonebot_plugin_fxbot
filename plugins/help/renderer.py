@@ -19,25 +19,42 @@ _BROWSER = None
 _RENDER_SEM = asyncio.Semaphore(2)
 
 
-def _data_uri(path: Path, mime: str) -> str:
+def _mime(path: Path) -> str:
+    """根据文件后缀推断 MIME。"""
+    suffix = path.suffix.lower()
+    if suffix == ".png":
+        return "image/png"
+    if suffix in {".jpg", ".jpeg"}:
+        return "image/jpeg"
+    if suffix == ".webp":
+        return "image/webp"
+    if suffix == ".woff":
+        return "font/woff"
+    if suffix == ".ttf":
+        return "font/ttf"
+    return "application/octet-stream"
+
+
+def _data_uri(path: Path, mime: str | None = None) -> str:
     """把资源文件转为 data URI。"""
-    return f"data:{mime};base64,{base64.b64encode(path.read_bytes()).decode()}"
+    return f"data:{mime or _mime(path)};base64,{base64.b64encode(path.read_bytes()).decode()}"
 
 
-def _inline_css() -> str:
+def _inline_css(icon: Path | None = None) -> str:
     """内联旧版帮助图 CSS 和字体资源。"""
     common_css = (RES_DIR / "common" / "common.css").read_text(encoding="utf-8")
     help_css = (RES_DIR / "help" / "index.css").read_text(encoding="utf-8")
 
     replacements = {
-        "./font/FZB.woff": _data_uri(RES_DIR / "common" / "font" / "FZB.woff", "font/woff"),
-        "./font/FZB.ttf": _data_uri(RES_DIR / "common" / "font" / "FZB.ttf", "font/ttf"),
-        "./font/NZBZ.woff": _data_uri(RES_DIR / "common" / "font" / "NZBZ.woff", "font/woff"),
-        "./font/NZBZ.ttf": _data_uri(RES_DIR / "common" / "font" / "NZBZ.ttf", "font/ttf"),
+        "./font/FZB.woff": _data_uri(RES_DIR / "common" / "font" / "FZB.woff"),
+        "./font/FZB.ttf": _data_uri(RES_DIR / "common" / "font" / "FZB.ttf"),
+        "./font/NZBZ.woff": _data_uri(RES_DIR / "common" / "font" / "NZBZ.woff"),
+        "./font/NZBZ.ttf": _data_uri(RES_DIR / "common" / "font" / "NZBZ.ttf"),
     }
     for old, new in replacements.items():
         common_css = common_css.replace(old, new)
-    help_css = help_css.replace("icon.png", _data_uri(RES_DIR / "help" / "icon.png", "image/png"))
+    icon_path = icon if icon and icon.is_file() else RES_DIR / "help" / "icon.png"
+    help_css = help_css.replace("icon.png", _data_uri(icon_path))
     return f"<style>{common_css}\n{help_css}</style>"
 
 
@@ -46,8 +63,9 @@ def _build_html(
     sub_title: str,
     groups: list[dict[str, Any]],
     col_count: int,
-    bg_file: str,
+    background: Path,
     footer: str | None = None,
+    icon: Path | None = None,
 ) -> str:
     """构造旧版帮助图 HTML。"""
 
@@ -78,16 +96,14 @@ def _build_html(
         table = f"<div class='help-table'>{''.join(rows)}</div>" if rows else ""
         return f"<div class='cont-box'><div class='help-group'>{group.get('group', '')}</div>{table}</div>"
 
-    bg_path = RES_DIR / "help" / "imgs" / bg_file
-    mime = "image/png" if bg_path.suffix.lower() == ".png" else "image/jpeg"
-    bg_uri = _data_uri(bg_path, mime)
+    bg_uri = _data_uri(background)
     footer_text = footer if footer and str(footer).strip() else "Created by dggb | Rendered by Playwright"
     return f"""
     <!doctype html>
     <html>
       <head>
         <meta charset='utf-8'/>
-        {_inline_css()}
+        {_inline_css(icon)}
         <style>.container {{ background: url('{bg_uri}') center !important; background-size: cover !important; }}</style>
       </head>
       <body>
@@ -113,6 +129,8 @@ async def render_help_image(
     col_count: int = 3,
     scale: float = 1.2,
     footer: str | None = None,
+    background: Path | None = None,
+    icon: Path | None = None,
 ) -> bytes:
     """按旧版排版渲染帮助图。"""
 
@@ -138,8 +156,9 @@ async def render_help_image(
 
     img_dir = RES_DIR / "help" / "imgs"
     backgrounds = [path.name for path in img_dir.iterdir() if path.is_file()]
-    bg = backgrounds[0] if backgrounds else "default.jpg"
-    html = _build_html(title, sub_title, groups, max(col_count, 1), bg, footer)
+    default_bg = img_dir / (backgrounds[0] if backgrounds else "default.jpg")
+    bg = background if background and background.is_file() else default_bg
+    html = _build_html(title, sub_title, groups, max(col_count, 1), bg, footer, icon)
 
     async def ensure_browser():
         global _PW, _BROWSER

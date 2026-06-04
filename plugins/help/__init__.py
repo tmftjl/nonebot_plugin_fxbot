@@ -14,7 +14,7 @@ from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
 from ...adapter import build_message, build_message_segment, is_qq_official
 from ...utils.fonts import load_font
-from .config import CFG_DIR, help_config_filename, load_help_config, resolve_help_config
+from .config import HelpConfigRef, default_help_config, load_help_config, qq_variant, resolve_help_config
 
 try:
     from .renderer import render_help_image
@@ -24,7 +24,7 @@ except Exception:  # pragma: no cover
 P = Plugin("help", display_name="帮助", enabled=True, level=PermLevel.LOW, scene=PermScene.ALL)
 
 help_cmd = P.on_regex(
-    r"^(?:#|＃|/)(.*?)\s*(帮助|菜单|功能)",
+    r"^(?:#|＃|/)(.*?)帮助$",
     name="help",
     display_name="帮助",
     priority=5,
@@ -34,19 +34,25 @@ help_cmd = P.on_regex(
 )
 
 
-def _resolve_config_name(bot: Bot, keyword: str | None) -> str | None:
-    """解析帮助图配置名称。"""
+def _resolve_config_ref(bot: Bot, keyword: str | None) -> HelpConfigRef | None:
+    """解析帮助图配置。"""
     resolved = resolve_help_config(keyword)
     if is_qq_official(bot):
         if resolved is None:
-            return "help_qq.json"
-        if resolved.endswith(".json"):
-            qq_variant = resolved.replace(".json", "_qq.json")
-            if (CFG_DIR / qq_variant).exists():
-                return qq_variant
-            if resolved == "help.json":
-                return "help_qq.json"
+            return qq_variant(default_help_config()) or default_help_config()
+        return qq_variant(resolved) or resolved
     return resolved
+
+
+def _asset_path(config: dict[str, Any], field: str) -> Path | None:
+    """解析帮助配置中的资源路径。"""
+    value = str(config.get(field) or "").strip()
+    if not value:
+        return None
+    path = Path(value)
+    if not path.is_absolute():
+        path = Path(str(config.get("_base_dir") or "")) / path
+    return path if path.is_file() else None
 
 
 def _fallback_image(title: str, sub_title: str, groups_data: list[dict[str, Any]]) -> bytes:
@@ -77,28 +83,30 @@ def _fallback_image(title: str, sub_title: str, groups_data: list[dict[str, Any]
 async def _handle_help(matcher: Matcher, bot: Bot, groups: tuple = RegexGroup()) -> None:
     """发送旧版排版帮助图。"""
     keyword = str(groups[0]).strip() if groups and groups[0] else None
-    resolved_name = _resolve_config_name(bot, keyword)
-    if keyword and resolved_name is None:
+    resolved_ref = _resolve_config_ref(bot, keyword)
+    if keyword and resolved_ref is None:
         await matcher.skip()
 
-    config = load_help_config(resolved_name)
+    config = load_help_config(resolved_ref)
     title = str(config.get("title") or "帮助")
     sub_title = str(config.get("sub_title") or (keyword or ""))
     footer = config.get("footer")
     col_count = int(config.get("col_count", 3) or 3)
     groups_data = config.get("groups", []) or []
+    background = _asset_path(config, "background")
+    icon = _asset_path(config, "icon")
 
     tmp_dir = Path(__file__).parent / "temp"
     tmp_dir.mkdir(parents=True, exist_ok=True)
-    cfg_filename = help_config_filename(resolved_name)
-    cache_file = tmp_dir / cfg_filename.replace(".json", ".png")
-    cfg_path = CFG_DIR / cfg_filename
+    config_key = str(config.get("_config_key") or "help")
+    cache_file = tmp_dir / f"{config_key}.png"
+    cfg_path = Path(str(config.get("_config_path") or ""))
 
     try:
         code_files = [Path(__file__), Path(__file__).parent / "renderer.py", Path(__file__).parent / "config.py"]
-        code_mtime = max((path.stat().st_mtime for path in code_files if path.exists()), default=0)
-        cfg_mtime = cfg_path.stat().st_mtime if cfg_path.exists() else 0
-        cache_valid = cache_file.exists() and cache_file.stat().st_mtime >= max(cfg_mtime, code_mtime)
+        asset_files = [path for path in [background, icon] if path is not None]
+        mtimes = [path.stat().st_mtime for path in [*code_files, cfg_path, *asset_files] if path.exists()]
+        cache_valid = cache_file.exists() and cache_file.stat().st_mtime >= max(mtimes, default=0)
     except Exception:
         cache_valid = False
 
@@ -110,6 +118,8 @@ async def _handle_help(matcher: Matcher, bot: Bot, groups: tuple = RegexGroup())
             groups=groups_data,
             col_count=col_count,
             footer=str(footer) if footer is not None else None,
+            background=background,
+            icon=icon,
         )
         if image_bytes:
             cache_file.write_bytes(image_bytes)
