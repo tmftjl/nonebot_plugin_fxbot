@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-from nonebot import require
 from nonebot.plugin import PluginMetadata
 
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
-
-require("nonebot_plugin_apscheduler")
 
 __plugin_meta__ = PluginMetadata(
     name="远行商人推送",
@@ -26,6 +23,8 @@ P = Plugin("rocom_merchant", display_name="远行商人", enabled=True, level=Pe
 
 from . import commands as commands
 from . import config as config
-from . import scheduler as scheduler
+from .scheduler import setup_rocom_merchant_tasks
+
+setup_rocom_merchant_tasks()
 
 __all__ = ["P"]

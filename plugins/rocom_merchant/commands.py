@@ -8,7 +8,8 @@ from nonebot.adapters import Bot, Event
 from nonebot.matcher import Matcher
 from nonebot.params import RegexGroup
 
-from ...adapter import build_message, build_message_segment, event_group_id, event_user_id, extract_message_target
+from ...adapter import build_message, build_message_segment, extract_message_target
+from ...adapter.support import event_group_id, event_user_id
 from ...permission import PermLevel, PermScene
 from . import P
 from .client import fetch_merchant_snapshot

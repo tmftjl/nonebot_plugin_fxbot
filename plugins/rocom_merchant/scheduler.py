@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from nonebot import get_bots, logger
-from nonebot_plugin_apscheduler import scheduler
 
 from ...adapter import build_message, build_message_segment, send_message_to_target
 from .client import fetch_merchant_snapshot, snapshot_matches
@@ -62,16 +61,33 @@ async def check_and_push() -> None:
         logger.info(f"[rocom_merchant] 已推送远行商人刷新：{pushed} 个目标")
 
 
-@scheduler.scheduled_job(
-    "interval",
-    seconds=max(60, int(cfg_merchant().get("check_interval_seconds") or 300)),
-    id="rocom_merchant_check",
-    coalesce=True,
-    max_instances=1,
-)
 async def _scheduled_check() -> None:
     """定时检查远行商人刷新。"""
     try:
         await check_and_push()
     except Exception:
         logger.opt(exception=True).warning("[rocom_merchant] 远行商人推送检查失败")
+
+
+def setup_rocom_merchant_tasks() -> None:
+    """注册远行商人推送任务；缺少 scheduler 时跳过。"""
+    try:
+        from nonebot_plugin_apscheduler import scheduler
+    except Exception:
+        logger.warning("[rocom_merchant] nonebot-plugin-apscheduler 未安装或未加载，跳过定时任务")
+        return
+
+    cfg = cfg_merchant()
+    if not bool(cfg.get("enabled", True)):
+        return
+    interval = max(60, int(cfg.get("check_interval_seconds") or 300))
+    scheduler.add_job(
+        _scheduled_check,
+        trigger="interval",
+        seconds=interval,
+        id="rocom_merchant_check",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+    )
+    logger.info(f"[rocom_merchant] 定时任务已注册: 每 {interval} 秒检查一次")
