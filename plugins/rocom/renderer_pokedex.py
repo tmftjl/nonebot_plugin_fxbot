@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import math
-import textwrap
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -33,6 +32,17 @@ SKILL_32 = load_font(FONT_DIR / "skill_origin.ttf", 32)
 
 TEXT_COLOR = (100, 92, 79)
 WHITE = (255, 255, 255)
+IMAGE_WIDTH = 1200
+SECTION_HEIGHT = 70
+TEXT_LINE_HEIGHT = 42
+INFO_TEXT_X = 90
+INFO_TEXT_MAX_WIDTH = 1020
+FEATURE_TEXT_X = 230
+FEATURE_TEXT_MAX_WIDTH = 880
+FEATURE_ICON_SIZE = 121
+FEATURE_TITLE_CENTER_OFFSET = 30
+FEATURE_DESC_CENTER_OFFSET = 82
+FEATURE_BOTTOM_PADDING = 20
 
 TYPE_COLORS = {
     "冰": (95, 173, 221),
@@ -69,16 +79,36 @@ EVOLUTION_X = {
 }
 
 
+_MEASURE_DRAW = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+
+
 def _asset(name: str) -> Image.Image:
     return Image.open(POKEDEX_DIR / name).convert("RGBA")
 
 
-def _wrap(text: str, width: int) -> list[str]:
+def _text_width(text: str, font: Any) -> float:
+    return float(_MEASURE_DRAW.textlength(text, font=font))
+
+
+def _wrap_text(text: str, font: Any, max_width: int) -> list[str]:
+    """按像素宽度给中英文混排文本换行。"""
     if not text:
         return []
     lines: list[str] = []
     for part in str(text).splitlines():
-        lines.extend(textwrap.wrap(part, width=width, break_long_words=False, replace_whitespace=False) or [""])
+        if not part:
+            lines.append("")
+            continue
+        line = ""
+        for char in part:
+            candidate = line + char
+            if line and _text_width(candidate, font) > max_width:
+                lines.append(line.rstrip())
+                line = char.lstrip()
+            else:
+                line = candidate
+        if line:
+            lines.append(line.rstrip())
     return lines
 
 
@@ -138,7 +168,7 @@ def _section(img: Image.Image, draw: ImageDraw.ImageDraw, y: int, title: str) ->
     rocom_title = _asset("a_title.png")
     img.paste(rocom_title, (68, y), rocom_title)
     draw.text((134, y + 30), title, WHITE, RC_28, "lm")
-    return y + 70
+    return y + SECTION_HEIGHT
 
 
 def _draw_type_badges(img: Image.Image, draw: ImageDraw.ImageDraw, pet: dict[str, Any]) -> None:
@@ -232,6 +262,12 @@ def _draw_skill_group(img: Image.Image, draw: ImageDraw.ImageDraw, y: int, title
     return y + (math.ceil(len(skills) / 5) * 99) + 10
 
 
+def _skill_group_height(skills: list[dict[str, Any]]) -> int:
+    if not skills:
+        return 0
+    return SECTION_HEIGHT + math.ceil(len(skills) / 5) * 99 + 10
+
+
 async def render_pokedex_image(pet: dict[str, Any], pet_id: str) -> bytes:
     """按照 RocomUID 图鉴布局生成图片。"""
     level_skills = [item for item in pet.get("level_skill_list") or [] if isinstance(item, dict)]
@@ -239,27 +275,30 @@ async def render_pokedex_image(pet: dict[str, Any], pet_id: str) -> bytes:
     machine_skills = [item for item in pet.get("machine_skill_list") or [] if isinstance(item, dict)]
     feature = pet.get("feature") or {}
     feature_name = str(feature.get("name") or "")
-    feature_lines = _wrap(str(feature.get("desc") or ""), 28)
-    desc_lines = _wrap(str(pet.get("description") or ""), 31)
+    feature_lines = _wrap_text(str(feature.get("desc") or ""), SKILL_32, FEATURE_TEXT_MAX_WIDTH)
+    desc_lines = _wrap_text(str(pet.get("description") or ""), SKILL_32, INFO_TEXT_MAX_WIDTH)
 
-    feature_height = max(210, len(feature_lines) * 40 + 120)
-    info_height = len(desc_lines) * 40 + (40 if pet.get("egg_group") else 0)
+    info_body_height = len(desc_lines) * TEXT_LINE_HEIGHT + (TEXT_LINE_HEIGHT if pet.get("egg_group") else 0) + 15
+    feature_line_count = len(feature_lines) or 1
+    feature_body_height = max(
+        FEATURE_ICON_SIZE + FEATURE_BOTTOM_PADDING,
+        FEATURE_DESC_CENTER_OFFSET + feature_line_count * TEXT_LINE_HEIGHT + FEATURE_BOTTOM_PADDING,
+    )
     bg_height = 1030
-    bg_height += math.ceil(len(level_skills) / 5) * 99 + 80 if level_skills else 0
-    bg_height += math.ceil(len(blood_skills) / 5) * 99 + 80 if blood_skills else 0
-    bg_height += math.ceil(len(machine_skills) / 5) * 99 + 80 if machine_skills else 0
-    bg_height += feature_height + 80
-    bg_height += info_height + 80
+    bg_height += SECTION_HEIGHT + info_body_height
+    bg_height += SECTION_HEIGHT + feature_body_height + 15
+    bg_height += _skill_group_height(level_skills)
+    bg_height += _skill_group_height(blood_skills)
+    bg_height += _skill_group_height(machine_skills)
     bg_height += 40
 
-    img = Image.open(POKEDEX_DIR / "bg.jpg").convert("RGB").resize((1200, bg_height))
+    img = Image.open(POKEDEX_DIR / "bg.jpg").convert("RGB").resize((IMAGE_WIDTH, bg_height))
     title_img = _asset("title.png")
     pet_bg_mask = _asset("pet_bg.png").resize((575, 575))
     img.paste(title_img, (0, 0), title_img)
     draw = ImageDraw.Draw(img)
     draw.text((600, 96), "精灵图鉴", WHITE, RC_72, "mm")
     draw.text((600, 260), _pet_name(pet), TEXT_COLOR, RC_64, "mm")
-    draw.text((1050, 295), f"#{pet_id}", TEXT_COLOR, RC_30, "rm")
 
     first_type = str((pet.get("unit_type") or ["无"])[0])
     pet_bg = Image.new("RGBA", (575, 575), TYPE_COLORS.get(first_type, TYPE_COLORS["无"]))
@@ -274,24 +313,24 @@ async def render_pokedex_image(pet: dict[str, Any], pet_id: str) -> bytes:
     y = 1030
     y = _section(img, draw, y, "精灵信息")
     if pet.get("egg_group"):
-        draw.text((90, y), f"蛋组：{' '.join(str(item) for item in pet.get('egg_group') or [])}", TEXT_COLOR, RC_34, "lm")
-        y += 40
+        draw.text((INFO_TEXT_X, y), f"蛋组：{' '.join(str(item) for item in pet.get('egg_group') or [])}", TEXT_COLOR, RC_34, "lm")
+        y += TEXT_LINE_HEIGHT
     for line in desc_lines:
-        draw.text((90, y), line, TEXT_COLOR, SKILL_32, "lm")
-        y += 40
+        draw.text((INFO_TEXT_X, y), line, TEXT_COLOR, SKILL_32, "lm")
+        y += TEXT_LINE_HEIGHT
     y += 15
 
     y = _section(img, draw, y, "精灵特性")
     skill_mask = _asset("skill_mask.png")
     tx_img = _load_character_icon(feature_name)
     img.paste(tx_img, (90, y), skill_mask)
-    y += 20
-    draw.text((220, y), feature_name or "暂无特性", (0, 0, 0), RC_40, "lm")
-    line_y = 20
+    feature_body_y = y
+    draw.text((FEATURE_TEXT_X, feature_body_y + FEATURE_TITLE_CENTER_OFFSET), feature_name or "暂无特性", (0, 0, 0), RC_40, "lm")
+    line_y = FEATURE_DESC_CENTER_OFFSET
     for line in feature_lines or ["暂无特性说明"]:
-        draw.text((220, y + line_y), line, TEXT_COLOR, SKILL_32, "lm")
-        line_y += 40
-    y += max(110, line_y)
+        draw.text((FEATURE_TEXT_X, feature_body_y + line_y), line, TEXT_COLOR, SKILL_32, "lm")
+        line_y += TEXT_LINE_HEIGHT
+    y = feature_body_y + feature_body_height + 15
 
     y = _draw_skill_group(img, draw, y, "等级技能", level_skills)
     y = _draw_skill_group(img, draw, y, "血脉技能", blood_skills)
