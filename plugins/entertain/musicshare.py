@@ -141,7 +141,7 @@ def _normalize_platform(alias: str | None) -> Platform:
 
 async def _has_active_select_session(event: Event, state: T_State) -> bool:
     """仅在当前用户有未过期点歌结果时匹配 #序号。"""
-    matched = re.fullmatch(r"#(\d+)", event.get_plaintext().strip())
+    matched = re.fullmatch(r"[#＃](\d+)", event.get_plaintext().strip())
     if not matched:
         return False
 
@@ -795,7 +795,7 @@ def _draw_music_list(platform: Platform, keyword: str, songs: list[Song]) -> byt
 
 
 login_matcher = P.on_regex(
-    r"^#(?:音乐登录|点歌登录)\s*(qq|网易云|netease)?\s*$",
+    r"^[#＃](?:音乐登录|点歌登录)\s*(qq|网易云|netease)?\s*$",
     name="music_login",
     display_name="音乐登录",
     priority=4,
@@ -805,7 +805,7 @@ login_matcher = P.on_regex(
 )
 
 login_poll_matcher = P.on_regex(
-    r"^#(?:音乐登录状态|点歌登录状态)\s*(qq|网易云|netease)?\s*$",
+    r"^[#＃](?:音乐登录状态|点歌登录状态)\s*(qq|网易云|netease)?\s*$",
     name="music_login_poll",
     display_name="音乐登录状态",
     priority=4,
@@ -815,7 +815,7 @@ login_poll_matcher = P.on_regex(
 )
 
 search_matcher = P.on_regex(
-    r"^#点歌(?:(qq|网易云|netease))?\s*(.*)",
+    r"^[#＃]点歌(?:(qq|网易云|netease))?\s*(.*)",
     name="search",
     display_name="点歌",
     priority=5,
@@ -825,7 +825,7 @@ search_matcher = P.on_regex(
 )
 
 select_matcher = P.on_regex(
-    r"^#(\d+)\s*$",
+    r"^[#＃](\d+)\s*$",
     rule=Rule(_has_active_select_session),
     name="select",
     display_name="选择歌",

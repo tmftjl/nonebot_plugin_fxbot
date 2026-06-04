@@ -229,7 +229,7 @@ class BannedWordsManager:
 
 
 banword_add = P.on_regex(
-    r"^#新增(精确|模糊|正则)?(禁|踢|撤)?违禁词\s*(.+)",
+    r"^[#＃]新增(精确|模糊|正则)?(禁|踢|撤)?违禁词\s*(.+)",
     name="banword_add",
     display_name="新增违禁词",
     priority=5,
@@ -239,7 +239,7 @@ banword_add = P.on_regex(
 )
 
 banword_del = P.on_regex(
-    r"^#删除违禁词\s*(.+)",
+    r"^[#＃]删除违禁词\s*(.+)",
     name="banword_del",
     display_name="删除违禁词",
     priority=5,
@@ -249,7 +249,7 @@ banword_del = P.on_regex(
 )
 
 banword_clear = P.on_regex(
-    r"^#清空违禁词",
+    r"^[#＃]清空违禁词",
     name="banword_clear",
     display_name="清空违禁词",
     priority=5,
@@ -259,7 +259,7 @@ banword_clear = P.on_regex(
 )
 
 banword_list = P.on_regex(
-    r"^#违禁词列表",
+    r"^[#＃]违禁词列表",
     name="banword_list",
     display_name="违禁词列表",
     priority=5,
@@ -269,7 +269,7 @@ banword_list = P.on_regex(
 )
 
 banword_on = P.on_regex(
-    r"^#开启违禁词",
+    r"^[#＃]开启违禁词",
     name="banword_on",
     display_name="开启违禁词",
     priority=5,
@@ -279,7 +279,7 @@ banword_on = P.on_regex(
 )
 
 banword_off = P.on_regex(
-    r"^#关闭违禁词",
+    r"^[#＃]关闭违禁词",
     name="banword_off",
     display_name="关闭违禁词",
     priority=5,
@@ -289,7 +289,7 @@ banword_off = P.on_regex(
 )
 
 banword_mute_time = P.on_regex(
-    r"^#设置违禁词禁言时间\s*(\d+)",
+    r"^[#＃]设置违禁词禁言时间\s*(\d+)",
     name="banword_mute_time",
     display_name="设置违禁词禁言时间",
     priority=5,

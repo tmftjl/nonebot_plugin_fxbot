@@ -15,7 +15,7 @@ from .config import cfg_api_urls
 P = Plugin("entertain", display_name="娱乐", enabled=True, level=PermLevel.LOW, scene=PermScene.ALL)
 
 doro_cmd = P.on_regex(
-    r"^#?(?:抽取|随机)?(?:今日)?doro结局",
+    r"^[#＃]?(?:抽取|随机)?(?:今日)?doro结局",
     name="draw",
     display_name="doro结局",
     priority=5,

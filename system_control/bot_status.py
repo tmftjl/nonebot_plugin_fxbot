@@ -50,7 +50,7 @@ _MESSAGE_CACHE_DATE = datetime.now().strftime("%Y-%m-%d")
 _DEFAULT_STATS_API_URL = "http://127.0.0.1:8000"
 
 status_cmd = P.on_regex(
-    r"^#状态$",
+    r"^[#＃]状态$",
     name="system_status",
     display_name="Bot状态",
     priority=5,

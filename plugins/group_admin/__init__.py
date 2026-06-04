@@ -336,7 +336,7 @@ async def _get_mute_members(bot: Bot, group_id: str) -> list[dict[str, Any]]:
 
 
 mute_cmd = P.on_regex(
-    r"^#禁言\s*(\d+)?\s*(.+)?",
+    r"^[#＃]禁言\s*(\d+)?\s*(.+)?",
     name="mute_member",
     display_name="禁言",
     priority=5,
@@ -379,7 +379,7 @@ async def _handle_mute(matcher: Matcher, bot: Bot, event: Event, groups: tuple =
 
 
 unmute_cmd = P.on_regex(
-    r"^#解禁\s*(.+)?",
+    r"^[#＃]解禁\s*(.+)?",
     name="unmute_member",
     display_name="解禁",
     priority=5,
@@ -419,7 +419,7 @@ async def _handle_unmute(matcher: Matcher, bot: Bot, event: Event, groups: tuple
 
 
 kick_cmd = P.on_regex(
-    r"^#踢\s*(.+)",
+    r"^[#＃]踢\s*(.+)",
     name="kick_member",
     display_name="踢人",
     priority=5,
@@ -443,7 +443,7 @@ async def _handle_kick(matcher: Matcher, bot: Bot, event: Event) -> None:
 
 
 title_cmd = P.on_regex(
-    r"^#设置头衔\s*(.+)",
+    r"^[#＃]设置头衔\s*(.+)",
     name="set_title",
     display_name="设置头衔",
     priority=5,
@@ -459,7 +459,7 @@ async def _handle_title(matcher: Matcher, bot: Bot, event: Event) -> None:
     group_id = _gid(event)
     if not group_id:
         await matcher.finish("请在群聊中使用")
-    text = re.sub(r"^#设置头衔\s*", "", _plain_text(event)).strip()
+    text = re.sub(r"^[#＃]设置头衔\s*", "", _plain_text(event)).strip()
     target_id = _extract_target_id(event, text)
     if target_id is None:
         await matcher.finish("请 @ 目标成员或提供 QQ 号")
@@ -471,7 +471,7 @@ async def _handle_title(matcher: Matcher, bot: Bot, event: Event) -> None:
 
 
 ban_kick_cmd = P.on_regex(
-    r"^#拉黑踢\s*(.+)",
+    r"^[#＃]拉黑踢\s*(.+)",
     name="ban_kick_member",
     display_name="拉黑踢",
     priority=5,
@@ -495,7 +495,7 @@ async def _handle_ban_kick(matcher: Matcher, bot: Bot, event: Event) -> None:
 
 
 mute_all_on_cmd = P.on_regex(
-    r"^#全(体|员)禁言",
+    r"^[#＃]全(体|员)禁言",
     name="mute_all_on",
     display_name="全体禁言",
     priority=5,
@@ -505,7 +505,7 @@ mute_all_on_cmd = P.on_regex(
 )
 
 mute_all_off_cmd = P.on_regex(
-    r"^#全(体|员)解禁",
+    r"^[#＃]全(体|员)解禁",
     name="mute_all_off",
     display_name="全体解禁",
     priority=5,
@@ -536,7 +536,7 @@ async def _handle_mute_all_off(matcher: Matcher, bot: Bot, event: Event) -> None
 
 
 mute_list_cmd = P.on_regex(
-    r"^#(获取|查看)?禁言列表",
+    r"^[#＃](获取|查看)?禁言列表",
     name="mute_list",
     display_name="禁言列表",
     priority=5,
@@ -546,7 +546,7 @@ mute_list_cmd = P.on_regex(
 )
 
 unmute_all_cmd = P.on_regex(
-    r"^#解除全部禁言",
+    r"^[#＃]解除全部禁言",
     name="unmute_all",
     display_name="解除全部禁言",
     priority=5,
@@ -605,7 +605,7 @@ async def _handle_unmute_all(matcher: Matcher, bot: Bot, event: Event) -> None:
 
 
 self_mute_cmd = P.on_regex(
-    r"^#?我要(自闭|禅定)\s*(.+)?",
+    r"^[#＃]?我要(自闭|禅定)\s*(.+)?",
     name="self_mute",
     display_name="我要自闭",
     priority=5,
@@ -631,7 +631,7 @@ async def _handle_self_mute(matcher: Matcher, bot: Bot, event: Event, groups: tu
 
 
 apply_title_cmd = P.on_regex(
-    r"^#申请头衔\s*(.+)",
+    r"^[#＃]申请头衔\s*(.+)",
     name="apply_title",
     display_name="申请头衔",
     priority=5,
@@ -641,7 +641,7 @@ apply_title_cmd = P.on_regex(
 )
 
 remove_title_cmd = P.on_regex(
-    r"^#(?:删除|取消)头衔\s*(.+)?",
+    r"^[#＃](?:删除|取消)头衔\s*(.+)?",
     name="remove_title",
     display_name="删除头衔",
     priority=5,
@@ -657,7 +657,7 @@ async def _handle_apply_title(matcher: Matcher, bot: Bot, event: Event) -> None:
     group_id = _gid(event)
     if not group_id:
         await matcher.finish("请在群聊中使用")
-    title = re.sub(r"^#申请头衔\s*", "", _plain_text(event)).strip()
+    title = re.sub(r"^[#＃]申请头衔\s*", "", _plain_text(event)).strip()
     if not title:
         await matcher.finish("请提供头衔内容")
     result = await _set_title(bot, group_id, int(_uid(event)), title, operator_id=_uid(event))
@@ -688,7 +688,7 @@ def _reply_message_id(event: Event) -> int | None:
 
 
 set_admin_cmd = P.on_regex(
-    r"^#设置管理\s*(.+)",
+    r"^[#＃]设置管理\s*(.+)",
     name="set_admin",
     display_name="设置管理员",
     priority=5,
@@ -698,7 +698,7 @@ set_admin_cmd = P.on_regex(
 )
 
 unset_admin_cmd = P.on_regex(
-    r"^#取消管理\s*(.+)",
+    r"^[#＃]取消管理\s*(.+)",
     name="unset_admin",
     display_name="取消管理员",
     priority=5,
@@ -708,7 +708,7 @@ unset_admin_cmd = P.on_regex(
 )
 
 recall_msg_cmd = P.on_regex(
-    r"^#撤回",
+    r"^[#＃]撤回",
     name="recall_msg",
     display_name="撤回消息",
     priority=5,
@@ -718,7 +718,7 @@ recall_msg_cmd = P.on_regex(
 )
 
 set_essence_cmd = P.on_regex(
-    r"^#(?:设置精华|设精)",
+    r"^[#＃](?:设置精华|设精)",
     name="set_essence",
     display_name="设置精华",
     priority=5,
@@ -728,7 +728,7 @@ set_essence_cmd = P.on_regex(
 )
 
 unset_essence_cmd = P.on_regex(
-    r"^#取消精华",
+    r"^[#＃]取消精华",
     name="unset_essence",
     display_name="取消精华",
     priority=5,

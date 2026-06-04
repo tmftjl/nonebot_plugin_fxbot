@@ -85,7 +85,7 @@ video_matcher = P.on_message(
 )
 
 group_toggle_cmd = P.on_regex(
-    r"^#?(开启|关闭)解析$",
+    r"^[#＃]?(开启|关闭)解析$",
     name="group_toggle",
     display_name="群解析开关",
     priority=5,
@@ -95,7 +95,7 @@ group_toggle_cmd = P.on_regex(
 )
 
 global_toggle_cmd = P.on_regex(
-    r"^#?全局(开启|关闭)解析$",
+    r"^[#＃]?全局(开启|关闭)解析$",
     name="global_toggle",
     display_name="全局解析开关",
     priority=5,
@@ -106,7 +106,7 @@ global_toggle_cmd = P.on_regex(
 )
 
 bili_login_cmd = P.on_regex(
-    r"^#?(?:B站|b站|哔哩哔哩)登录$",
+    r"^[#＃]?(?:B站|b站|哔哩哔哩)登录$",
     name="bilibili_login",
     display_name="B站扫码登录",
     priority=5,

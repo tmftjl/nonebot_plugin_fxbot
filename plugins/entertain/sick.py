@@ -14,7 +14,7 @@ from .config import cfg_api_urls
 P = Plugin("entertain", display_name="娱乐", enabled=True, level=PermLevel.LOW, scene=PermScene.ALL)
 
 sick_cmd = P.on_regex(
-    r"^(?:#|/)?发病语录",
+    r"^(?:#|＃|/)?发病语录",
     name="get",
     display_name="发病语录",
     priority=5,

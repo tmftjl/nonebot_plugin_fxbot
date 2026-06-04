@@ -14,7 +14,7 @@ from .renderer import render_merchant_image
 from .store import get_subscription, remove_subscription, upsert_subscription
 
 merchant_query = P.on_regex(
-    r"^#远行商人$",
+    r"^[#＃]远行商人$",
     name="rocom_merchant_query",
     display_name="远行商人查询",
     priority=5,
@@ -24,7 +24,7 @@ merchant_query = P.on_regex(
 )
 
 merchant_subscribe = P.on_regex(
-    r"^(?:#|/)开启远行商人$",
+    r"^(?:#|＃|/)开启远行商人$",
     name="rocom_merchant_subscribe",
     display_name="订阅远行商人",
     priority=5,
@@ -34,7 +34,7 @@ merchant_subscribe = P.on_regex(
 )
 
 merchant_unsubscribe = P.on_regex(
-    r"^(?:#|/)关闭远行商人$",
+    r"^(?:#|＃|/)关闭远行商人$",
     name="rocom_merchant_unsubscribe",
     display_name="取消订阅远行商人",
     priority=5,
@@ -44,7 +44,7 @@ merchant_unsubscribe = P.on_regex(
 )
 
 merchant_status = P.on_regex(
-    r"^(?:#|/)远行商人订阅$",
+    r"^(?:#|＃|/)远行商人订阅$",
     name="rocom_merchant_subscription",
     display_name="远行商人订阅状态",
     priority=5,

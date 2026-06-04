@@ -23,7 +23,7 @@ _UPDATE_LOG_PREFIX = "[系统命令·更新并重启]"
 _GIT_UP_TO_DATE_MARKERS = ("Already up to date", "Already up-to-date", "已经是最新")
 
 restart_cmd = P.on_regex(
-    r"^#重启$",
+    r"^[#＃]重启$",
     name="system_restart",
     display_name="重启",
     priority=1,
@@ -34,7 +34,7 @@ restart_cmd = P.on_regex(
 )
 
 shutdown_cmd = P.on_regex(
-    r"^#关机$",
+    r"^[#＃]关机$",
     name="system_shutdown",
     display_name="关机",
     priority=1,
@@ -45,7 +45,7 @@ shutdown_cmd = P.on_regex(
 )
 
 update_cmd = P.on_regex(
-    r"^#更新$",
+    r"^[#＃]更新$",
     name="system_update",
     display_name="更新并重启",
     priority=1,

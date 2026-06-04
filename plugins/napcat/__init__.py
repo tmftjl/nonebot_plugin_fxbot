@@ -17,7 +17,7 @@ P = Plugin("napcat", display_name="NapCat", enabled=True, level=PermLevel.LOW, s
 MAX_LIKE_TIMES = 10
 
 like_cmd = P.on_regex(
-    r"^#赞我",
+    r"^[#＃]赞我",
     name="like",
     display_name="点赞",
     priority=5,

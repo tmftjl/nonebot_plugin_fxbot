@@ -21,8 +21,7 @@
         {"icon": 6, "title": "#看看腿", "desc": "看看腿"},
         {"icon": 8, "title": "#随机doro", "desc": "随机doro"},
         {"icon": 10, "title": "#来张黑丝", "desc": "随机黑丝"},
-        {"icon": 12, "title": "#盒", "desc": "开盒自己或群友"},
-        {"icon": 14, "title": "#联系主人", "desc": "联系主人"}
+        {"icon": 12, "title": "#盒", "desc": "开盒自己或群友"}
       ]
     },
     {

@@ -24,7 +24,7 @@ except Exception:  # pragma: no cover
 P = Plugin("help", display_name="帮助", enabled=True, level=PermLevel.LOW, scene=PermScene.ALL)
 
 help_cmd = P.on_regex(
-    r"^(?:#|/)(.*?)\s*(帮助|菜单|功能)",
+    r"^(?:#|＃|/)(.*?)\s*(帮助|菜单|功能)",
     name="help",
     display_name="帮助",
     priority=5,

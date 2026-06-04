@@ -19,7 +19,7 @@ P = Plugin("cultured", display_name="图库", enabled=True, level=PermLevel.MEMB
 _updating_gallery = False
 
 update_cmd = P.on_regex(
-    r"^#?(?:cultured|图库)(?:安装|(?:强制)?更新)",
+    r"^[#＃]?(?:cultured|图库)(?:安装|(?:强制)?更新)",
     name="update_gallery",
     display_name="更新图库",
     priority=5,

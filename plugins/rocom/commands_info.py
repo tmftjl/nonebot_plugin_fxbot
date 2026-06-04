@@ -13,7 +13,7 @@ from .data import can_breed, find_pet, find_skill, parse_search_criteria, search
 from .renderer_pokedex import render_pokedex_image
 
 pokedex_query = P.on_regex(
-    r"^#图鉴\s+(.+?)\s*$",
+    r"^[#＃]图鉴\s+(.+?)\s*$",
     name="rocom_pokedex_query",
     display_name="洛克图鉴",
     priority=5,
@@ -23,7 +23,7 @@ pokedex_query = P.on_regex(
 )
 
 skill_query = P.on_regex(
-    r"^#技能信息\s+(.+?)\s*$",
+    r"^[#＃]技能信息\s+(.+?)\s*$",
     name="rocom_skill_query",
     display_name="洛克技能信息",
     priority=5,
@@ -33,7 +33,7 @@ skill_query = P.on_regex(
 )
 
 breed_query = P.on_regex(
-    r"^#配种\s+(\S+)\s+(\S+)\s*$",
+    r"^[#＃]配种\s+(\S+)\s+(\S+)\s*$",
     name="rocom_breed_query",
     display_name="洛克配种查询",
     priority=5,
@@ -43,7 +43,7 @@ breed_query = P.on_regex(
 )
 
 egg_query = P.on_regex(
-    r"^#(?:精灵蛋|查蛋)\s+([0-9]+(?:\.[0-9]+)?)\s+([0-9]+(?:\.[0-9]+)?)(?:\s+(炫彩|同乘))?\s*$",
+    r"^[#＃](?:精灵蛋|查蛋)\s+([0-9]+(?:\.[0-9]+)?)\s+([0-9]+(?:\.[0-9]+)?)(?:\s+(炫彩|同乘))?\s*$",
     name="rocom_egg_query",
     display_name="洛克精灵蛋查询",
     priority=5,
@@ -53,7 +53,7 @@ egg_query = P.on_regex(
 )
 
 pet_search = P.on_regex(
-    r"^#查找精灵\s+(.+?)\s*$",
+    r"^[#＃]查找精灵\s+(.+?)\s*$",
     name="rocom_pet_search",
     display_name="洛克查找精灵",
     priority=5,

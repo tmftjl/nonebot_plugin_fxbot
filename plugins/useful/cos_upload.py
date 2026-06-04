@@ -58,7 +58,7 @@ async def _download_image(url: str, save_path: Path) -> bool:
 
 
 cos_upload_cmd = P.on_regex(
-    r"#上传cos",
+    r"[#＃]上传cos",
     name="cos_upload",
     display_name="上传COS图片",
     priority=5,
@@ -68,7 +68,7 @@ cos_upload_cmd = P.on_regex(
 )
 
 cos_list_cmd = P.on_regex(
-    r"^#cos列表",
+    r"^[#＃]cos列表",
     name="cos_list",
     display_name="COS图片列表",
     priority=5,

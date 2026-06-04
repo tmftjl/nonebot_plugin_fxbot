@@ -45,7 +45,7 @@ def _build_api_regex() -> re.Pattern[str] | None:
     if not names:
         return None
     joined = "|".join(re.escape(name) for name in names)
-    return re.compile(rf"^(?:#|/)?(?:来张|看看|随机)\s*({joined})$", re.I)
+    return re.compile(rf"^(?:#|＃|/)?(?:来张|看看|随机)\s*({joined})$", re.I)
 
 
 def _build_picture(bot: Bot, url: str, response_text: str | None = None):
@@ -114,7 +114,7 @@ def _pick_face_image(name: str, bot: Bot):
 
 
 api_cmd = P.on_regex(
-    r"^(?:#|/)?(?:来张|看看|随机).+",
+    r"^(?:#|＃|/)?(?:来张|看看|随机).+",
     name="pictures_api",
     display_name="看看腿",
     priority=5,
@@ -124,7 +124,7 @@ api_cmd = P.on_regex(
 )
 
 list_cmd = P.on_regex(
-    r"^#?(?:cultured|表情包)列表",
+    r"^[#＃]?(?:cultured|表情包)列表",
     name="pictures_list",
     display_name="表情包列表",
     priority=5,
@@ -134,7 +134,7 @@ list_cmd = P.on_regex(
 )
 
 picture_cmd = P.on_regex(
-    r"^(?:#|/)?(?:来张|看看|随机)\s*(\S+)",
+    r"^(?:#|＃|/)?(?:来张|看看|随机)\s*(\S+)",
     name="pictures_local",
     display_name="随机本地表情",
     priority=5,
@@ -185,7 +185,7 @@ async def _handle_picture(matcher: Matcher, bot: Bot, event: Event) -> None:
         return
 
     text = _event_text(event)
-    match = re.match(r"^(?:#|/)?(?:来张|看看|随机)\s*(\S+)", text)
+    match = re.match(r"^(?:#|＃|/)?(?:来张|看看|随机)\s*(\S+)", text)
     name = match.group(1) if match else ""
     if name in face_list():
         await matcher.finish(build_message(bot, _pick_face_image(name, bot)))
