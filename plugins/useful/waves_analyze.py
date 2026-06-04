@@ -4,22 +4,19 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import re
 from collections.abc import Iterable
 from io import BytesIO
 
 from nonebot import logger
 from nonebot.adapters import Bot, Event
 from nonebot.matcher import Matcher
-from nonebot.rule import Rule
-from nonebot.typing import T_State
+from nonebot.params import RegexGroup
 from PIL import Image
 
 from ...adapter import (
     build_message,
     build_message_segment,
     event_message,
-    extract_first_text_match,
     extract_raw_image_sources,
 )
 from ...permission import PermLevel, PermScene
@@ -28,21 +25,10 @@ from ...utils.http import get_shared_async_client
 from .config import cfg_waves_analyze
 
 P = Plugin("useful", display_name="实用工具", enabled=True, level=PermLevel.LOW, scene=PermScene.ALL)
-_WAVES_ANALYZE_PATTERN = re.compile(r"^ww(?:评分|分析)\s*(.*)$")
-_WAVES_ANALYZE_COMMAND_STATE = "_waves_analyze_command"
 
 
-async def _waves_analyze_rule(event: Event, state: T_State) -> bool:
-    """匹配鸣潮评分命令。"""
-    matched = extract_first_text_match(event_message(event), _WAVES_ANALYZE_PATTERN)
-    if matched is None:
-        return False
-    state[_WAVES_ANALYZE_COMMAND_STATE] = matched.group(1).strip()
-    return True
-
-
-waves_analyze_cmd = P.on_message(
-    rule=Rule(_waves_analyze_rule),
+waves_analyze_cmd = P.on_regex(
+    r"^ww(?:评分|分析)\s*(.*)$",
     name="waves_analyze",
     display_name="鸣潮分析评分",
     priority=5,
@@ -146,9 +132,9 @@ async def _get_images_from_event_or_reply(bot: Bot, event: Event) -> list[str | 
 
 
 @waves_analyze_cmd.handle()
-async def _handle_waves_analyze(matcher: Matcher, bot: Bot, event: Event, state: T_State) -> None:
+async def _handle_waves_analyze(matcher: Matcher, bot: Bot, event: Event, groups: tuple = RegexGroup()) -> None:
     """处理鸣潮评分命令。"""
-    command_str = str(state.get(_WAVES_ANALYZE_COMMAND_STATE) or "").strip()
+    command_str = str(groups[0] if groups else "").strip()
     if not command_str:
         await matcher.finish("命令格式错误，参考：ww评分 土豆 1c")
 

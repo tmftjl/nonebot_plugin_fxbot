@@ -7,13 +7,21 @@ from typing import TYPE_CHECKING, Any
 
 from nonebot import logger
 from nonebot.matcher import Matcher
+from nonebot.message import event_preprocessor
 from nonebot.permission import SUPERUSER, Permission
 
+from ..adapter.message import move_non_text_segments_to_end
 from ..permission import PermLevel, PermScene, permission_for_cmd, permission_for_plugin
 from ..permission.helpers import upsert_command_defaults, upsert_plugin_defaults
 
 _PLUGIN_DISPLAY_NAMES: dict[str, str] = {}
 _COMMAND_DISPLAY_NAMES: dict[str, dict[str, str]] = {}
+
+
+@event_preprocessor
+async def _normalize_message_segments(event: Any) -> None:
+    """统一将文本段前置，避免 @、图片等非文本段打断命令匹配。"""
+    move_non_text_segments_to_end(event)
 
 
 def _level_to_str(value: PermLevel | str | None) -> str | None:

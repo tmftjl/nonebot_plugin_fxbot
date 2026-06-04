@@ -11,6 +11,9 @@ from nonebot.adapters import Bot, Event
 
 from .support import adapter_name, extract_message_target, is_onebot_v11, is_qq_official
 
+MENTION_SEGMENT_TYPES = {"at", "mention", "mention_user"}
+MENTION_TARGET_KEYS = ("qq", "user_id", "id", "target")
+
 
 class MessageAdapter(ABC):
     """平台消息适配器。"""
@@ -188,6 +191,148 @@ def segment_text(segment: Any) -> str:
     return str(segment) if seg_type in {"text", "plain"} else ""
 
 
+def is_text_segment(segment: Any) -> bool:
+    """判断消息段是否为文本。"""
+    if isinstance(segment, str):
+        return True
+    if segment_type(segment) in {"text", "plain"}:
+        return True
+    if hasattr(segment, "is_text"):
+        try:
+            return bool(segment.is_text())
+        except Exception:
+            return False
+    return False
+
+
+def is_mention_segment(segment: Any) -> bool:
+    """判断消息段是否为用户 @。"""
+    return segment_type(segment) in MENTION_SEGMENT_TYPES
+
+
+def mention_target(segment: Any) -> str | None:
+    """提取 @ 消息段中的用户 ID。"""
+    if not is_mention_segment(segment):
+        return None
+    data = segment_data(segment)
+    for key in MENTION_TARGET_KEYS:
+        value = data.get(key)
+        text = str(value or "").strip()
+        if text and text != "all":
+            return text
+    return None
+
+
+def mention_targets(message: Any, *, ignored_targets: set[str] | None = None) -> list[str]:
+    """提取消息中的所有 @ 用户 ID。"""
+    ignored = {str(item) for item in ignored_targets or set()}
+    targets: list[str] = []
+    for segment in iter_message_segments(message):
+        target = mention_target(segment)
+        if target and target not in ignored:
+            targets.append(target)
+    return targets
+
+
+def first_mention_target(message: Any, *, ignored_targets: set[str] | None = None) -> str | None:
+    """提取消息中的第一个 @ 用户 ID。"""
+    targets = mention_targets(message, ignored_targets=ignored_targets)
+    return targets[0] if targets else None
+
+
+def _make_text_segments(message: Any, original_segment: Any, text: str) -> list[Any]:
+    """用当前消息类型重新构造文本段。"""
+    if isinstance(original_segment, str):
+        return [text]
+
+    try:
+        data = segment_data(original_segment)
+        if "text" in data:
+            data["text"] = text
+            return [original_segment]
+        elif "content" in data:
+            data["content"] = text
+            return [original_segment]
+    except Exception:
+        pass
+
+    try:
+        segments = list(message.__class__(text))
+        if segments:
+            return segments
+    except Exception:
+        pass
+    return [original_segment]
+
+
+def _replace_message_segments(message: Any, segments: list[Any]) -> bool:
+    """原地替换消息段列表。"""
+    try:
+        message.clear()
+        message.extend(segments)
+        return True
+    except Exception:
+        pass
+
+    try:
+        while len(message):
+            message.pop(0)
+        for segment in segments:
+            message.append(segment)
+        return True
+    except Exception:
+        return False
+
+
+def move_non_text_segments_to_end(value: Any) -> bool:
+    """把所有非文本消息段后置，保留文本段和非文本段各自的相对顺序。"""
+    message = event_message(value) if hasattr(value, "get_message") or hasattr(value, "message") else value
+    if message is None:
+        return False
+
+    try:
+        segments = list(message)
+    except Exception:
+        return False
+    if not segments:
+        return False
+
+    first_text_index = next((index for index, segment in enumerate(segments) if is_text_segment(segment)), None)
+    if first_text_index is None:
+        return False
+
+    non_text_before_first_text = any(not is_text_segment(segment) for segment in segments[:first_text_index])
+    text_segments: list[Any] = []
+    non_text_segments: list[Any] = []
+    changed = False
+    first_non_empty_text_seen = False
+
+    for segment in segments:
+        if not is_text_segment(segment):
+            non_text_segments.append(segment)
+            continue
+
+        text = segment_text(segment)
+        if non_text_before_first_text and not first_non_empty_text_seen:
+            if not text.strip():
+                changed = True
+                continue
+            first_non_empty_text_seen = True
+            stripped = text.lstrip()
+            if stripped != text:
+                text_segments.extend(_make_text_segments(message, segment, stripped))
+                changed = True
+                continue
+
+        if text.strip():
+            first_non_empty_text_seen = True
+        text_segments.append(segment)
+
+    reordered = text_segments + non_text_segments
+    if reordered != segments:
+        changed = True
+    return _replace_message_segments(message, reordered) if changed else False
+
 def extract_first_text_match(
     message: Any,
     pattern: Pattern[str],
@@ -195,7 +340,7 @@ def extract_first_text_match(
     ignored_segment_types: set[str] | None = None,
 ) -> Match[str] | None:
     """从首个有效文本段中提取正则匹配结果。"""
-    ignored = ignored_segment_types or {"image", "reply", "at", "mention"}
+    ignored = ignored_segment_types or {"image", "reply", *MENTION_SEGMENT_TYPES}
     for segment in iter_message_segments(message):
         if segment_type(segment) in ignored:
             continue
@@ -348,11 +493,17 @@ __all__ = [
     "extract_raw_image_sources",
     "extract_message_target",
     "extract_reply_message_id",
+    "first_mention_target",
     "get_message_adapter",
     "get_onebot_v11_message_segment_class",
     "get_replied_message",
+    "is_mention_segment",
     "is_onebot_v11",
     "is_qq_official",
+    "is_text_segment",
+    "mention_target",
+    "mention_targets",
+    "move_non_text_segments_to_end",
     "register_message_adapter",
     "send_forward_messages",
     "send_forward_texts",

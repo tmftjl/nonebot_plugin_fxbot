@@ -62,6 +62,7 @@ async def init() -> None:
     logger.info("[FxBot] 开始初始化")
     get_config_manager().bootstrap()
 
+    _import_startup_module("plugin.builder")
     _import_startup_module("membership.models")
     _import_startup_module("adapter.uninfo")
     _import_plugin_model_modules()

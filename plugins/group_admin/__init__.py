@@ -11,6 +11,7 @@ from nonebot.adapters import Bot, Event
 from nonebot.matcher import Matcher
 from nonebot.params import RegexGroup
 
+from ...adapter.message import mention_targets
 from ...chat.tools import ToolContext, ToolRuntime, tool
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
@@ -63,11 +64,9 @@ def _plain_text(event: Any) -> str:
 def _extract_target_id(event: Any, fallback: str = "") -> int | None:
     """从消息中提取 @ 目标或 QQ 号。"""
     try:
-        for segment in event.get_message():
-            if str(segment.type) == "at":
-                qq = segment.data.get("qq")
-                if qq and str(qq) != "all":
-                    return int(qq)
+        targets = mention_targets(event.get_message())
+        if targets:
+            return int(targets[0])
     except Exception:
         pass
     match = re.search(r"\d{5,}", fallback or _plain_text(event))
@@ -76,17 +75,12 @@ def _extract_target_id(event: Any, fallback: str = "") -> int | None:
 
 def _extract_target_ids(event: Any, fallback: str = "") -> list[int]:
     """从消息中提取所有 @ 目标或文本 QQ 号。"""
-    targets: list[int] = []
     try:
-        for segment in event.get_message():
-            if str(segment.type) == "at":
-                qq = segment.data.get("qq")
-                if qq and str(qq) != "all":
-                    targets.append(int(qq))
+        targets = [int(item) for item in mention_targets(event.get_message())]
+        if targets:
+            return targets
     except Exception:
         pass
-    if targets:
-        return targets
     return [int(item) for item in re.findall(r"\d{5,}", fallback or _plain_text(event))]
 
 

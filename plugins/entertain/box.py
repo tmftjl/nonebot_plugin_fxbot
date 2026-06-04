@@ -15,7 +15,7 @@ from PIL import Image
 
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
-from ...adapter import build_message, build_message_segment
+from ...adapter import build_message, build_message_segment, first_mention_target
 from ...utils.http import get_shared_async_client
 from .box_draw import create_image
 from .config import cfg_box
@@ -52,14 +52,9 @@ def _gid(event: Event) -> str | None:
 
 def _extract_target_id(event: Event, fallback: str = "", self_id: str = "") -> str:
     """提取开盒目标。"""
-    try:
-        for segment in event.get_message():
-            if getattr(segment, "type", "") == "at":
-                qq = str((getattr(segment, "data", {}) or {}).get("qq") or "")
-                if qq and qq != "all" and qq != self_id:
-                    return qq
-    except Exception:
-        pass
+    target = first_mention_target(event.get_message(), ignored_targets={self_id})
+    if target:
+        return target
     import re
 
     match = re.search(r"\d{5,}", fallback)

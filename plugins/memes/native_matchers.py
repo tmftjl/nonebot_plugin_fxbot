@@ -14,7 +14,6 @@ from dateutil.relativedelta import relativedelta
 from nonebot import get_driver
 from nonebot.adapters import Bot, Event, Message, MessageSegment
 from nonebot.log import logger
-from nonebot.message import event_preprocessor
 from nonebot.matcher import Matcher
 from nonebot.params import CommandArg
 from nonebot.rule import Rule
@@ -23,6 +22,7 @@ from pypinyin import Style, pinyin
 
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
+from ...adapter.message import first_mention_target
 from ...adapter.uninfo import QryItrface, Uninfo
 from ...utils.paths import cache_dir
 from .config import (
@@ -136,45 +136,6 @@ def _match_prefix(text: str) -> Optional[str]:
         if text.startswith(p):
             return p
     return None
-
-
-@event_preprocessor
-async def _move_leading_mention_to_end(event: Event):
-    if not _trigger_map:
-        return
-
-    try:
-        msg = event.get_message()
-    except Exception:
-        return
-
-    if not msg:
-        return
-
-    i = 0
-    while i < len(msg) and getattr(msg[i], "type", None) in {"at", "mention"}:
-        i += 1
-    if i == 0 or i >= len(msg):
-        return
-
-    if not msg[i].is_text():
-        return
-
-    text = str(msg[i]).lstrip()
-    prefix = _match_prefix(text)
-    if prefix is None:
-        return
-
-    rest = text[len(prefix) :].lstrip()
-    trigger = rest.split(maxsplit=1)[0] if rest else ""
-    if not trigger or trigger.lower() not in _trigger_map:
-        return
-
-    moved: list[MessageSegment] = []
-    for _ in range(i):
-        moved.append(msg.pop(0))
-    for seg in moved:
-        msg.append(seg)
 
 
 def meme_trigger_rule() -> Rule:
@@ -520,18 +481,7 @@ async def _send_image(matcher: Matcher, bot: Bot, event: Event, img: bytes, text
 
 
 def _first_mention_id(arg: Message) -> Optional[str]:
-    for seg in arg:
-        seg_type = getattr(seg, "type", None)
-        if seg_type in {"at", "mention"}:
-            target = (
-                seg.data.get("qq")
-                or seg.data.get("user_id")
-                or seg.data.get("id")
-                or seg.data.get("target")
-            )
-            if target:
-                return str(target)
-    return None
+    return first_mention_target(arg)
 
 
 help_cmd = P.on_command(
