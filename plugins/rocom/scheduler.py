@@ -55,7 +55,7 @@ async def check_and_push() -> None:
     set_last_signature(snapshot.signature)
     _started_once = True
     if pushed:
-        logger.info(f"[rocom_merchant] 已推送远行商人刷新：{pushed} 个目标")
+        logger.info(f"[rocom] 已推送远行商人刷新：{pushed} 个目标")
 
 
 async def _scheduled_check() -> None:
@@ -63,7 +63,7 @@ async def _scheduled_check() -> None:
     try:
         await check_and_push()
     except Exception:
-        logger.opt(exception=True).warning("[rocom_merchant] 远行商人推送检查失败")
+        logger.opt(exception=True).warning("[rocom] 远行商人推送检查失败")
 
 
 def setup_rocom_merchant_tasks() -> None:
@@ -71,7 +71,7 @@ def setup_rocom_merchant_tasks() -> None:
     try:
         from nonebot_plugin_apscheduler import scheduler
     except Exception:
-        logger.warning("[rocom_merchant] nonebot-plugin-apscheduler 未安装或未加载，跳过定时任务")
+        logger.warning("[rocom] nonebot-plugin-apscheduler 未安装或未加载，跳过定时任务")
         return
 
     cfg = cfg_merchant()
@@ -87,4 +87,4 @@ def setup_rocom_merchant_tasks() -> None:
         coalesce=True,
         max_instances=1,
     )
-    logger.info(f"[rocom_merchant] 定时任务已注册: 每 {interval} 秒检查一次")
+    logger.info(f"[rocom] 定时任务已注册: 每 {interval} 秒检查一次")

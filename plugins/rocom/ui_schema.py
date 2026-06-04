@@ -1,4 +1,4 @@
-"""远行商人推送控制台配置。"""
+"""洛克王国插件控制台配置。"""
 
 from __future__ import annotations
 
@@ -16,14 +16,14 @@ DEFAULTS: dict[str, Any] = {
 
 
 def get_ui_schema() -> dict[str, Any]:
-    """返回远行商人推送配置界面 schema。"""
+    """返回洛克王国插件配置界面 schema。"""
     merchant = DEFAULTS["merchant"]
     return {
-        "key": "rocom_merchant",
-        "title": "远行商人推送配置",
+        "key": "rocom",
+        "title": "洛克王国配置",
         "cards": [
             {
-                "key": "rocom_merchant.merchant",
+                "key": "rocom.merchant",
                 "title": "远行商人",
                 "schemas": [
                     {"field": "enabled", "label": "启用后台推送", "component": "Switch", "default": merchant["enabled"], "helpMessage": "关闭后仍可手动发送“远行商人”查询。"},

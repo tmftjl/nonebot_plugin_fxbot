@@ -9,7 +9,7 @@ from nonebot import logger
 
 from ...utils.paths import data_dir
 
-DATA_FILE = data_dir("rocom_merchant") / "state.json"
+DATA_FILE = data_dir("rocom") / "state.json"
 
 
 def _default() -> dict[str, Any]:
@@ -27,7 +27,7 @@ def load_state() -> dict[str, Any]:
             data.setdefault("subscriptions", [])
             return data
     except Exception:
-        logger.opt(exception=True).warning("[rocom_merchant] 订阅状态加载失败")
+        logger.opt(exception=True).warning("[rocom] 订阅状态加载失败")
     return _default()
 
 

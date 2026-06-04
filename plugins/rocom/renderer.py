@@ -13,7 +13,7 @@ from ...utils.http import get_shared_async_client
 from .client import MerchantProduct, MerchantSnapshot
 
 RESOURCE_DIR = Path(__file__).parent / "resources"
-TEXTURE_DIR = RESOURCE_DIR / "texture2D"
+TEXTURE_DIR = RESOURCE_DIR / "merchant"
 FONT_DIR = RESOURCE_DIR / "fonts"
 
 FONT_TITLE = load_font(FONT_DIR / "rocom_origin.ttf", 40)
