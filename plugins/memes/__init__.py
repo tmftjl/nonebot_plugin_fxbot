@@ -44,6 +44,5 @@ __plugin_meta__ = PluginMetadata(
         "如：【我的今日表情调用统计 petpet】"
     ),
     type="application",
-    homepage="https://github.com/noneplugin/nonebot-plugin-memes",
     supported_adapters={"~onebot.v11"},
 )
