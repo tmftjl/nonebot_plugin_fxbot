@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
-from nonebot import get_bots, logger
+import asyncio
+
+from nonebot import get_bots, get_driver, logger
 
 from ...adapter import build_message, build_message_segment, send_message_to_target
-from .client import fetch_merchant_snapshot
+from .client import SHANGHAI_TZ, fetch_merchant_snapshot
 from .config import cfg_merchant
 from .renderer import render_merchant_image
 from .store import get_last_signature, get_subscriptions, set_last_signature
 
-_started_once = False
+_startup_hook_registered = False
 
 
 async def _send_to_subscription(subscription: dict, image: bytes) -> bool:
@@ -27,47 +29,85 @@ async def _send_to_subscription(subscription: dict, image: bytes) -> bool:
     return False
 
 
-async def check_and_push() -> None:
-    """检查远行商人变化并推送所有订阅。"""
-    global _started_once
-    cfg = cfg_merchant()
-    if not bool(cfg.get("enabled", True)):
-        return
+async def _push_snapshot(snapshot) -> int:
+    """向所有订阅目标推送快照图片。"""
     subscriptions = get_subscriptions()
     if not subscriptions:
-        return
-
-    snapshot = await fetch_merchant_snapshot()
-    last_signature = get_last_signature()
-    if snapshot.signature == last_signature:
-        return
-
-    if not last_signature and not bool(cfg.get("push_on_start", False)) and not _started_once:
-        set_last_signature(snapshot.signature)
-        _started_once = True
-        return
-
+        return 0
     image = await render_merchant_image(snapshot)
     pushed = 0
     for subscription in subscriptions:
         if await _send_to_subscription(subscription, image):
             pushed += 1
+    return pushed
+
+
+async def calibrate_current_signature() -> None:
+    """启动时校准当前快照签名，不触发推送。"""
+    cfg = cfg_merchant()
+    if not bool(cfg.get("enabled", True)):
+        return
+    snapshot = await fetch_merchant_snapshot()
     set_last_signature(snapshot.signature)
-    _started_once = True
+
+
+async def check_and_push() -> bool:
+    """检查远行商人变化并推送所有订阅。"""
+    cfg = cfg_merchant()
+    if not bool(cfg.get("enabled", True)):
+        return True
+
+    snapshot = await fetch_merchant_snapshot()
+    last_signature = get_last_signature()
+    if snapshot.signature == last_signature:
+        return False
+
+    if not snapshot.products:
+        return False
+
+    pushed = await _push_snapshot(snapshot)
+    set_last_signature(snapshot.signature)
     if pushed:
         logger.info(f"[rocom] 已推送远行商人刷新：{pushed} 个目标")
+    return True
+
+
+async def check_and_push_with_retry() -> None:
+    """刷新点后短重试，直到拿到新商品并推送。"""
+    cfg = cfg_merchant()
+    retry_times = max(1, int(cfg.get("retry_times") or 20))
+    retry_interval = max(5, int(cfg.get("retry_interval_seconds") or 30))
+    for index in range(retry_times):
+        if await check_and_push():
+            return
+        if index + 1 < retry_times:
+            await asyncio.sleep(retry_interval)
+    logger.info("[rocom] 远行商人刷新点检查结束：未发现新的可推送商品")
 
 
 async def _scheduled_check() -> None:
     """定时检查远行商人刷新。"""
     try:
-        await check_and_push()
+        await check_and_push_with_retry()
     except Exception:
         logger.opt(exception=True).warning("[rocom] 远行商人推送检查失败")
 
 
+async def _startup_calibrate() -> None:
+    """启动时记录当前签名，避免重启后误推旧数据。"""
+    try:
+        cfg = cfg_merchant()
+        if bool(cfg.get("push_on_start", False)):
+            await check_and_push()
+        else:
+            await calibrate_current_signature()
+    except Exception:
+        logger.opt(exception=True).warning("[rocom] 远行商人启动校准失败")
+
+
 def setup_rocom_merchant_tasks() -> None:
     """注册远行商人推送任务；缺少 scheduler 时跳过。"""
+    global _startup_hook_registered
     try:
         from nonebot_plugin_apscheduler import scheduler
     except Exception:
@@ -77,14 +117,19 @@ def setup_rocom_merchant_tasks() -> None:
     cfg = cfg_merchant()
     if not bool(cfg.get("enabled", True)):
         return
-    interval = max(60, int(cfg.get("check_interval_seconds") or 300))
+    if not _startup_hook_registered:
+        get_driver().on_startup(_startup_calibrate)
+        _startup_hook_registered = True
+
     scheduler.add_job(
         _scheduled_check,
-        trigger="interval",
-        seconds=interval,
+        trigger="cron",
+        hour="8,12,16,20",
+        minute=5,
+        timezone=SHANGHAI_TZ,
         id="rocom_merchant_check",
         replace_existing=True,
         coalesce=True,
         max_instances=1,
     )
-    logger.info(f"[rocom] 定时任务已注册: 每 {interval} 秒检查一次")
+    logger.info("[rocom] 定时任务已注册: 每日 08/12/16/20 点 05 分检查远行商人")
