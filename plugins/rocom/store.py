@@ -43,35 +43,46 @@ def get_subscriptions() -> list[dict[str, Any]]:
     return subs if isinstance(subs, list) else []
 
 
-def upsert_subscription(group_key: str, target: dict[str, Any], operator_id: str) -> None:
-    """新增或更新群订阅。"""
+def upsert_subscription(sub_type: str, sub_key: str, target: dict[str, Any], operator_id: str) -> None:
+    """新增或更新订阅（群或私聊）。"""
     state = load_state()
-    subs = [item for item in get_subscriptions() if item.get("group_key") != group_key]
-    subs.append(
-        {
-            "group_key": group_key,
-            "target": target,
-            "operator_id": operator_id,
-        }
-    )
+    key_field = "group_key" if sub_type == "group" else "user_key"
+    subs = [
+        item
+        for item in get_subscriptions()
+        if not (item.get("type") == sub_type and item.get(key_field) == sub_key)
+    ]
+    entry: dict[str, Any] = {
+        "type": sub_type,
+        key_field: sub_key,
+        "target": target,
+        "operator_id": operator_id,
+    }
+    subs.append(entry)
     state["subscriptions"] = subs
     save_state(state)
 
 
-def remove_subscription(group_key: str) -> bool:
-    """删除群订阅。"""
+def remove_subscription(sub_type: str, sub_key: str) -> bool:
+    """删除订阅（群或私聊）。"""
     state = load_state()
     old = get_subscriptions()
-    new = [item for item in old if item.get("group_key") != group_key]
+    key_field = "group_key" if sub_type == "group" else "user_key"
+    new = [
+        item
+        for item in old
+        if not (item.get("type") == sub_type and item.get(key_field) == sub_key)
+    ]
     state["subscriptions"] = new
     save_state(state)
     return len(new) != len(old)
 
 
-def get_subscription(group_key: str) -> dict[str, Any] | None:
-    """获取单个群订阅。"""
+def get_subscription(sub_type: str, sub_key: str) -> dict[str, Any] | None:
+    """获取单个订阅（群或私聊）。"""
+    key_field = "group_key" if sub_type == "group" else "user_key"
     for item in get_subscriptions():
-        if item.get("group_key") == group_key:
+        if item.get("type") == sub_type and item.get(key_field) == sub_key:
             return item
     return None
 

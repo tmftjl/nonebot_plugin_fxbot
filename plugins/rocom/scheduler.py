@@ -20,8 +20,16 @@ async def _send_to_subscription(subscription: dict, image: bytes) -> bool:
     target = subscription.get("target")
     if not isinstance(target, dict):
         return False
+    sub_type = subscription.get("type", "group")
     for bot in get_bots().values():
         try:
+            # QQ 官方适配器不支持私聊推送，静默跳过
+            if sub_type == "private":
+                from ...adapter.support import is_qq_official
+
+                if is_qq_official(bot):
+                    logger.debug(f"[rocom] 跳过 QQ 官方适配器的私聊推送: {subscription.get('user_key')}")
+                    continue
             message = build_message(bot, build_message_segment(bot, "image", image))
             await send_message_to_target(bot, target, message)
             return True
@@ -36,10 +44,14 @@ async def _push_snapshot(snapshot) -> int:
     if not subscriptions:
         return 0
     image = await render_merchant_image(snapshot)
+    group_count = sum(1 for s in subscriptions if s.get("type", "group") == "group")
+    private_count = sum(1 for s in subscriptions if s.get("type") == "private")
+    logger.info(f"[rocom] 开始推送远行商人刷新: {group_count} 个群订阅, {private_count} 个私聊订阅")
     pushed = 0
     for subscription in subscriptions:
         if await _send_to_subscription(subscription, image):
             pushed += 1
+    logger.info(f"[rocom] 远行商人推送完成: {pushed}/{len(subscriptions)} 个目标")
     return pushed
 
 
