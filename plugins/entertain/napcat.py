@@ -1,4 +1,4 @@
-"""NapCat 集成插件。"""
+"""NapCat 点赞功能。"""
 
 from __future__ import annotations
 
@@ -10,9 +10,8 @@ from nonebot.matcher import Matcher
 from ...chat.tools import ToolContext, ToolRuntime, tool
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
-from . import image_display as image_display
 
-P = Plugin("napcat", display_name="NapCat", enabled=True, level=PermLevel.LOW, scene=PermScene.ALL)
+P = Plugin("entertain", display_name="娱乐", enabled=True, level=PermLevel.LOW, scene=PermScene.ALL)
 
 MAX_LIKE_TIMES = 10
 

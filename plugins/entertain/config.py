@@ -15,6 +15,11 @@ def get_config() -> dict[str, Any]:
     return REG.load()
 
 
+def save_config(cfg: dict[str, Any]) -> None:
+    """保存配置。"""
+    REG.save(cfg)
+
+
 def cfg_api_urls() -> dict[str, Any]:
     """获取娱乐插件 API 地址配置。"""
     return get_config()["api_urls"]
@@ -28,3 +33,8 @@ def cfg_music() -> dict[str, Any]:
 def cfg_box() -> dict[str, Any]:
     """获取开盒配置。"""
     return get_config()["box"]
+
+
+def cfg_image_display() -> dict[str, Any]:
+    """获取图片外显配置。"""
+    return get_config()["image_display"]

@@ -25,6 +25,17 @@ DEFAULTS: dict[str, Any] = {
         "doro_api": "https://doro-api.hxxn.cc/get",
         "background_api": "http://127.0.0.1:1520/api/wuthering_waves/role_image/random",
     },
+    "image_display": {
+        "enabled": True,
+        "type": 2,
+        "text": "Ciallo~",
+        "list": [
+            "你干嘛~",
+            "我喜欢你",
+            "[图片]",
+        ],
+        "api": "https://v1.hitokoto.cn/?encode=text",
+    },
 }
 
 
@@ -88,6 +99,17 @@ def get_ui_schema() -> dict[str, Any]:
                     {"field": "sick_quote_api", "label": "发病语录 API", "component": "Input", "default": DEFAULTS["api_urls"]["sick_quote_api"], "helpMessage": "发病语录接口。"},
                     {"field": "doro_api", "label": "Doro API", "component": "Input", "default": DEFAULTS["api_urls"]["doro_api"], "helpMessage": "Doro 结果接口。"},
                     {"field": "background_api", "label": "背景图 API", "component": "Input", "default": DEFAULTS["api_urls"]["background_api"], "helpMessage": "运势背景图接口，留空则使用内置背景。"},
+                ],
+            },
+            {
+                "key": "entertain.image_display",
+                "title": "图片外显 (NapCat)",
+                "schemas": [
+                    {"field": "enabled", "label": "启用图片外显", "component": "Switch", "default": DEFAULTS["image_display"]["enabled"], "helpMessage": "开启后消息中的图片会附带摘要文本。"},
+                    {"field": "type", "label": "外显类型", "component": "InputNumber", "default": DEFAULTS["image_display"]["type"], "helpMessage": "1=固定文本，2=一言，3=随机列表。", "componentProps": {"min": 0}},
+                    {"field": "text", "label": "固定外显文本", "component": "Input", "default": DEFAULTS["image_display"]["text"], "helpMessage": "type=1 时使用。"},
+                    {"field": "list", "label": "随机外显文本", "component": "GArrayInput", "default": DEFAULTS["image_display"]["list"], "helpMessage": "type=3 时从中随机选择。"},
+                    {"field": "api", "label": "外显文本 API", "component": "Input", "default": DEFAULTS["image_display"]["api"], "helpMessage": "type=2 时使用的一言接口。"},
                 ],
             },
         ],

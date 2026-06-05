@@ -15,7 +15,7 @@ from ...adapter import get_onebot_v11_message_segment_class
 from ...utils.http import get_shared_async_client
 from .config import cfg_image_display, get_config, save_config
 
-P = Plugin("napcat", display_name="NapCat", enabled=True, level=PermLevel.LOW, scene=PermScene.ALL)
+P = Plugin("entertain", display_name="娱乐", enabled=True, level=PermLevel.LOW, scene=PermScene.ALL)
 
 _hitokoto_cache = "Ciallo~"
 _original_image: Any = None
