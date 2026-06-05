@@ -16,11 +16,11 @@ def get_shared_font_path(name: str = "FZB.ttf") -> Path:
 
 def get_matplotlib_font(name: str = "FZB.ttf") -> str:
     """注册共享字体到 matplotlib 并返回 family name。"""
-    from matplotlib.font_manager import fontManager
+    from matplotlib.font_manager import FontProperties, fontManager
 
     font_path = get_shared_font_path(name)
     fontManager.addfont(str(font_path))
-    return fontManager.get_font_properties(str(font_path)).get_name()
+    return FontProperties(fname=str(font_path)).get_name()
 
 
 def load_font(path: str | Path, size: int):
