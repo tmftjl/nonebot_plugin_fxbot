@@ -13,7 +13,7 @@ from PIL import Image, ImageDraw
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
 from ...adapter import build_message, build_message_segment, is_qq_official
-from ...utils.fonts import load_font
+from ...utils.fonts import get_shared_font_path, load_font
 from .config import HelpConfigRef, default_help_config, load_help_config, qq_variant, resolve_help_config
 
 try:
@@ -63,7 +63,7 @@ def _fallback_image(title: str, sub_title: str, groups_data: list[dict[str, Any]
         for group in groups_data
     )
     lines = text.split("\n")
-    font = load_font(Path(__file__).parent / "resources" / "common" / "font" / "FZB.ttf", 24)
+    font = load_font(get_shared_font_path(), 24)
     width = max(480, max((len(line) for line in lines), default=20) * 14 + 40)
     height = max(320, 30 + len(lines) * 32 + 30)
     image = Image.new("RGB", (width, height), (255, 255, 255))

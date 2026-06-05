@@ -19,7 +19,7 @@ from PIL import Image, ImageDraw, ImageOps
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
 from ...adapter import build_message, build_message_segment
-from ...utils.fonts import load_font
+from ...utils.fonts import get_shared_font_path, load_font
 from ...utils.http import get_shared_async_client
 from ...utils.paths import data_dir
 from .config import cfg_api_urls
@@ -32,11 +32,12 @@ USER_DATA_FILE = DATA_DIR / "user_fortunes.json"
 _JRYS_DATA: list[dict[str, Any]] = []
 _USER_FORTUNES: dict[str, dict[str, Any]] = {}
 
-FONT_MAIN = load_font(RESOURCE_DIR / "font.ttf", 48)
-FONT_LARGE = load_font(RESOURCE_DIR / "font.ttf", 90)
-FONT_MEDIUM = load_font(RESOURCE_DIR / "font.ttf", 32)
-FONT_SMALL = load_font(RESOURCE_DIR / "font.ttf", 26)
-FONT_TINY = load_font(RESOURCE_DIR / "font.ttf", 22)
+_SHARED_FONT = get_shared_font_path()
+FONT_MAIN = load_font(_SHARED_FONT, 48)
+FONT_LARGE = load_font(_SHARED_FONT, 90)
+FONT_MEDIUM = load_font(_SHARED_FONT, 32)
+FONT_SMALL = load_font(_SHARED_FONT, 26)
+FONT_TINY = load_font(_SHARED_FONT, 22)
 
 P = Plugin("entertain", display_name="娱乐", enabled=True, level=PermLevel.LOW, scene=PermScene.ALL)
 

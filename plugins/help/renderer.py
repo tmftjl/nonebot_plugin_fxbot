@@ -11,7 +11,7 @@ from typing import Any
 from nonebot import get_driver, logger
 from PIL import Image, ImageDraw
 
-from ...utils.fonts import load_font
+from ...utils.fonts import get_shared_font_path, load_font
 
 RES_DIR = Path(__file__).parent / "resources"
 _PW = None
@@ -137,8 +137,8 @@ async def render_help_image(
     def fallback() -> bytes:
         image = Image.new("RGB", (1200, 800), (245, 247, 250))
         draw = ImageDraw.Draw(image)
-        font_title = load_font(RES_DIR / "common" / "font" / "FZB.ttf", 48)
-        font_sub = load_font(RES_DIR / "common" / "font" / "FZB.ttf", 28)
+        font_title = load_font(get_shared_font_path(), 48)
+        font_sub = load_font(get_shared_font_path(), 28)
         draw.text((50, 60), title, fill=(30, 30, 30), font=font_title)
         draw.text((50, 120), sub_title, fill=(80, 80, 80), font=font_sub)
         y = 180

@@ -6,17 +6,23 @@ from pathlib import Path
 
 from PIL import ImageFont
 
+from .paths import package_root
 
-def load_font(path: str | Path | None, size: int):
-    """加载指定字体，失败时回退到 PIL 默认字体。"""
-    if path:
-        try:
-            font_path = Path(path)
-            if font_path.is_file():
-                return ImageFont.truetype(str(font_path), size)
-        except Exception:
-            pass
-    try:
-        return ImageFont.truetype("arial.ttf", size)
-    except Exception:
-        return ImageFont.load_default()
+
+def get_shared_font_path(name: str = "FZB.ttf") -> Path:
+    """获取项目共享字体路径（resources/fonts/）。"""
+    return package_root() / "resources" / "fonts" / name
+
+
+def get_matplotlib_font(name: str = "FZB.ttf") -> str:
+    """注册共享字体到 matplotlib 并返回 family name。"""
+    from matplotlib.font_manager import fontManager
+
+    font_path = get_shared_font_path(name)
+    fontManager.addfont(str(font_path))
+    return fontManager.get_font_properties(str(font_path)).get_name()
+
+
+def load_font(path: str | Path, size: int):
+    """加载指定字体文件并返回 PIL ImageFont。"""
+    return ImageFont.truetype(str(path), size)

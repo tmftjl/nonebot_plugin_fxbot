@@ -9,7 +9,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-from ...utils.fonts import load_font
+from ...utils.fonts import get_shared_font_path, load_font
 
 try:
     import emoji
@@ -17,7 +17,7 @@ except Exception:  # pragma: no cover
     emoji = None
 
 RESOURCE_DIR = Path(__file__).resolve().parent / "resource"
-FONT_PATH = RESOURCE_DIR / "可爱字体.ttf"
+FONT_PATH = get_shared_font_path()
 EMOJI_FONT_PATH = RESOURCE_DIR / "NotoColorEmoji.ttf"
 
 FONT_SIZE = 35

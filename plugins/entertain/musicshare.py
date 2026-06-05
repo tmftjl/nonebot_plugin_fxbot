@@ -25,7 +25,7 @@ from PIL import Image, ImageDraw
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
 from ...adapter import build_message, build_message_segment
-from ...utils.fonts import load_font
+from ...utils.fonts import get_shared_font_path, load_font
 from ...utils.http import get_shared_async_client
 from ...utils.paths import data_dir
 from .config import cfg_music
@@ -728,7 +728,7 @@ def _draw_music_list(platform: Platform, keyword: str, songs: list[Song]) -> byt
     gap_y = 15
     card_h = 70
     col_w = 400
-    font_path = Path(__file__).parent / "resource" / "font.ttf"
+    font_path = get_shared_font_path()
 
     font_title = load_font(font_path, 36)
     font_sub = load_font(font_path, 22)
