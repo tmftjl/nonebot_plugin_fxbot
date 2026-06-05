@@ -9,10 +9,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from ...utils.http import get_text_with_browser_fallback
-from .config import cfg_merchant
 
 SHANGHAI_TZ = timezone(timedelta(hours=8))
 MERCHANT_LIVE_URL = "https://rocokingdomworld.org/api/merchant/live"
+MERCHANT_REQUEST_TIMEOUT_SECONDS = 15.0
 
 
 @dataclass(slots=True)
@@ -153,13 +153,11 @@ def parse_merchant_json(source_url: str, data: dict[str, Any]) -> MerchantSnapsh
 
 async def fetch_merchant_snapshot() -> MerchantSnapshot:
     """抓取远行商人当前快照。"""
-    cfg = cfg_merchant()
-    timeout = max(3.0, float(cfg.get("request_timeout_seconds") or 15))
     headers = {"User-Agent": "Mozilla/5.0 FxBot rocom-merchant/1.0"}
     try:
         body = await get_text_with_browser_fallback(
             MERCHANT_LIVE_URL,
-            timeout=timeout,
+            timeout=MERCHANT_REQUEST_TIMEOUT_SECONDS,
             follow_redirects=True,
             headers=headers,
         )

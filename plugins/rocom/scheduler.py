@@ -8,11 +8,12 @@ from nonebot import get_bots, get_driver, logger
 
 from ...adapter import build_message, build_message_segment, send_message_to_target
 from .client import SHANGHAI_TZ, fetch_merchant_snapshot
-from .config import cfg_merchant
 from .renderer import render_merchant_image
 from .store import get_last_signature, get_subscriptions, set_last_signature
 
 _startup_hook_registered = False
+MERCHANT_RETRY_TIMES = 20
+MERCHANT_RETRY_INTERVAL_SECONDS = 30
 
 
 async def _send_to_subscription(subscription: dict, image: bytes) -> bool:
@@ -44,19 +45,12 @@ async def _push_snapshot(snapshot) -> int:
 
 async def calibrate_current_signature() -> None:
     """启动时校准当前快照签名，不触发推送。"""
-    cfg = cfg_merchant()
-    if not bool(cfg.get("enabled", True)):
-        return
     snapshot = await fetch_merchant_snapshot()
     set_last_signature(snapshot.signature)
 
 
 async def check_and_push() -> bool:
     """检查远行商人变化并推送所有订阅。"""
-    cfg = cfg_merchant()
-    if not bool(cfg.get("enabled", True)):
-        return True
-
     snapshot = await fetch_merchant_snapshot()
     last_signature = get_last_signature()
     if snapshot.signature == last_signature:
@@ -74,14 +68,11 @@ async def check_and_push() -> bool:
 
 async def check_and_push_with_retry() -> None:
     """刷新点后短重试，直到拿到新商品并推送。"""
-    cfg = cfg_merchant()
-    retry_times = max(1, int(cfg.get("retry_times") or 20))
-    retry_interval = max(5, int(cfg.get("retry_interval_seconds") or 30))
-    for index in range(retry_times):
+    for index in range(MERCHANT_RETRY_TIMES):
         if await check_and_push():
             return
-        if index + 1 < retry_times:
-            await asyncio.sleep(retry_interval)
+        if index + 1 < MERCHANT_RETRY_TIMES:
+            await asyncio.sleep(MERCHANT_RETRY_INTERVAL_SECONDS)
     logger.info("[rocom] 远行商人刷新点检查结束：未发现新的可推送商品")
 
 
@@ -96,11 +87,7 @@ async def _scheduled_check() -> None:
 async def _startup_calibrate() -> None:
     """启动时记录当前签名，避免重启后误推旧数据。"""
     try:
-        cfg = cfg_merchant()
-        if bool(cfg.get("push_on_start", False)):
-            await check_and_push()
-        else:
-            await calibrate_current_signature()
+        await calibrate_current_signature()
     except Exception:
         logger.opt(exception=True).warning("[rocom] 远行商人启动校准失败")
 
@@ -114,9 +101,6 @@ def setup_rocom_merchant_tasks() -> None:
         logger.warning("[rocom] nonebot-plugin-apscheduler 未安装或未加载，跳过定时任务")
         return
 
-    cfg = cfg_merchant()
-    if not bool(cfg.get("enabled", True)):
-        return
     if not _startup_hook_registered:
         get_driver().on_startup(_startup_calibrate)
         _startup_hook_registered = True
