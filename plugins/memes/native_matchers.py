@@ -849,7 +849,6 @@ def _parse_statistics_text(text: str) -> tuple[str, Optional[str]]:
     return mapped_type, (meme_name or None)
 
 
-@statistics_cmd.handle()
 async def _do_statistics(
     bot: Bot,
     event: Event,
