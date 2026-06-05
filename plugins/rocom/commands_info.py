@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from nonebot.adapters import Bot
 from nonebot.matcher import Matcher
 from nonebot.params import RegexGroup
@@ -12,6 +14,8 @@ from . import P
 from .data import can_breed, find_pet, find_skill, parse_search_criteria, search_eggs, search_pets
 from .renderer_pokedex import render_pokedex_image
 from .resource_downloader import ensure_rocom_resources
+
+ATTRIBUTE_EFFECTIVENESS_IMAGE = Path(__file__).parent / "resources" / "pokedex" / "attribute_effectiveness.png"
 
 pokedex_query = P.on_regex(
     r"^[#＃]图鉴\s+(.+?)\s*$",
@@ -63,13 +67,23 @@ pet_search = P.on_regex(
     scene=PermScene.GROUP,
 )
 
+attribute_effectiveness = P.on_regex(
+    r"^[#＃]属性克制\s*$",
+    name="rocom_attribute_effectiveness",
+    display_name="洛克属性克制",
+    priority=5,
+    block=True,
+    level=PermLevel.MEMBER,
+    scene=PermScene.GROUP,
+)
+
 resource_download = P.on_regex(
     r"^[#＃]洛克下载资源\s*$",
     name="rocom_resource_download",
     display_name="洛克资源下载",
     priority=5,
     block=True,
-    level=PermLevel.ADMIN,
+    level=PermLevel.OWNER,
     scene=PermScene.GROUP,
 )
 
@@ -151,6 +165,15 @@ async def _handle_pet_search(matcher: Matcher, groups: tuple = RegexGroup()) -> 
     shown = "、".join(names[:60])
     suffix = f"\n仅展示前 60 个，共匹配 {len(results)} 个" if len(results) > 60 else f"\n共匹配 {len(results)} 个"
     await matcher.finish(f"查找结果：\n{shown}{suffix}")
+
+
+@attribute_effectiveness.handle()
+async def _handle_attribute_effectiveness(matcher: Matcher, bot: Bot) -> None:
+    """发送属性克制表。"""
+    if not ATTRIBUTE_EFFECTIVENESS_IMAGE.exists():
+        await matcher.finish("属性克制表资源不存在，请检查插件资源文件")
+    image = ATTRIBUTE_EFFECTIVENESS_IMAGE.read_bytes()
+    await matcher.finish(build_message(bot, build_message_segment(bot, "image", image)))
 
 
 @resource_download.handle()
