@@ -564,6 +564,15 @@ statistics_cmd = P.on_command(
     level=PermLevel.MEMBER,
 )
 
+global_statistics_cmd = P.on_command(
+    "全局表情调用统计",
+    block=True,
+    priority=11,
+    name="global_statistics",
+    display_name="全局表情调用统计",
+    level=PermLevel.MEMBER,
+)
+
 block_cmd = P.on_command(
     "禁用表情",
     block=True,
@@ -815,10 +824,7 @@ async def _protection_list(matcher: Matcher):
     await matcher.finish(msg)
 
 
-def _parse_statistics_text(text: str) -> tuple[bool, bool, str, Optional[str]]:
-    is_my = "我的" in text
-    is_global = "全局" in text
-
+def _parse_statistics_text(text: str) -> tuple[str, Optional[str]]:
     mapped_type: str = "24h"
     type_map = [
         ({"日", "24小时", "1天"}, "24h"),
@@ -836,36 +842,28 @@ def _parse_statistics_text(text: str) -> tuple[bool, bool, str, Optional[str]]:
             break
 
     meme_name = re.sub(
-        r"(我的|全局|日|24小时|1天|本日|今日|周|一周|7天|本周|月|30天|本月|月度|年|一年|本年|年度)",
+        r"(日|24小时|1天|本日|今日|周|一周|7天|本周|月|30天|本月|月度|年|一年|本年|年度)",
         " ",
         text,
     ).strip()
-    return is_my, is_global, mapped_type, (meme_name or None)
+    return mapped_type, (meme_name or None)
 
 
 @statistics_cmd.handle()
-async def _statistics(
+async def _do_statistics(
     bot: Bot,
     event: Event,
     matcher: Matcher,
     session: Uninfo,
-    arg: Message = CommandArg(),
+    id_type: SessionIdType,
+    arg: Message,
 ):
     raw = arg.extract_plain_text().strip()
     if not raw:
         raw = ""
-    is_my, is_global, typ, meme_name = _parse_statistics_text(raw)
+    typ, meme_name = _parse_statistics_text(raw)
 
     meme = await find_meme(matcher, meme_name) if meme_name else None
-
-    if is_my and is_global:
-        id_type = SessionIdType.USER
-    elif is_my:
-        id_type = SessionIdType.GROUP_USER
-    elif is_global:
-        id_type = SessionIdType.GLOBAL
-    else:
-        id_type = SessionIdType.GROUP
 
     now = datetime.now().astimezone()
     if typ == "24h":
@@ -972,6 +970,29 @@ async def _statistics(
         output = await plot_meme_and_duration_counts(meme_counts, duration_counts, title)
 
     await _send_image(matcher, bot, event, output, "")
+
+
+@statistics_cmd.handle()
+async def _statistics(
+    bot: Bot,
+    event: Event,
+    matcher: Matcher,
+    session: Uninfo,
+    arg: Message = CommandArg(),
+):
+    id_type = SessionIdType.GROUP if session.scene.is_group else SessionIdType.USER
+    await _do_statistics(bot, event, matcher, session, id_type, arg)
+
+
+@global_statistics_cmd.handle()
+async def _global_statistics(
+    bot: Bot,
+    event: Event,
+    matcher: Matcher,
+    session: Uninfo,
+    arg: Message = CommandArg(),
+):
+    await _do_statistics(bot, event, matcher, session, id_type=SessionIdType.GLOBAL, arg=arg)
 
 
 @block_cmd.handle()
