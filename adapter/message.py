@@ -285,7 +285,7 @@ def _replace_message_segments(message: Any, segments: list[Any]) -> bool:
 
 
 def move_non_text_segments_to_end(value: Any) -> bool:
-    """把所有非文本消息段后置，保留文本段和非文本段各自的相对顺序。"""
+    """清理文本边界空白，并把所有非文本消息段后置。"""
     message = event_message(value) if hasattr(value, "get_message") or hasattr(value, "message") else value
     if message is None:
         return False
@@ -301,7 +301,10 @@ def move_non_text_segments_to_end(value: Any) -> bool:
     if first_text_index is None:
         return False
 
-    non_text_before_first_text = any(not is_text_segment(segment) for segment in segments[:first_text_index])
+    has_non_text_segment = any(not is_text_segment(segment) for segment in segments)
+    if not has_non_text_segment:
+        return False
+
     text_segments: list[Any] = []
     non_text_segments: list[Any] = []
     changed = False
@@ -313,19 +316,18 @@ def move_non_text_segments_to_end(value: Any) -> bool:
             continue
 
         text = segment_text(segment)
-        if non_text_before_first_text and not first_non_empty_text_seen:
-            if not text.strip():
-                changed = True
-                continue
+        stripped = text.strip()
+        if not stripped:
+            changed = True
+            continue
+
+        if not first_non_empty_text_seen:
             first_non_empty_text_seen = True
-            stripped = text.lstrip()
             if stripped != text:
                 text_segments.extend(_make_text_segments(message, segment, stripped))
                 changed = True
                 continue
 
-        if text.strip():
-            first_non_empty_text_seen = True
         text_segments.append(segment)
 
     reordered = text_segments + non_text_segments
