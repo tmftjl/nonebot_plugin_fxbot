@@ -28,6 +28,10 @@ from .message import (
     send_message_to_target,
     send_text_to_target,
 )
+from .images import (
+    fetch_image_bytes,
+    image_sources_from_event_or_reply,
+)
 from .onebot11 import OneBotV11MessageAdapter
 from .qq import QQOfficialMessageAdapter
 
@@ -43,10 +47,12 @@ __all__ = [
     "extract_raw_image_sources",
     "extract_message_target",
     "extract_reply_message_id",
+    "fetch_image_bytes",
     "first_mention_target",
     "get_message_adapter",
     "get_onebot_v11_message_segment_class",
     "get_replied_message",
+    "image_sources_from_event_or_reply",
     "is_mention_segment",
     "is_onebot_v11",
     "is_qq_official",

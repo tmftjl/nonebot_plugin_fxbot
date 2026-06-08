@@ -10,6 +10,7 @@ from nonebot.matcher import Matcher
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
 from . import cos_upload as cos_upload
+from . import dps_chart as dps_chart
 from . import waves_analyze as waves_analyze
 
 P = Plugin("useful", display_name="实用工具", enabled=True, level=PermLevel.LOW, scene=PermScene.ALL)

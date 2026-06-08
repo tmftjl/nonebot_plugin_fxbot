@@ -16,8 +16,9 @@ from PIL import Image
 from ...adapter import (
     build_message,
     build_message_segment,
-    event_message,
-    extract_raw_image_sources,
+    fetch_image_bytes,
+    image_sources_from_event_or_reply,
+    is_qq_official,
 )
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
@@ -41,34 +42,6 @@ waves_analyze_cmd = P.on_regex(
 def _build_command_str(raw_text: str) -> str:
     """清理评分服务不识别的多余字符。"""
     return raw_text.replace("C", "").replace("c", "").replace("ost", "").replace("OST", "").replace("|", " ").strip()
-
-
-async def _fetch_bytes_from_source(src: str | bytes) -> bytes | None:
-    """读取图片来源。"""
-    if isinstance(src, bytes):
-        return src
-    value = str(src or "").strip()
-    if not value:
-        return None
-    if value.startswith("base64://"):
-        try:
-            return base64.b64decode(value[len("base64://") :])
-        except Exception:
-            return None
-    if value.startswith(("http://", "https://")):
-        try:
-            client = await get_shared_async_client()
-            response = await client.get(value, follow_redirects=True)
-            response.raise_for_status()
-            return response.content
-        except Exception:
-            return None
-    try:
-        from pathlib import Path
-
-        return Path(value).read_bytes()
-    except Exception:
-        return None
 
 
 async def _encode_images_to_b64(images: Iterable[bytes]) -> list[str]:
@@ -121,16 +94,6 @@ async def _post_score(images_b64: list[str], command_str: str) -> tuple[bytes | 
         return None, f"结果图片解析失败: {exc}"
 
 
-async def _get_images_from_event_or_reply(bot: Bot, event: Event) -> list[str | bytes]:  # noqa: ARG001
-    """从当前消息或回复消息中提取图片。"""
-    sources = extract_raw_image_sources(event_message(event))
-    if sources:
-        return sources
-    reply = getattr(event, "reply", None)
-    reply_message = getattr(reply, "message", None) if reply else None
-    return extract_raw_image_sources(reply_message)
-
-
 @waves_analyze_cmd.handle()
 async def _handle_waves_analyze(matcher: Matcher, bot: Bot, event: Event, groups: tuple = RegexGroup()) -> None:
     """处理鸣潮评分命令。"""
@@ -138,11 +101,13 @@ async def _handle_waves_analyze(matcher: Matcher, bot: Bot, event: Event, groups
     if not command_str:
         await matcher.finish("命令格式错误，参考：ww评分 土豆 1c")
 
-    image_sources = await _get_images_from_event_or_reply(bot, event)
+    image_sources = await image_sources_from_event_or_reply(bot, event)
     if not image_sources:
+        if is_qq_official(bot):
+            await matcher.finish("未获取到图片，QQ官方 Bot 请随命令一起发送图片")
         await matcher.finish("未获取到图片，请发送带图片的消息或回复/引用带图消息")
 
-    results = await asyncio.gather(*[asyncio.create_task(_fetch_bytes_from_source(source)) for source in image_sources])
+    results = await asyncio.gather(*[asyncio.create_task(fetch_image_bytes(source)) for source in image_sources])
     image_bytes = [item for item in results if item]
     if not image_bytes:
         await matcher.finish("未能读取到有效的图片数据")
