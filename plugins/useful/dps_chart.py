@@ -35,7 +35,7 @@ wwdps_cmd = P.on_regex(
 )
 
 update_wwdps_cmd = P.on_regex(
-    r"^ww(?:更新|刷新)dps(?:\s|$)",
+    r"^ww更新dps\s*(.*)$",
     name="update_wwdps",
     display_name="更新鸣潮DPS榜",
     priority=5,
