@@ -77,7 +77,7 @@ def get_ui_schema() -> dict[str, Any]:
                             ]
                         },
                     },
-                    {"field": "qq_quality", "label": "QQ 音质档位", "component": "InputNumber", "default": DEFAULTS["music"]["qq_quality"], "helpMessage": "QQ 音乐播放质量档位。", "componentProps": {"min": 1, "max": 8}},
+                    {"field": "qq_quality", "label": "QQ 音质档位", "component": "InputNumber", "default": DEFAULTS["music"]["qq_quality"], "helpMessage": "QQ 音乐播放质量档位 (1=m4a, 2=128kbps, 3=320kbps, 4=flac, 5=ape)。", "componentProps": {"min": 1, "max": 5}},
                     {"field": "netease_quality", "label": "网易云音质档位", "component": "InputNumber", "default": DEFAULTS["music"]["netease_quality"], "helpMessage": "网易云播放质量档位。", "componentProps": {"min": 1, "max": 8}},
                 ],
             },
