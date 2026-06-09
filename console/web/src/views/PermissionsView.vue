@@ -1,9 +1,14 @@
 <!-- -*- coding: utf-8 -*- -->
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { permissionApi, metaApi } from '@/api'
-import type { PermissionConfig, LayerConfig, PluginPermission } from '@/types/api'
+import type { PermissionConfig, LayerConfig } from '@/types/api'
+
+type AccountList = NonNullable<LayerConfig['whitelist']>
+type ListSection = 'whitelist' | 'blacklist'
+type ListType = keyof AccountList
+type InputValue = string | number
 
 const loading = ref(false)
 const saving = ref(false)
@@ -12,6 +17,7 @@ const pluginNames = ref<Record<string, string>>({})
 const commandNames = ref<Record<string, Record<string, string>>>({})
 const expandedPlugins = ref<string[]>([])
 const hasChanges = ref(false)
+const listDrafts = ref<Record<string, string>>({})
 
 const jsonDialogVisible = ref(false)
 const jsonContent = ref('')
@@ -50,6 +56,7 @@ const loadData = async () => {
     permissions.value = perm
     pluginNames.value = plugins
     commandNames.value = commands
+    listDrafts.value = {}
     hasChanges.value = false
   } catch (e: any) {
     ElMessage.error('加载权限失败: ' + (e?.message || e))
@@ -64,6 +71,7 @@ const savePermissions = async () => {
   try {
     await permissionApi.save(permissions.value)
     ElMessage.success('保存成功')
+    listDrafts.value = {}
     hasChanges.value = false
   } catch (e: any) {
     ElMessage.error('保存失败: ' + (e?.message || e))
@@ -86,24 +94,47 @@ const isExpanded = (pluginId: string) => expandedPlugins.value.includes(pluginId
 const getPluginName = (key: string) => pluginNames.value[key] || key
 const getCommandName = (plugin: string, cmd: string) => commandNames.value[plugin]?.[cmd] || cmd
 
-const parseList = (str: string): string[] => {
-  return str.split(/[,，\s]+/).map(s => s.trim()).filter(Boolean)
+const parseList = (value: InputValue): string[] => {
+  return String(value).split(/[,，\s]+/).map(s => s.trim()).filter(Boolean)
 }
 
 const formatList = (arr: string[] | undefined): string => {
   return arr?.join(', ') || ''
 }
 
-const updateWhitelist = (layer: LayerConfig, type: 'users' | 'groups', val: string) => {
-  if (!layer.whitelist) layer.whitelist = { users: [], groups: [] }
-  layer.whitelist[type] = parseList(val)
+const listInputKey = (...parts: Array<string | number>) => {
+  return parts.map(part => String(part)).join(':')
+}
+
+const getListInputValue = (key: string, arr: string[] | undefined): string => {
+  return listDrafts.value[key] ?? formatList(arr)
+}
+
+const ensureAccountList = (layer: LayerConfig, section: ListSection): AccountList => {
+  if (!layer[section]) {
+    layer[section] = { users: [], groups: [] }
+  }
+  return layer[section]
+}
+
+const updateAccountList = (
+  key: string,
+  layer: LayerConfig,
+  section: ListSection,
+  type: ListType,
+  val: InputValue
+) => {
+  listDrafts.value[key] = String(val)
+  ensureAccountList(layer, section)[type] = parseList(val)
   hasChanges.value = true
 }
 
-const updateBlacklist = (layer: LayerConfig, type: 'users' | 'groups', val: string) => {
-  if (!layer.blacklist) layer.blacklist = { users: [], groups: [] }
-  layer.blacklist[type] = parseList(val)
-  hasChanges.value = true
+const updateWhitelist = (key: string, layer: LayerConfig, type: ListType, val: InputValue) => {
+  updateAccountList(key, layer, 'whitelist', type, val)
+}
+
+const updateBlacklist = (key: string, layer: LayerConfig, type: ListType, val: InputValue) => {
+  updateAccountList(key, layer, 'blacklist', type, val)
 }
 
 const markChanged = () => {
@@ -121,6 +152,7 @@ const saveJson = () => {
   try {
     const parsed = JSON.parse(jsonContent.value)
     permissions.value = parsed
+    listDrafts.value = {}
     hasChanges.value = true
     jsonDialogVisible.value = false
     ElMessage.success('JSON已更新，请点击保存配置按钮保存')
@@ -204,32 +236,32 @@ onMounted(() => {
           <div class="list-group">
             <label>✅ 用户白名单</label>
             <el-input
-              :model-value="formatList(permissions.top.whitelist?.users)"
-              @update:model-value="v => updateWhitelist(permissions.top, 'users', v)"
+              :model-value="getListInputValue(listInputKey('top', 'whitelist', 'users'), permissions.top.whitelist?.users)"
+              @update:model-value="v => updateWhitelist(listInputKey('top', 'whitelist', 'users'), permissions.top, 'users', v)"
               placeholder="逗号分隔的用户ID"
             />
           </div>
           <div class="list-group">
             <label>✅ 群白名单</label>
             <el-input
-              :model-value="formatList(permissions.top.whitelist?.groups)"
-              @update:model-value="v => updateWhitelist(permissions.top, 'groups', v)"
+              :model-value="getListInputValue(listInputKey('top', 'whitelist', 'groups'), permissions.top.whitelist?.groups)"
+              @update:model-value="v => updateWhitelist(listInputKey('top', 'whitelist', 'groups'), permissions.top, 'groups', v)"
               placeholder="逗号分隔的群号"
             />
           </div>
           <div class="list-group">
             <label>⛔ 用户黑名单</label>
             <el-input
-              :model-value="formatList(permissions.top.blacklist?.users)"
-              @update:model-value="v => updateBlacklist(permissions.top, 'users', v)"
+              :model-value="getListInputValue(listInputKey('top', 'blacklist', 'users'), permissions.top.blacklist?.users)"
+              @update:model-value="v => updateBlacklist(listInputKey('top', 'blacklist', 'users'), permissions.top, 'users', v)"
               placeholder="逗号分隔的用户ID"
             />
           </div>
           <div class="list-group">
             <label>⛔ 群黑名单</label>
             <el-input
-              :model-value="formatList(permissions.top.blacklist?.groups)"
-              @update:model-value="v => updateBlacklist(permissions.top, 'groups', v)"
+              :model-value="getListInputValue(listInputKey('top', 'blacklist', 'groups'), permissions.top.blacklist?.groups)"
+              @update:model-value="v => updateBlacklist(listInputKey('top', 'blacklist', 'groups'), permissions.top, 'groups', v)"
               placeholder="逗号分隔的群号"
             />
           </div>
@@ -315,32 +347,32 @@ onMounted(() => {
                 <div class="list-group">
                   <label>✅ 用户白名单</label>
                   <el-input
-                    :model-value="formatList(plugin.top.whitelist?.users)"
-                    @update:model-value="v => updateWhitelist(plugin.top, 'users', v)"
+                    :model-value="getListInputValue(listInputKey('plugin', pluginId, 'top', 'whitelist', 'users'), plugin.top.whitelist?.users)"
+                    @update:model-value="v => updateWhitelist(listInputKey('plugin', pluginId, 'top', 'whitelist', 'users'), plugin.top, 'users', v)"
                     placeholder="逗号分隔"
                   />
                 </div>
                 <div class="list-group">
                   <label>✅ 群白名单</label>
                   <el-input
-                    :model-value="formatList(plugin.top.whitelist?.groups)"
-                    @update:model-value="v => updateWhitelist(plugin.top, 'groups', v)"
+                    :model-value="getListInputValue(listInputKey('plugin', pluginId, 'top', 'whitelist', 'groups'), plugin.top.whitelist?.groups)"
+                    @update:model-value="v => updateWhitelist(listInputKey('plugin', pluginId, 'top', 'whitelist', 'groups'), plugin.top, 'groups', v)"
                     placeholder="逗号分隔"
                   />
                 </div>
                 <div class="list-group">
                   <label>⛔ 用户黑名单</label>
                   <el-input
-                    :model-value="formatList(plugin.top.blacklist?.users)"
-                    @update:model-value="v => updateBlacklist(plugin.top, 'users', v)"
+                    :model-value="getListInputValue(listInputKey('plugin', pluginId, 'top', 'blacklist', 'users'), plugin.top.blacklist?.users)"
+                    @update:model-value="v => updateBlacklist(listInputKey('plugin', pluginId, 'top', 'blacklist', 'users'), plugin.top, 'users', v)"
                     placeholder="逗号分隔"
                   />
                 </div>
                 <div class="list-group">
                   <label>⛔ 群黑名单</label>
                   <el-input
-                    :model-value="formatList(plugin.top.blacklist?.groups)"
-                    @update:model-value="v => updateBlacklist(plugin.top, 'groups', v)"
+                    :model-value="getListInputValue(listInputKey('plugin', pluginId, 'top', 'blacklist', 'groups'), plugin.top.blacklist?.groups)"
+                    @update:model-value="v => updateBlacklist(listInputKey('plugin', pluginId, 'top', 'blacklist', 'groups'), plugin.top, 'groups', v)"
                     placeholder="逗号分隔"
                   />
                 </div>
@@ -414,8 +446,8 @@ onMounted(() => {
                     <div class="list-group">
                       <label>✅ 用户白名单</label>
                       <el-input
-                        :model-value="formatList(cmd.whitelist?.users)"
-                        @update:model-value="v => updateWhitelist(cmd, 'users', v)"
+                        :model-value="getListInputValue(listInputKey('plugin', pluginId, 'command', cmdId, 'whitelist', 'users'), cmd.whitelist?.users)"
+                        @update:model-value="v => updateWhitelist(listInputKey('plugin', pluginId, 'command', cmdId, 'whitelist', 'users'), cmd, 'users', v)"
                         size="small"
                         placeholder="逗号分隔"
                       />
@@ -423,8 +455,8 @@ onMounted(() => {
                     <div class="list-group">
                       <label>✅ 群白名单</label>
                       <el-input
-                        :model-value="formatList(cmd.whitelist?.groups)"
-                        @update:model-value="v => updateWhitelist(cmd, 'groups', v)"
+                        :model-value="getListInputValue(listInputKey('plugin', pluginId, 'command', cmdId, 'whitelist', 'groups'), cmd.whitelist?.groups)"
+                        @update:model-value="v => updateWhitelist(listInputKey('plugin', pluginId, 'command', cmdId, 'whitelist', 'groups'), cmd, 'groups', v)"
                         size="small"
                         placeholder="逗号分隔"
                       />
@@ -432,8 +464,8 @@ onMounted(() => {
                     <div class="list-group">
                       <label>⛔ 用户黑名单</label>
                       <el-input
-                        :model-value="formatList(cmd.blacklist?.users)"
-                        @update:model-value="v => updateBlacklist(cmd, 'users', v)"
+                        :model-value="getListInputValue(listInputKey('plugin', pluginId, 'command', cmdId, 'blacklist', 'users'), cmd.blacklist?.users)"
+                        @update:model-value="v => updateBlacklist(listInputKey('plugin', pluginId, 'command', cmdId, 'blacklist', 'users'), cmd, 'users', v)"
                         size="small"
                         placeholder="逗号分隔"
                       />
@@ -441,8 +473,8 @@ onMounted(() => {
                     <div class="list-group">
                       <label>⛔ 群黑名单</label>
                       <el-input
-                        :model-value="formatList(cmd.blacklist?.groups)"
-                        @update:model-value="v => updateBlacklist(cmd, 'groups', v)"
+                        :model-value="getListInputValue(listInputKey('plugin', pluginId, 'command', cmdId, 'blacklist', 'groups'), cmd.blacklist?.groups)"
+                        @update:model-value="v => updateBlacklist(listInputKey('plugin', pluginId, 'command', cmdId, 'blacklist', 'groups'), cmd, 'groups', v)"
                         size="small"
                         placeholder="逗号分隔"
                       />
