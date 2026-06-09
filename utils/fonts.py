@@ -41,10 +41,20 @@ def load_fallback_font_pair(primary_name: str = "FZB.ttf", size: int = 26):
 
 
 def _has_glyph(font: ImageFont.FreeTypeFont, char: str) -> bool:
-    """判断字体是否包含某个字符的 glyph。"""
+    """判断字体是否包含某个字符的 glyph。
+
+    有些字体对不支持的字形会返回宽度非零但高度为零的空遮罩（如 FZB 对假名），
+    因此必须同时检查 bbox 是否有效。
+    """
     try:
         mask = font.getmask(char)
-        return mask is not None and mask.size[0] > 0
+        if mask is None:
+            return False
+        bbox = mask.getbbox()
+        if bbox is None:
+            return False
+        # bbox 为 (left, top, right, bottom)，有效字形应有正面积
+        return bbox[2] > bbox[0] and bbox[3] > bbox[1]
     except Exception:
         return False
 
