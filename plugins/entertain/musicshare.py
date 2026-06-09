@@ -25,7 +25,13 @@ from PIL import Image, ImageDraw
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
 from ...adapter import build_message, build_message_segment
-from ...utils.fonts import get_shared_font_path, load_font
+from ...utils.fonts import (
+    draw_text_with_fallback,
+    get_shared_font_path,
+    load_fallback_font_pair,
+    load_font,
+    truncate_text_with_fallback,
+)
 from ...utils.http import get_shared_async_client
 from ...utils.paths import data_dir
 from .config import cfg_music
@@ -755,10 +761,10 @@ def _draw_music_list(platform: Platform, keyword: str, songs: list[Song]) -> byt
     col_w = 400
     font_path = get_shared_font_path()
 
-    font_title = load_font(font_path, 36)
+    font_title_fb = load_fallback_font_pair("FZB.ttf", 36)
     font_sub = load_font(font_path, 22)
-    font_song = load_font(font_path, 26)
-    font_artist = load_font(font_path, 20)
+    font_song_fb = load_fallback_font_pair("FZB.ttf", 26)
+    font_artist_fb = load_fallback_font_pair("FZB.ttf", 20)
     font_badge = load_font(font_path, 20)
     font_footer = load_font(font_path, 18)
 
@@ -773,7 +779,10 @@ def _draw_music_list(platform: Platform, keyword: str, songs: list[Song]) -> byt
     image = Image.new("RGB", (width, height), bg_color)
     draw = ImageDraw.Draw(image)
     draw.rectangle([(0, 0), (width, header_h)], fill=header_color)
-    draw.text((padding, 25), f"搜索结果: {keyword}", font=font_title, fill=(255, 255, 255))
+    draw_text_with_fallback(
+        draw, (padding, 25), f"搜索结果: {keyword}",
+        primary=font_title_fb[0], fallback=font_title_fb[1], fill=(255, 255, 255),
+    )
     draw.text(
         (padding, 75),
         f"来源: {_platform_name_cn(platform)} | 共找到 {len(songs)} 首歌曲",
@@ -804,11 +813,17 @@ def _draw_music_list(platform: Platform, keyword: str, songs: list[Song]) -> byt
 
         text_x = bx + badge_size + 15
         content_w = col_w - (text_x - x) - 10
-        song_name = song.song
-        while draw.textlength(song_name, font=font_song) > content_w and len(song_name) > 1:
-            song_name = song_name[:-2] + "…"
-        draw.text((text_x, y + 12), song_name, fill=text_main, font=font_song)
-        draw.text((text_x, y + 42), song.singer, fill=text_sub, font=font_artist)
+        song_name = truncate_text_with_fallback(
+            song.song, content_w, primary=font_song_fb[0], fallback=font_song_fb[1],
+        )
+        draw_text_with_fallback(
+            draw, (text_x, y + 12), song_name, primary=font_song_fb[0], fallback=font_song_fb[1],
+            fill=text_main,
+        )
+        draw_text_with_fallback(
+            draw, (text_x, y + 42), song.singer, primary=font_artist_fb[0], fallback=font_artist_fb[1],
+            fill=text_sub,
+        )
 
     footer = "发送 #序号 (如 #1) 即可播放"
     bbox = draw.textbbox((0, 0), footer, font=font_footer)
