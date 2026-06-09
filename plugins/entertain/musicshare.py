@@ -243,6 +243,80 @@ def _cache_get(key: str) -> dict[str, Any] | None:
     return value
 
 
+def _decode_auth_data(auth: str) -> dict[str, Any]:
+    """解码 music-api auth 内的账号数据。"""
+    token = str(auth or "").strip()
+    if not token:
+        return {}
+    encoded = token.split(".", 1)[0]
+    padding = "=" * (-len(encoded) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode((encoded + padding).encode("utf-8")).decode("utf-8")
+        data = json.loads(decoded)
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    inner = data.get("data")
+    return inner if isinstance(inner, dict) else data
+
+
+def _first_text_value(data: dict[str, Any], keys: tuple[str, ...]) -> str:
+    """按优先级取第一个非空文本字段。"""
+    for key in keys:
+        value = data.get(key)
+        if value is not None:
+            text = str(value).strip()
+            if text:
+                return text
+    return ""
+
+
+def _auth_account_identity(platform: Platform, account: dict[str, Any]) -> str | None:
+    """生成音乐账号身份键，用于同账号重复登录去重。"""
+    auth = str(account.get("auth") or "").strip()
+    auth_data = _decode_auth_data(auth)
+    merged = {**auth_data, **account}
+
+    if platform == "qq":
+        value = _first_text_value(
+            merged,
+            (
+                "uin",
+                "qq",
+                "userId",
+                "user_id",
+                "uid",
+                "accountId",
+                "account_id",
+            ),
+        )
+        if value:
+            return f"{platform}:uin:{value.removeprefix('o')}"
+
+    if platform == "netease":
+        profile = merged.get("profile")
+        if isinstance(profile, dict):
+            value = _first_text_value(profile, ("userId", "user_id", "uid"))
+            if value:
+                return f"{platform}:uid:{value}"
+
+        value = _first_text_value(
+            merged,
+            (
+                "userId",
+                "user_id",
+                "uid",
+                "accountId",
+                "account_id",
+            ),
+        )
+        if value:
+            return f"{platform}:uid:{value}"
+
+    return None
+
+
 def _normalize_login_bucket(owner: str, platform: Platform, data: Any = None) -> dict[str, Any]:
     """规范化登录桶数据。"""
     if not isinstance(data, dict):
@@ -251,15 +325,20 @@ def _normalize_login_bucket(owner: str, platform: Platform, data: Any = None) ->
     accounts_raw = data.get("accounts")
     accounts = accounts_raw if isinstance(accounts_raw, list) else []
     normalized_accounts: list[dict[str, Any]] = []
-    seen_auths: set[str] = set()
+    seen_identities: set[str] = set()
     for item in accounts:
         if not isinstance(item, dict):
             continue
         auth = str(item.get("auth") or "").strip()
-        if not auth or auth in seen_auths:
+        if not auth:
             continue
-        seen_auths.add(auth)
-        normalized_accounts.append({**item, "auth": auth, "owner": owner, "provider": platform})
+        account = {**item, "auth": auth, "owner": owner, "provider": platform}
+        identity = _auth_account_identity(platform, account)
+        if identity is not None and identity in seen_identities:
+            continue
+        if identity is not None:
+            seen_identities.add(identity)
+        normalized_accounts.append(account)
 
     pending_raw = data.get("pending")
     pending = pending_raw if isinstance(pending_raw, list) else []
@@ -352,10 +431,16 @@ async def _add_auth_account(
         "createdAt": time.time(),
     }
     if payload:
-        for key in ("nickname", "uin", "code"):
+        for key in ("nickname", "uin", "code", "userId", "user_id", "uid", "accountId", "account_id", "profile"):
             if payload.get(key) is not None:
                 account[key] = payload[key]
-    bucket["accounts"] = [item for item in bucket["accounts"] if item.get("auth") != auth]
+    identity = _auth_account_identity(platform, account)
+    if identity is not None:
+        bucket["accounts"] = [
+            item
+            for item in bucket["accounts"]
+            if _auth_account_identity(platform, item) != identity
+        ]
     bucket["accounts"].append(account)
     await _save_login_bucket(owner, platform, bucket)
     return account
