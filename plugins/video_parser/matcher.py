@@ -19,7 +19,14 @@ from ...adapter.support import event_group_id
 from ...permission import PermLevel, PermScene
 from . import P
 from .config import is_global_enabled, set_global_enabled
-from .downloader import DownloadError, download_images, download_video
+from .downloader import (
+    DownloadError,
+    cleanup_download_dir,
+    cleanup_legacy_cache,
+    create_download_dir,
+    download_images,
+    download_video,
+)
 from .parsers import ParseError, can_parse_url, find_url, parse_url
 from .sender import send_image_result, send_video_result
 from .state import is_group_enabled, set_group_enabled
@@ -124,13 +131,15 @@ async def _handle_video(matcher: Matcher, bot: Bot, event: Event, state: T_State
     if not can_parse_url(url):
         return
     await matcher.send("正在解析媒体，请稍候...")
+    cleanup_legacy_cache()
+    download_dir = create_download_dir()
     try:
         result = await parse_url(url)
         if result.video_url:
-            video_path = await download_video(result)
+            video_path = await download_video(result, directory=download_dir)
             await send_video_result(matcher, bot, event, result, video_path)
         elif result.image_urls:
-            image_paths = await download_images(result)
+            image_paths = await download_images(result, directory=download_dir)
             await send_image_result(matcher, bot, event, result, image_paths)
         else:
             raise ParseError("解析结果没有可发送的媒体")
@@ -142,6 +151,8 @@ async def _handle_video(matcher: Matcher, bot: Bot, event: Event, state: T_State
         raise
     except Exception as exc:
         await matcher.finish(f"解析失败：{type(exc).__name__}: {exc}")
+    finally:
+        cleanup_download_dir(download_dir)
 
 
 @group_toggle_cmd.handle()

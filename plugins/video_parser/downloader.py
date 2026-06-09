@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import shutil
+import uuid
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -15,6 +17,8 @@ from .config import cfg_general, cfg_network
 from .types import VideoResult
 
 CACHE_DIR = cache_dir("video_parser")
+LEGACY_MEDIA_SUFFIXES = {".gif", ".jpg", ".jpeg", ".m4a", ".m4s", ".mp4", ".png", ".webp"}
+_legacy_cache_cleaned = False
 
 
 class DownloadError(RuntimeError):
@@ -29,10 +33,42 @@ def _suffix_from_url(url: str, default: str) -> str:
     return default
 
 
-def _cache_path(url: str, suffix: str) -> Path:
+def create_download_dir() -> Path:
+    """创建单次解析使用的临时下载目录。"""
+    directory = CACHE_DIR / uuid.uuid4().hex
+    directory.mkdir(parents=True, exist_ok=False)
+    return directory
+
+
+def cleanup_download_dir(directory: Path) -> None:
+    """清理单次解析留下的临时下载目录。"""
+    resolved_cache = CACHE_DIR.resolve()
+    resolved_directory = directory.resolve()
+    if resolved_directory == resolved_cache or resolved_cache not in resolved_directory.parents:
+        return
+    shutil.rmtree(resolved_directory, ignore_errors=True)
+
+
+def cleanup_legacy_cache() -> None:
+    """清理旧版本直接留在缓存根目录的媒体文件。"""
+    global _legacy_cache_cleaned
+    if _legacy_cache_cleaned:
+        return
+    _legacy_cache_cleaned = True
+    if not CACHE_DIR.exists():
+        return
+    for path in CACHE_DIR.iterdir():
+        if path.is_file() and path.suffix.lower() in LEGACY_MEDIA_SUFFIXES:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                continue
+
+
+def _cache_path(url: str, suffix: str, *, directory: Path) -> Path:
     """生成缓存路径。"""
     digest = hashlib.sha1(url.encode("utf-8")).hexdigest()
-    return CACHE_DIR / f"{digest}{suffix}"
+    return directory / f"{digest}{suffix}"
 
 
 def _timeout() -> httpx.Timeout:
@@ -47,10 +83,17 @@ def _proxy() -> str | None:
     return value or None
 
 
-async def download_file(url: str, *, suffix: str = ".mp4", headers: dict[str, str] | None = None) -> Path:
+async def download_file(
+    url: str,
+    *,
+    suffix: str = ".mp4",
+    headers: dict[str, str] | None = None,
+    directory: Path | None = None,
+) -> Path:
     """下载远程文件到缓存目录。"""
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    file_path = _cache_path(url, _suffix_from_url(url, suffix))
+    directory = directory or CACHE_DIR
+    directory.mkdir(parents=True, exist_ok=True)
+    file_path = _cache_path(url, _suffix_from_url(url, suffix), directory=directory)
     if file_path.exists() and file_path.stat().st_size > 0:
         return file_path
 
@@ -152,7 +195,7 @@ async def _merge_av(video_path: Path, audio_path: Path, output_path: Path) -> Pa
     return output_path
 
 
-async def download_video(result: VideoResult) -> Path:
+async def download_video(result: VideoResult, *, directory: Path | None = None) -> Path:
     """下载解析结果中的视频。"""
     if not result.video_url:
         raise DownloadError("解析结果没有视频直链")
@@ -161,32 +204,33 @@ async def download_video(result: VideoResult) -> Path:
         raise DownloadError(f"视频时长超过限制：{int(result.duration)} 秒")
 
     if not result.audio_url:
-        return await download_file(result.video_url, suffix=".mp4", headers=result.headers)
+        return await download_file(result.video_url, suffix=".mp4", headers=result.headers, directory=directory)
 
     video_path, audio_path = await asyncio.gather(
-        download_file(result.video_url, suffix=".m4s", headers=result.headers),
-        download_file(result.audio_url, suffix=".m4a", headers=result.headers),
+        download_file(result.video_url, suffix=".m4s", headers=result.headers, directory=directory),
+        download_file(result.audio_url, suffix=".m4a", headers=result.headers, directory=directory),
     )
-    output = CACHE_DIR / f"{hashlib.sha1((result.video_url + result.audio_url).encode('utf-8')).hexdigest()}.mp4"
+    output_dir = directory or CACHE_DIR
+    output = output_dir / f"{hashlib.sha1((result.video_url + result.audio_url).encode('utf-8')).hexdigest()}.mp4"
     return await _merge_av(video_path, audio_path, output)
 
 
-async def download_images(result: VideoResult) -> list[Path]:
+async def download_images(result: VideoResult, *, directory: Path | None = None) -> list[Path]:
     """下载解析结果中的图片。"""
     if not result.image_urls:
         raise DownloadError("解析结果没有图片")
-    tasks = [_download_image(url, headers=result.headers) for url in result.image_urls]
+    tasks = [_download_image(url, headers=result.headers, directory=directory) for url in result.image_urls]
     paths = [path for path in await asyncio.gather(*tasks) if path is not None]
     if not paths:
         raise DownloadError("图片下载失败")
     return paths
 
 
-async def _download_image(url: str, *, headers: dict[str, str]) -> Path | None:
+async def _download_image(url: str, *, headers: dict[str, str], directory: Path | None = None) -> Path | None:
     """下载图片，失败时尝试常见无样式原图地址。"""
     for candidate in _url_candidates(url):
         try:
-            return await download_file(candidate, suffix=".jpg", headers=headers)
+            return await download_file(candidate, suffix=".jpg", headers=headers, directory=directory)
         except Exception:
             continue
     return None
