@@ -10,7 +10,7 @@ import re
 import time
 import uuid
 from dataclasses import dataclass, replace
-from pathlib import Path
+
 from typing import Any, Literal
 
 from nonebot import logger
@@ -46,32 +46,20 @@ _SELECT_INDEX_STATE = "musicshare_select_index"
 
 @dataclass
 class Song:
-    """音乐搜索结果。"""
+    """音乐搜索结果（字段与 music-api 返回一致）。"""
 
     id: str
-    mid: str | None
-    vid: str
     song: str
-    subtitle: str
-    album: str
     singer: str
-    cover: str
-    pay: str
-    time: str
-    type: int
-    bpm: int
-    quality: str
-    grp: list["Song"]
+    album: str
+    duration: int = 0
     index: int = 0
-    link: str | None = None
-    interval: str | None = None
-    size: str | None = None
-    kbps: str | None = None
-    url: str | None = None
+    mid: str | None = None
+    media_id: str | None = None
     search_id: str | None = None
+    link: str | None = None
     auth: str | None = None
     auth_owner: str | None = None
-    media_id: str | None = None
 
 
 class MusicLoginRequired(Exception):
@@ -261,58 +249,28 @@ def _decode_auth_data(auth: str) -> dict[str, Any]:
     return inner if isinstance(inner, dict) else data
 
 
-def _first_text_value(data: dict[str, Any], keys: tuple[str, ...]) -> str:
-    """按优先级取第一个非空文本字段。"""
-    for key in keys:
-        value = data.get(key)
-        if value is not None:
-            text = str(value).strip()
-            if text:
-                return text
-    return ""
-
 
 def _auth_account_identity(platform: Platform, account: dict[str, Any]) -> str | None:
     """生成音乐账号身份键，用于同账号重复登录去重。"""
     auth = str(account.get("auth") or "").strip()
     auth_data = _decode_auth_data(auth)
-    merged = {**auth_data, **account}
 
     if platform == "qq":
-        value = _first_text_value(
-            merged,
-            (
-                "uin",
-                "qq",
-                "userId",
-                "user_id",
-                "uid",
-                "accountId",
-                "account_id",
-            ),
-        )
+        value = str(auth_data.get("uin") or account.get("uin") or "").strip()
         if value:
             return f"{platform}:uin:{value.removeprefix('o')}"
+        return None
 
     if platform == "netease":
-        profile = merged.get("profile")
+        profile = auth_data.get("profile") or account.get("profile")
         if isinstance(profile, dict):
-            value = _first_text_value(profile, ("userId", "user_id", "uid"))
+            value = str(profile.get("userId") or "").strip()
             if value:
                 return f"{platform}:uid:{value}"
-
-        value = _first_text_value(
-            merged,
-            (
-                "userId",
-                "user_id",
-                "uid",
-                "accountId",
-                "account_id",
-            ),
-        )
+        value = str(auth_data.get("userId") or account.get("userId") or "").strip()
         if value:
             return f"{platform}:uid:{value}"
+        return None
 
     return None
 
@@ -431,7 +389,7 @@ async def _add_auth_account(
         "createdAt": time.time(),
     }
     if payload:
-        for key in ("nickname", "uin", "code", "userId", "user_id", "uid", "accountId", "account_id", "profile"):
+        for key in ("nickname", "uin", "userId", "accountId", "profile"):
             if payload.get(key) is not None:
                 account[key] = payload[key]
     identity = _auth_account_identity(platform, account)
@@ -499,14 +457,10 @@ async def _next_auth_account(
     return candidates[index]
 
 
-def _decode_data_image(image: str) -> bytes | str:
-    """解码 music-api 返回的二维码图片。"""
-    if image.startswith("data:image/"):
-        _, encoded = image.split(",", 1)
-        return base64.b64decode(encoded)
-    if image.startswith("base64://"):
-        return base64.b64decode(image[9:])
-    return image
+def _decode_data_image(image: str) -> bytes:
+    """解码 music-api 返回的二维码图片（data:image/... 格式）。"""
+    _, encoded = image.split(",", 1)
+    return base64.b64decode(encoded)
 
 
 async def _send_login_text(bot: Bot, event: Event, text: str) -> None:
@@ -581,7 +535,7 @@ async def _watch_login_status(
                 await _update_pending_login(owner, platform, pending_id, next_token)
                 login_token = next_token
             status = str(data.get("status") or "pending")
-            if status == "expired" or data.get("refresh"):
+            if status == "expired":
                 await _remove_pending_login(owner, platform, pending_id)
                 await _send_login_text(bot, event, f"{provider_name} 登录二维码已过期，请重新发送 #音乐登录{provider_hint}")
                 return
@@ -611,16 +565,6 @@ def _start_login_watcher(
         _watch_login_status(bot, event, owner, platform, pending_id, login_token)
     )
 
-
-def _format_duration(seconds: Any) -> str:
-    """秒数转 mm:ss。"""
-    try:
-        value = int(seconds)
-    except (TypeError, ValueError):
-        return ""
-    if value <= 0:
-        return ""
-    return f"{value // 60:02d}:{value % 60:02d}"
 
 
 def _quality_for_api(platform: Platform) -> str:
@@ -653,8 +597,6 @@ async def _search_songs_api(
     )
     search_id = data.get("searchId")
     items = data.get("songs", [])
-    if isinstance(items, dict):
-        items = [items]
     if not isinstance(items, list):
         items = []
 
@@ -662,34 +604,32 @@ async def _search_songs_api(
     for item in items:
         if not isinstance(item, dict):
             continue
-        song_id = str(item.get("id") or item.get("songid") or item.get("songmid") or "")
-        mid = item.get("songmid") or item.get("mid")
-        song_type = int(item.get("type", 0) or 0)
-        media_id = item.get("mediaId") or item.get("media_id")
-        link = item.get("link")
-        if not link:
-            if platform == "qq" and mid:
-                link = f"https://i.y.qq.com/v8/playsong.html?songmid={mid}&type={song_type}"
-            elif platform == "netease" and song_id:
-                link = f"https://music.163.com/#/song?id={song_id}"
+        song_id = str(item["id"])
+        mid = item.get("songmid")
+        media_id = item.get("mediaId")
+        duration = int(item.get("duration", 0) or 0)
+        name = str(item["name"])
+        singer = str(item.get("singer", "未知歌手") or "未知歌手")
+        album = str(item.get("album", "") or "")
+        index = int(item["index"])
+
+        if platform == "qq" and mid:
+            link = f"https://i.y.qq.com/v8/playsong.html?songmid={mid}&type=0"
+        elif platform == "netease" and song_id:
+            link = f"https://music.163.com/#/song?id={song_id}"
+        else:
+            link = None
+
         results.append(
             Song(
                 id=song_id,
                 mid=str(mid) if mid else None,
-                vid=str(item.get("vid", "") or ""),
-                song=str(item.get("name") or item.get("song") or "未知歌曲"),
-                subtitle=str(item.get("subtitle", "") or ""),
-                album=str(item.get("album", "") or ""),
-                singer=str(item.get("singer", "未知歌手") or "未知歌手"),
-                cover=str(item.get("cover", "") or ""),
-                pay=str(item.get("pay", "") or ""),
-                time=str(item.get("time") or _format_duration(item.get("duration"))),
-                type=song_type,
-                bpm=int(item.get("bpm", 0) or 0),
-                quality=str(item.get("quality", "") or ""),
-                grp=[],
-                index=int(item.get("index") or len(results)),
-                link=str(link) if link else None,
+                song=name,
+                singer=singer,
+                album=album,
+                duration=duration,
+                index=index,
+                link=link,
                 search_id=str(search_id) if search_id else None,
                 auth=auth,
                 auth_owner=auth_owner,
@@ -1003,7 +943,7 @@ async def _handle_login_poll(matcher: Matcher, event: Event, groups: tuple = Reg
         if next_token and next_token != login_token:
             await _update_pending_login(user_id, platform, pending_id, next_token)
         status = str(data.get("status") or "pending")
-        if status == "expired" or data.get("refresh"):
+        if status == "expired":
             await _remove_pending_login(user_id, platform, pending_id)
         elif status == "scanned":
             scanned = True
