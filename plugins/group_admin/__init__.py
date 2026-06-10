@@ -276,6 +276,17 @@ async def _set_essence(bot: Bot, group_id: str, message_id: int, *, operator_id:
         return ServiceResult(False, f"操作失败: {exc}")
 
 
+def _title_width(title: str) -> int:
+    """计算头衔的显示宽度（中文/全角字符计 2，ASCII 计 1）。"""
+    width = 0
+    for c in title:
+        if ord(c) <= 127:
+            width += 1
+        else:
+            width += 2
+    return width
+
+
 async def _set_title(
     bot: Bot,
     group_id: str,
@@ -285,8 +296,8 @@ async def _set_title(
     operator_id: str,
 ) -> ServiceResult:
     """设置群头衔。"""
-    if len(title) > 12:
-        return ServiceResult(False, "头衔不能超过 12 个字符")
+    if _title_width(title) > 12:
+        return ServiceResult(False, "头衔不能超过 6 个中文字或 12 个英文字母")
     if str(user_id) == str(operator_id):
         guard = await _bot_guard(bot, group_id, op_name="设置头衔")
     else:
@@ -654,9 +665,11 @@ async def _handle_apply_title(matcher: Matcher, bot: Bot, event: Event) -> None:
     title = re.sub(r"^[#＃]申请头衔\s*", "", _plain_text(event)).strip()
     if not title:
         await matcher.finish("请提供头衔内容")
+    if _title_width(title) > 12:
+        await matcher.finish(f"❌ 头衔过长（当前等效 {_title_width(title)} 字符），最多 6 个中文字或 12 个英文字母")
     result = await _set_title(bot, group_id, int(_uid(event)), title, operator_id=_uid(event))
     if not result.success:
-        await matcher.finish("❌ 申请失败，可能该群未开启成员自设头衔或 Bot 权限不足")
+        await matcher.finish("❌ " + result.message)
     await matcher.finish("✅ " + result.message)
 
 
@@ -879,7 +892,7 @@ async def self_mute_tool(ctx: ToolContext, rt: ToolRuntime, duration_seconds: in
     description="为自己申请群头衔。仅可在群聊上下文中使用。",
     parameters={
         "type": "object",
-        "properties": {"title": {"type": "string", "description": "头衔内容，最长 12 个字符"}},
+        "properties": {"title": {"type": "string", "description": "头衔内容，最多 6 个中文字或 12 个英文字母"}},
         "required": ["title"],
     },
 )
