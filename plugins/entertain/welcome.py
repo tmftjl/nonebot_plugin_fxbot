@@ -189,8 +189,8 @@ async def _serialize_text_and_images(bot: Bot, segments: list[Any], group_key: s
     return "".join(parts), meta
 
 
-def _render_welcome_content(bot: Bot, group_key: str | None, text: str):
-    """渲染欢迎语内容。"""
+def _render_welcome_content(bot: Bot, group_key: str | None, text: str) -> list[Any]:
+    """渲染欢迎语消息段。"""
     parts: list[Any] = []
     pos = 0
     for match in _PH_PATTERN.finditer(text):
@@ -207,7 +207,7 @@ def _render_welcome_content(bot: Bot, group_key: str | None, text: str):
         pos = end
     if pos < len(text):
         parts.append(build_message_segment(bot, "text", text[pos:]))
-    return build_message(bot, *parts)
+    return parts
 
 
 set_welcome_cmd = P.on_regex(
@@ -288,7 +288,7 @@ async def _handle_show_welcome(matcher: Matcher, bot: Bot, event: Event) -> None
     message = build_message(
         bot,
         build_message_segment(bot, "text", f"当前欢迎已{status}\n"),
-        _render_welcome_content(bot, group_key, str(record.get("content", ""))),
+        *_render_welcome_content(bot, group_key, str(record.get("content", ""))),
     )
     await matcher.finish(message)
 
@@ -351,6 +351,6 @@ async def _handle_group_increase(bot: Bot, event: Event) -> None:
             bot,
             build_message_segment(bot, "at", user_id) if user_id else None,
             build_message_segment(bot, "text", " "),
-            _render_welcome_content(bot, group_key, content),
+            *_render_welcome_content(bot, group_key, content),
         ),
     )
