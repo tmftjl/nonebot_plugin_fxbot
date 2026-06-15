@@ -63,6 +63,7 @@ async def init() -> None:
     get_config_manager().bootstrap()
 
     _import_startup_module("plugin.builder")
+    _import_startup_module("message_filter")
     _import_startup_module("membership.models")
     _import_startup_module("adapter.uninfo")
     _import_plugin_model_modules()

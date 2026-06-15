@@ -47,6 +47,13 @@ def _system_config_tab() -> dict[str, Any]:
                 ],
             },
             {
+                "key": "message",
+                "title": "消息处理",
+                "schemas": [
+                    {"field": "ignored_mention_bot_ids", "label": "忽略 @Bot", "component": "GTags", "default": SYSTEM_DEFAULTS["message"]["ignored_mention_bot_ids"], "helpMessage": "消息中 @ 到这些 Bot QQ 时，本机器人不处理该消息。"},
+                ],
+            },
+            {
                 "key": "chat",
                 "title": "AI 对话",
                 "schemas": [
