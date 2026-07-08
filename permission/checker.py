@@ -8,6 +8,7 @@ from nonebot import get_driver
 from nonebot.adapters import Bot, Event
 from nonebot.permission import Permission
 
+from ..adapter.support import event_group_id, event_is_group, event_is_private
 from .policy import PolicyChain
 from .storage import get_storage
 from .types import Decision, PermContext, PermLevel
@@ -33,22 +34,17 @@ def _uid(event: Any) -> str | None:
 
 def _gid(event: Any) -> str | None:
     """提取群 ID。"""
-    if hasattr(event, "get_group_id"):
-        try:
-            return _normalize_id(event.get_group_id())
-        except Exception:
-            pass
-    return _normalize_id(getattr(event, "group_id", None))
+    return _normalize_id(event_group_id(event))
 
 
 def _is_group_event(event: Any) -> bool:
     """判断是否为群事件。"""
-    return _gid(event) is not None
+    return event_is_group(event)
 
 
 def _is_private_event(event: Any) -> bool:
     """判断是否为私聊事件。"""
-    return _uid(event) is not None and not _is_group_event(event)
+    return event_is_private(event)
 
 
 def _is_superuser(user_id: str | None) -> bool:

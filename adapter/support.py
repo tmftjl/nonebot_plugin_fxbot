@@ -26,6 +26,25 @@ def adapter_name(bot: Bot) -> str:
         return str(getattr(bot, "type", "") or "Unknown")
 
 
+def event_message_type(event: Event) -> str:
+    """提取消息事件类型。"""
+    return str(getattr(event, "message_type", "") or "").strip().lower()
+
+
+def _raw_group_id(event: Event) -> str | None:
+    """不判断会话类型，直接提取事件携带的群 ID。"""
+    for attr in ("group_id", "group_openid"):
+        value = getattr(event, attr, None)
+        if value is not None:
+            return str(value)
+    if hasattr(event, "get_group_id"):
+        try:
+            return str(event.get_group_id())
+        except Exception:
+            pass
+    return None
+
+
 def _adapter_module(bot: Bot) -> str:
     """提取适配器类模块名。"""
     adapter = getattr(bot, "adapter", None)
@@ -62,18 +81,25 @@ def event_user_id(event: Event) -> str:
     return ""
 
 
+def event_is_group(event: Event) -> bool:
+    """判断当前事件是否代表群聊会话。"""
+    message_type = event_message_type(event)
+    if message_type:
+        return message_type == "group"
+    return _raw_group_id(event) is not None
+
+
+def event_is_private(event: Event) -> bool:
+    """判断当前事件是否代表私聊会话。"""
+    message_type = event_message_type(event)
+    if message_type:
+        return message_type == "private"
+    return bool(event_user_id(event)) and _raw_group_id(event) is None
+
+
 def event_group_id(event: Event) -> str | None:
     """提取事件群 ID。"""
-    for attr in ("group_id", "group_openid"):
-        value = getattr(event, attr, None)
-        if value is not None:
-            return str(value)
-    if hasattr(event, "get_group_id"):
-        try:
-            return str(event.get_group_id())
-        except Exception:
-            pass
-    return None
+    return _raw_group_id(event) if event_is_group(event) else None
 
 
 def extract_message_target(event: Any) -> dict[str, Any]:
@@ -82,10 +108,11 @@ def extract_message_target(event: Any) -> dict[str, Any]:
         "user_id": getattr(event, "user_id", None),
         "session_id": event.get_session_id() if hasattr(event, "get_session_id") else None,
     }
-    for field in ("group_id", "group_openid", "channel_id", "guild_id"):
-        value = getattr(event, field, None)
-        if value is not None:
-            target[field] = value
+    if event_is_group(event):
+        for field in ("group_id", "group_openid", "channel_id", "guild_id"):
+            value = getattr(event, field, None)
+            if value is not None:
+                target[field] = value
     return target
 
 

@@ -8,7 +8,7 @@ from typing import Any
 from nonebot.adapters import Bot
 
 from .message import MessageAdapter, _image_bytes, register_message_adapter
-from .support import has_onebot_v11, is_onebot_v11
+from .support import event_is_group, event_is_private, has_onebot_v11, is_onebot_v11
 
 
 @register_message_adapter
@@ -82,7 +82,7 @@ class OneBotV11MessageAdapter(MessageAdapter):
 
         try:
             group_id = getattr(event, "group_id", None)
-            if group_id is not None:
+            if event_is_group(event) and group_id is not None:
                 if hasattr(bot, "send_group_forward_msg"):
                     await bot.send_group_forward_msg(group_id=int(group_id), messages=nodes)
                 else:
@@ -90,7 +90,7 @@ class OneBotV11MessageAdapter(MessageAdapter):
                 return True
 
             user_id_value = getattr(event, "user_id", None)
-            if user_id_value is not None:
+            if event_is_private(event) and user_id_value is not None:
                 if hasattr(bot, "send_private_forward_msg"):
                     await bot.send_private_forward_msg(user_id=int(user_id_value), messages=nodes)
                 else:
