@@ -1,0 +1,24 @@
+{
+  "title": "B站直播推送帮助",
+  "sub_title": "直播间订阅 / 开播提醒",
+  "key": "B站直播",
+  "aliases": ["bilibili_live", "B站直播推送"],
+  "footer": "FxBot B站直播推送",
+  "col_count": 2,
+  "groups": [
+    {
+      "group": "订阅管理",
+      "list": [
+        {"icon": 1, "title": "#B站直播订阅 直播间号", "desc": "为当前会话订阅开播提醒"},
+        {"icon": 2, "title": "#B站直播取消 直播间号", "desc": "取消当前会话的直播订阅"},
+        {"icon": 3, "title": "#B站直播列表", "desc": "查看当前会话的全部订阅"}
+      ]
+    },
+    {
+      "group": "直播查询",
+      "list": [
+        {"icon": 4, "title": "#B站直播查询 直播间号", "desc": "查看直播状态、标题和分区"}
+      ]
+    }
+  ]
+}
