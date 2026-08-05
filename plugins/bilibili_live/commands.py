@@ -14,8 +14,10 @@ from . import P
 from .client import BilibiliLiveError, LiveRoomSnapshot, fetch_room, parse_room_id
 from .store import add_room, get_subscription, remove_room, set_room_state
 
+ROOM_ARGUMENT_PATTERN = r"(?:\d+|(?:https?://)?live\.bilibili\.com/\S+)"
+
 subscribe = P.on_regex(
-    r"^(?:#|＃|/)?(?:B站直播订阅|订阅B站直播|开启B站直播)(?:\s+.+)?$",
+    rf"^(?:#|＃|/)?[Bb]站直播订阅(?:\s*{ROOM_ARGUMENT_PATTERN})?$",
     name="bilibili_live_subscribe",
     display_name="订阅B站直播",
     priority=5,
@@ -25,7 +27,7 @@ subscribe = P.on_regex(
 )
 
 unsubscribe = P.on_regex(
-    r"^(?:#|＃|/)?(?:B站直播取消|取消B站直播|关闭B站直播)(?:\s+.+)?$",
+    rf"^(?:#|＃|/)?[Bb]站直播取消(?:\s*{ROOM_ARGUMENT_PATTERN})?$",
     name="bilibili_live_unsubscribe",
     display_name="取消B站直播",
     priority=5,
@@ -35,7 +37,7 @@ unsubscribe = P.on_regex(
 )
 
 subscription_list = P.on_regex(
-    r"^(?:#|＃|/)?(?:B站直播订阅列表|B站直播列表|查询B站直播订阅)$",
+    r"^(?:#|＃|/)?[Bb]站直播列表$",
     name="bilibili_live_list",
     display_name="B站直播订阅列表",
     priority=5,
@@ -45,7 +47,7 @@ subscription_list = P.on_regex(
 )
 
 room_query = P.on_regex(
-    r"^(?:#|＃|/)?(?:B站直播查询|查询B站直播)(?:\s+.+)?$",
+    rf"^(?:#|＃|/)?[Bb]站直播查询(?:\s*{ROOM_ARGUMENT_PATTERN})?$",
     name="bilibili_live_query",
     display_name="查询B站直播",
     priority=5,
@@ -66,11 +68,11 @@ def _event_text(event: Event) -> str:
 def _command_argument(event: Event, command_pattern: str) -> str:
     """提取命令后的直播间参数。"""
     match = re.match(
-        rf"^(?:#|＃|/)?(?:{command_pattern})(?:\s+(.+))?$",
+        rf"^(?:#|＃|/)?(?:{command_pattern})(?:\s*(?P<argument>{ROOM_ARGUMENT_PATTERN}))?$",
         _event_text(event),
         re.I,
     )
-    return str(match.group(1) or "").strip() if match else ""
+    return str(match.group("argument") or "").strip() if match else ""
 
 
 def _event_context(event: Event) -> tuple[str, str]:
@@ -109,7 +111,7 @@ async def _handle_subscribe(matcher: Matcher, event: Event) -> None:
     try:
         room = await _fetch_argument_room(
             event,
-            r"B站直播订阅|订阅B站直播|开启B站直播",
+            r"[Bb]站直播订阅",
         )
     except BilibiliLiveError as exc:
         await matcher.finish(str(exc))
@@ -137,7 +139,7 @@ async def _handle_unsubscribe(matcher: Matcher, event: Event) -> None:
     try:
         room = await _fetch_argument_room(
             event,
-            r"B站直播取消|取消B站直播|关闭B站直播",
+            r"[Bb]站直播取消",
         )
     except BilibiliLiveError as exc:
         await matcher.finish(str(exc))
@@ -176,7 +178,7 @@ async def _handle_subscription_list(matcher: Matcher, event: Event) -> None:
 async def _handle_room_query(matcher: Matcher, bot: Bot, event: Event) -> None:
     """查询直播间当前状态。"""
     try:
-        room = await _fetch_argument_room(event, r"B站直播查询|查询B站直播")
+        room = await _fetch_argument_room(event, r"[Bb]站直播查询")
     except BilibiliLiveError as exc:
         await matcher.finish(str(exc))
 
