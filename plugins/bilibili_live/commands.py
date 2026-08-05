@@ -27,7 +27,7 @@ subscribe = P.on_regex(
 )
 
 subscribe_uid = P.on_regex(
-    r"^(?:#|＃|/)?[Bb]站直播订阅[Uu][Ii][Dd]\s*\d+$",
+    r"^(?:#|＃|/)?[Bb]站直播订阅[Uu][Ii][Dd]\s*:?\s*\d+$",
     name="bilibili_live_subscribe_uid",
     display_name="按UID订阅B站直播",
     priority=5,
@@ -118,7 +118,7 @@ async def _fetch_argument_room(event: Event, command_pattern: str) -> LiveRoomSn
 def _uid_argument(event: Event) -> int:
     """从独立 UID 订阅命令中提取主播 UID。"""
     match = re.match(
-        r"^(?:#|＃|/)?[Bb]站直播订阅[Uu][Ii][Dd]\s*(\d+)$",
+        r"^(?:#|＃|/)?[Bb]站直播订阅[Uu][Ii][Dd]\s*:?\s*(\d+)$",
         _event_text(event),
     )
     if match is None:
