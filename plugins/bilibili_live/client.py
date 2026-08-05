@@ -9,6 +9,7 @@ from typing import Any
 from ...utils.http import get_shared_async_client
 
 ROOM_INFO_API = "https://api.live.bilibili.com/room/v1/Room/get_info"
+USER_ROOM_API = "https://api.live.bilibili.com/live_user/v1/Master/info"
 USER_INFO_API = "https://api.bilibili.com/x/space/acc/info"
 REQUEST_TIMEOUT_SECONDS = 15.0
 BILI_HEADERS = {
@@ -104,6 +105,17 @@ async def fetch_anchor_name(uid: int) -> str:
     except BilibiliLiveError:
         return ""
     return str(data.get("name") or "").strip()
+
+
+async def fetch_room_by_uid(uid: int) -> LiveRoomSnapshot:
+    """根据主播 UID 查询其直播间。"""
+    data = await _request_json(USER_ROOM_API, params={"uid": uid})
+    room_id = int(data.get("room_id") or 0)
+    if room_id <= 0:
+        raise BilibiliLiveError("该 UID 没有有效的 B 站直播间")
+    info = data.get("info")
+    known_name = str(info.get("uname") or "").strip() if isinstance(info, dict) else ""
+    return await fetch_room(room_id, known_name=known_name)
 
 
 async def fetch_room(room_id: int, *, known_name: str = "") -> LiveRoomSnapshot:

@@ -11,7 +11,7 @@ from ...adapter import build_message, build_message_segment, extract_message_tar
 from ...adapter.support import event_group_id, event_user_id
 from ...permission import PermLevel, PermScene
 from . import P
-from .client import BilibiliLiveError, LiveRoomSnapshot, fetch_room, parse_room_id
+from .client import BilibiliLiveError, LiveRoomSnapshot, fetch_room, fetch_room_by_uid, parse_room_id
 from .store import add_room, get_subscription, remove_room, set_room_state
 
 ROOM_ARGUMENT_PATTERN = r"(?:\d+|(?:https?://)?live\.bilibili\.com/\S+)"
@@ -20,6 +20,16 @@ subscribe = P.on_regex(
     rf"^(?:#|＃|/)?[Bb]站直播订阅(?:\s*{ROOM_ARGUMENT_PATTERN})?$",
     name="bilibili_live_subscribe",
     display_name="订阅B站直播",
+    priority=5,
+    block=True,
+    level=PermLevel.ADMIN,
+    scene=PermScene.ALL,
+)
+
+subscribe_uid = P.on_regex(
+    r"^(?:#|＃|/)?[Bb]站直播订阅[Uu][Ii][Dd]\s*\d+$",
+    name="bilibili_live_subscribe_uid",
+    display_name="按UID订阅B站直播",
     priority=5,
     block=True,
     level=PermLevel.ADMIN,
@@ -105,17 +115,19 @@ async def _fetch_argument_room(event: Event, command_pattern: str) -> LiveRoomSn
     return await fetch_room(parse_room_id(argument))
 
 
-@subscribe.handle()
-async def _handle_subscribe(matcher: Matcher, event: Event) -> None:
-    """订阅当前会话的直播间。"""
-    try:
-        room = await _fetch_argument_room(
-            event,
-            r"[Bb]站直播订阅",
-        )
-    except BilibiliLiveError as exc:
-        await matcher.finish(str(exc))
+def _uid_argument(event: Event) -> int:
+    """从独立 UID 订阅命令中提取主播 UID。"""
+    match = re.match(
+        r"^(?:#|＃|/)?[Bb]站直播订阅[Uu][Ii][Dd]\s*(\d+)$",
+        _event_text(event),
+    )
+    if match is None:
+        raise BilibiliLiveError("请在 uid 后填写主播 UID")
+    return int(match.group(1))
 
+
+async def _save_subscription(matcher: Matcher, event: Event, room: LiveRoomSnapshot) -> None:
+    """保存当前会话订阅并返回操作结果。"""
     sub_type, sub_key = _event_context(event)
     if not sub_key:
         await matcher.finish("无法识别当前会话，订阅失败")
@@ -131,6 +143,31 @@ async def _handle_subscribe(matcher: Matcher, event: Event) -> None:
     if created:
         await matcher.finish(f"已为{location}订阅 {room.name} 的直播间 {room.room_id}")
     await matcher.finish(f"{location}已经订阅了 {room.name} 的直播间 {room.room_id}")
+
+
+@subscribe.handle()
+async def _handle_subscribe(matcher: Matcher, event: Event) -> None:
+    """订阅当前会话的直播间。"""
+    try:
+        room = await _fetch_argument_room(
+            event,
+            r"[Bb]站直播订阅",
+        )
+    except BilibiliLiveError as exc:
+        await matcher.finish(str(exc))
+
+    await _save_subscription(matcher, event, room)
+
+
+@subscribe_uid.handle()
+async def _handle_subscribe_uid(matcher: Matcher, event: Event) -> None:
+    """根据主播 UID 订阅当前会话。"""
+    try:
+        room = await fetch_room_by_uid(_uid_argument(event))
+    except BilibiliLiveError as exc:
+        await matcher.finish(str(exc))
+
+    await _save_subscription(matcher, event, room)
 
 
 @unsubscribe.handle()
