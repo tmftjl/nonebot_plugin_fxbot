@@ -24,6 +24,7 @@
     {
       "group": "娱乐功能",
       "list": [
+        {"icon": 2, "title": "#b站直播帮助", "desc": "b站直播推送"},
         {"icon": 2, "title": "#点歌", "desc": "点歌演员"},
         {"icon": 4, "title": "#今日运势", "desc": "今日运势"},
         {"icon": 6, "title": "#看看腿", "desc": "看看腿"},
