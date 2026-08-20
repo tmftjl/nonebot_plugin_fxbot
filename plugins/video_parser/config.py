@@ -35,6 +35,11 @@ def cfg_network() -> dict[str, Any]:
     return get_config()["network"]
 
 
+def cfg_douyin() -> dict[str, Any]:
+    """获取抖音请求配置。"""
+    return get_config()["douyin"]
+
+
 def is_global_enabled() -> bool:
     """判断全局解析是否启用。"""
     return bool(cfg_general().get("global_enabled", True))

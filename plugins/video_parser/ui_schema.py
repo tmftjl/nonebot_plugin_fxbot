@@ -19,6 +19,10 @@ DEFAULTS: dict[str, Any] = {
         "xiaohongshu": True,
         "bilibili": True,
     },
+    "douyin": {
+        "use_cookie": False,
+        "cookie": "",
+    },
     "network": {
         "proxy": "",
     },
@@ -51,6 +55,14 @@ def get_ui_schema() -> dict[str, Any]:
                     {"field": "weibo", "label": "微博", "component": "Switch", "default": DEFAULTS["platforms"]["weibo"], "helpMessage": "启用微博视频解析。"},
                     {"field": "xiaohongshu", "label": "小红书", "component": "Switch", "default": DEFAULTS["platforms"]["xiaohongshu"], "helpMessage": "启用小红书视频解析。"},
                     {"field": "bilibili", "label": "B站", "component": "Switch", "default": DEFAULTS["platforms"]["bilibili"], "helpMessage": "启用 B 站视频解析。"},
+                ],
+            },
+            {
+                "key": "video_parser.douyin",
+                "title": "抖音",
+                "schemas": [
+                    {"field": "use_cookie", "label": "使用 Cookie", "component": "Switch", "default": DEFAULTS["douyin"]["use_cookie"], "helpMessage": "开启后请求抖音接口时携带下方 Cookie，可提高接口成功率。"},
+                    {"field": "cookie", "label": "抖音 Cookie", "component": "Input", "default": DEFAULTS["douyin"]["cookie"], "helpMessage": "从抖音网页开发者工具的请求头复制 Cookie。Cookie 属于登录凭据，请勿分享。", "componentProps": {"placeholder": "odin_tt=...; sid_guard=..."}},
                 ],
             },
             {
