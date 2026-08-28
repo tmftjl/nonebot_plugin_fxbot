@@ -50,6 +50,7 @@ def _system_config_tab() -> dict[str, Any]:
                 "key": "message",
                 "title": "消息处理",
                 "schemas": [
+                    {"field": "qq_group_requires_mention", "label": "QQ 群需 @Bot", "component": "Switch", "default": SYSTEM_DEFAULTS["message"]["qq_group_requires_mention"], "helpMessage": "开启后 FxBot 忽略 QQ 官方群内未 @ 本机器人的消息，不影响其他插件接收消息。"},
                     {"field": "ignored_mention_bot_ids", "label": "忽略 @Bot", "component": "GTags", "default": SYSTEM_DEFAULTS["message"]["ignored_mention_bot_ids"], "helpMessage": "消息中 @ 到这些 Bot QQ 时，本机器人不处理该消息。"},
                 ],
             },

@@ -97,6 +97,16 @@ def event_is_private(event: Event) -> bool:
     return bool(event_user_id(event)) and _raw_group_id(event) is None
 
 
+def event_is_tome(event: Event) -> bool:
+    """判断消息是否指向当前 Bot。"""
+    if hasattr(event, "is_tome"):
+        try:
+            return bool(event.is_tome())
+        except Exception:
+            pass
+    return bool(getattr(event, "to_me", False))
+
+
 def event_group_id(event: Event) -> str | None:
     """提取事件群 ID。"""
     return _raw_group_id(event) if event_is_group(event) else None

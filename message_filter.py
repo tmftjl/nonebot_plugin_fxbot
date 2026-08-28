@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from nonebot.adapters import Event
+from nonebot.adapters import Bot, Event
 from nonebot.exception import IgnoredException
 from nonebot.message import event_preprocessor
 
 from .adapter.message import event_message, mention_targets
 from .config import get_manager as get_config_manager
+from .message_policy import should_process_fxbot_message
 
 
 def _ignored_mention_bot_ids() -> set[str]:
@@ -22,8 +23,10 @@ def _ignored_mention_bot_ids() -> set[str]:
 
 
 @event_preprocessor
-async def _ignore_configured_bot_mentions(event: Event) -> None:
+async def _ignore_configured_bot_mentions(bot: Bot, event: Event) -> None:
     """消息 @ 到指定 Bot QQ 时，不再继续处理本条事件。"""
+    if not should_process_fxbot_message(bot, event):
+        return
     ignored_ids = _ignored_mention_bot_ids()
     if not ignored_ids:
         return

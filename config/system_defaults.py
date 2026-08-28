@@ -22,6 +22,7 @@ SYSTEM_DEFAULTS = {
     },
     "message": {
         "ignored_mention_bot_ids": [],
+        "qq_group_requires_mention": True,
     },
     "chat": {
         "enabled": True,

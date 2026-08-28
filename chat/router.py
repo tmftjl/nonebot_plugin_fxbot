@@ -9,7 +9,9 @@ from nonebot.adapters import Bot, Event
 from nonebot.matcher import Matcher
 from nonebot.rule import Rule
 
+from ..adapter.support import event_group_id, event_is_tome
 from ..config import get_manager as get_config_manager
+from ..message_policy import should_process_fxbot_message
 
 from .message_adapter import adapt_message_event
 from .service import chat_service
@@ -31,24 +33,12 @@ def _plain_text(event: Any) -> str:
 
 def _gid(event: Any) -> str | None:
     """提取群 ID。"""
-    if hasattr(event, "get_group_id"):
-        try:
-            group_id = str(event.get_group_id()).strip()
-            return group_id if group_id and group_id != "0" else None
-        except Exception:
-            pass
-    group_id = str(getattr(event, "group_id", "") or "").strip()
-    return group_id if group_id and group_id != "0" else None
+    return event_group_id(event)
 
 
 def _is_to_me(event: Any) -> bool:
     """判断消息是否 @bot。"""
-    if hasattr(event, "is_tome"):
-        try:
-            return bool(event.is_tome())
-        except Exception:
-            return False
-    return False
+    return event_is_tome(event)
 
 
 def _chat_cfg() -> dict[str, Any]:
@@ -59,6 +49,8 @@ def _chat_cfg() -> dict[str, Any]:
 
 async def _ai_fallback_rule(bot: Bot, event: Event) -> bool:
     """AI 兜底匹配规则。"""
+    if not should_process_fxbot_message(bot, event):
+        return False
     cfg = _chat_cfg()
     if not bool(cfg["enabled"]):
         return False

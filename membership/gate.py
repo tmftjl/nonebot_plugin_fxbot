@@ -12,6 +12,7 @@ from nonebot.exception import IgnoredException
 from nonebot.message import event_preprocessor, run_preprocessor
 
 from ..config import get_manager as get_config_manager
+from ..message_policy import should_process_fxbot_message
 
 from .guard import membership_guard
 
@@ -181,6 +182,8 @@ async def _maybe_send_expiring_prompt(
 @event_preprocessor
 async def _fxbot_membership_gate(bot: Bot, event: Event) -> None:
     """群消息会员门禁。"""
+    if not should_process_fxbot_message(bot, event):
+        return
     if not _membership_enabled():
         return
 
@@ -225,6 +228,8 @@ async def _fxbot_membership_gate(bot: Bot, event: Event) -> None:
 @run_preprocessor
 async def _fxbot_membership_expire_prompt(bot: Bot, event: Event) -> None:
     """在事件响应器执行前提示会员快到期。"""
+    if not should_process_fxbot_message(bot, event):
+        return
     if not _membership_enabled():
         return
 

@@ -6,12 +6,14 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from nonebot import logger
-from nonebot.adapters import Event
+from nonebot.adapters import Bot, Event
 from nonebot.matcher import Matcher
 from nonebot.message import event_preprocessor
 from nonebot.permission import SUPERUSER, Permission
+from nonebot.rule import Rule
 
 from ..adapter.message import move_non_text_segments_to_end
+from ..message_policy import should_process_fxbot_message
 from ..permission import PermLevel, PermScene, permission_for_cmd, permission_for_plugin
 from ..permission.helpers import upsert_command_defaults, upsert_plugin_defaults
 
@@ -20,8 +22,10 @@ _COMMAND_DISPLAY_NAMES: dict[str, dict[str, str]] = {}
 
 
 @event_preprocessor
-async def _normalize_message_segments(event: Event) -> None:
+async def _normalize_message_segments(bot: Bot, event: Event) -> None:
     """统一将文本段前置，避免 @、图片等非文本段打断命令匹配。"""
+    if not should_process_fxbot_message(bot, event):
+        return
     move_non_text_segments_to_end(event)
 
 
@@ -212,6 +216,12 @@ class Plugin:
             self._cmd_levels[name] = level
             if level == PermLevel.SUPERUSER:
                 kwargs.setdefault("permission", SUPERUSER)
+
+        existing_rule = kwargs.get("rule")
+        if existing_rule is None:
+            kwargs["rule"] = Rule(should_process_fxbot_message)
+        else:
+            kwargs["rule"] = Rule(should_process_fxbot_message, existing_rule)
 
         matcher = factory(*factory_args, **kwargs)
 
