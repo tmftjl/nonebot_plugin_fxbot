@@ -218,10 +218,7 @@ class Plugin:
                 kwargs.setdefault("permission", SUPERUSER)
 
         existing_rule = kwargs.get("rule")
-        if existing_rule is None:
-            kwargs["rule"] = Rule(should_process_fxbot_message)
-        else:
-            kwargs["rule"] = Rule(should_process_fxbot_message, existing_rule)
+        kwargs["rule"] = Rule(should_process_fxbot_message) & existing_rule
 
         matcher = factory(*factory_args, **kwargs)
 
