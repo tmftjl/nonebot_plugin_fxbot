@@ -17,7 +17,7 @@ from sqlalchemy import Column, JSON, UniqueConstraint, exc
 from sqlmodel import Field, SQLModel, select
 
 from ..db import with_session
-from .support import adapter_name, event_group_id, event_user_id, official_qq_avatar, qq_avatar
+from .support import adapter_name, event_group_id, event_user_id, event_user_name, official_qq_avatar, qq_avatar
 
 
 class SupportScope(str, Enum):
@@ -243,14 +243,13 @@ async def _build_session(bot: Bot, event: Event) -> Session:
     group_id = event_group_id(event)
     sender = getattr(event, "sender", None)
     author = getattr(event, "author", None)
-
     name = str(
         getattr(sender, "nickname", None)
         or getattr(author, "username", None)
         or getattr(author, "member_openid", None)
         or user_id
     )
-    nick = str(getattr(sender, "card", None) or getattr(sender, "nickname", None) or name)
+    nick = event_user_name(event, name)
     avatar = official_qq_avatar(bot, user_id) if adapter == "QQ" else qq_avatar(user_id)
     user = User(id=user_id, name=name, nick=nick, avatar=avatar, gender=str(getattr(sender, "sex", "unknown") or "unknown"))
 

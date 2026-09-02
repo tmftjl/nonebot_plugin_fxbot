@@ -19,6 +19,7 @@ from PIL import Image, ImageDraw, ImageOps
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
 from ...adapter import build_message, build_message_segment
+from ...adapter.support import event_user_name
 from ...utils.fonts import get_shared_font_path, load_font
 from ...utils.http import get_shared_async_client
 from ...utils.paths import data_dir
@@ -99,10 +100,7 @@ def _uid(event: Event) -> str:
 
 def _nickname(event: Event, user_id: str) -> str:
     """提取用户昵称。"""
-    sender = getattr(event, "sender", None)
-    if sender:
-        return str(getattr(sender, "card", None) or getattr(sender, "nickname", None) or f"用户{user_id}")
-    return f"用户{user_id}"
+    return event_user_name(event, f"用户{user_id}") or f"用户{user_id}"
 
 
 def _num_to_chinese(num: int) -> str:

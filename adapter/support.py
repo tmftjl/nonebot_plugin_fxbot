@@ -81,6 +81,30 @@ def event_user_id(event: Event) -> str:
     return ""
 
 
+def _event_value(value: Any, key: str) -> Any:
+    """读取事件对象或字典中的字段。"""
+    if isinstance(value, dict):
+        return value.get(key)
+    return getattr(value, key, None)
+
+
+def event_user_name(event: Event, user_id: str = "") -> str:
+    """提取事件中的用户显示名，兼容群名片和 QQ 官方 author。"""
+    sender = getattr(event, "sender", None)
+    author = getattr(event, "author", None)
+    member = _event_value(author, "member") or _event_value(event, "member")
+    for value, keys in (
+        (sender, ("card", "nickname", "nick")),
+        (member, ("nick", "card", "nickname", "username")),
+        (author, ("username", "nickname", "nick", "display_name")),
+    ):
+        for key in keys:
+            name = _event_value(value, key)
+            if name:
+                return str(name)
+    return str(user_id or "")
+
+
 def event_is_group(event: Event) -> bool:
     """判断当前事件是否代表群聊会话。"""
     message_type = event_message_type(event)
