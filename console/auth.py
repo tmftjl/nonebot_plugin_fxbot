@@ -1,4 +1,4 @@
-"""32 字符以上随机 token 生成和 Bearer 认证。"""
+"""6 字符以上随机 token 生成和 Bearer 认证。"""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from fastapi import HTTPException, Request, status
 from ..config import SYSTEM_DEFAULTS, get_manager as get_config_manager
 
 _TOKEN_BYTES = 32
+_MIN_TOKEN_LENGTH = 6
 
 
 def _system_proxy():
@@ -24,7 +25,7 @@ def get_console_token() -> str:
     cfg = manager.get_system()
     console_cfg = cfg["console"]
     token = str(console_cfg["token"] or "")
-    if len(token) >= 32:
+    if len(token) >= _MIN_TOKEN_LENGTH:
         return token
     return rotate_console_token()
 

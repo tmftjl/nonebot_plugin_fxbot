@@ -9,7 +9,7 @@ from typing import Any
 
 from nonebot.adapters import Bot, Event
 from nonebot.exception import IgnoredException
-from nonebot.message import event_preprocessor, run_preprocessor
+from nonebot.message import event_preprocessor
 
 from ..config import get_manager as get_config_manager
 from ..message_policy import should_process_fxbot_message
@@ -159,7 +159,7 @@ async def _maybe_send_expiring_prompt(
     *,
     require_text_prefix: bool,
 ) -> None:
-    """命令消息触发时发送快到期提示。"""
+    """匹配配置前缀的消息触发时发送快到期提示。"""
     if not expires_at:
         return
     if require_text_prefix and not _matches_prompt_text_prefix(text):
@@ -222,41 +222,4 @@ async def _fxbot_membership_gate(bot: Bot, event: Event) -> None:
         text,
         decision.expires_at,
         require_text_prefix=True,
-    )
-
-
-@run_preprocessor
-async def _fxbot_membership_expire_prompt(bot: Bot, event: Event) -> None:
-    """在事件响应器执行前提示会员快到期。"""
-    if not should_process_fxbot_message(bot, event):
-        return
-    if not _membership_enabled():
-        return
-
-    bot_id = _normalize_id(getattr(bot, "self_id", None))
-    if bot_id and bot_id in _free_bot_ids():
-        return
-
-    group_id = _gid(event)
-    if not group_id:
-        return
-
-    user_id = _uid(event) or ""
-    try:
-        decision = await membership_guard.check_membership_detail(
-            group_id,
-            user_id,
-            bot_id=bot_id,
-        )
-    except Exception:
-        return
-    if not decision.allowed:
-        return
-
-    await _maybe_send_expiring_prompt(
-        bot,
-        event,
-        _plain_text(event),
-        decision.expires_at,
-        require_text_prefix=False,
     )
