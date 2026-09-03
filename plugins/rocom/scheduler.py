@@ -20,16 +20,8 @@ async def _send_to_subscription(subscription: dict, image: bytes) -> bool:
     target = subscription.get("target")
     if not isinstance(target, dict):
         return False
-    sub_type = subscription.get("type", "group")
     for bot in get_bots().values():
         try:
-            # QQ 官方适配器不支持私聊推送，静默跳过
-            if sub_type == "private":
-                from ...adapter.support import is_qq_official
-
-                if is_qq_official(bot):
-                    logger.debug(f"[rocom] 跳过 QQ 官方适配器的私聊推送: {subscription.get('user_key')}")
-                    continue
             message = build_message(bot, build_message_segment(bot, "image", image))
             await send_message_to_target(bot, target, message)
             return True

@@ -12,9 +12,9 @@ from PIL import Image, ImageDraw
 
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
-from ...adapter import build_message, build_message_segment, is_qq_official
+from ...adapter import build_message, build_message_segment
 from ...utils.fonts import get_shared_font_path, load_font
-from .config import HelpConfigRef, default_help_config, load_help_config, qq_variant, resolve_help_config
+from .config import HelpConfigRef, load_help_config, resolve_help_config
 
 try:
     from .renderer import render_help_image
@@ -34,14 +34,9 @@ help_cmd = P.on_regex(
 )
 
 
-def _resolve_config_ref(bot: Bot, keyword: str | None) -> HelpConfigRef | None:
+def _resolve_config_ref(keyword: str | None) -> HelpConfigRef | None:
     """解析帮助图配置。"""
-    resolved = resolve_help_config(keyword)
-    if is_qq_official(bot):
-        if resolved is None:
-            return qq_variant(default_help_config()) or default_help_config()
-        return qq_variant(resolved) or resolved
-    return resolved
+    return resolve_help_config(keyword)
 
 
 def _asset_path(config: dict[str, Any], field: str) -> Path | None:
@@ -83,7 +78,7 @@ def _fallback_image(title: str, sub_title: str, groups_data: list[dict[str, Any]
 async def _handle_help(matcher: Matcher, bot: Bot, groups: tuple = RegexGroup()) -> None:
     """发送旧版排版帮助图。"""
     keyword = str(groups[0]).strip() if groups and groups[0] else None
-    resolved_ref = _resolve_config_ref(bot, keyword)
+    resolved_ref = _resolve_config_ref(keyword)
     if keyword and resolved_ref is None:
         await matcher.skip()
 
