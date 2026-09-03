@@ -104,7 +104,10 @@ def _build_html(
       <head>
         <meta charset='utf-8'/>
         {_inline_css(icon)}
-        <style>.container {{ background: url('{bg_uri}') center !important; background-size: cover !important; }}</style>
+        <style>
+          .container {{ background: url('{bg_uri}') center !important; background-size: cover !important; }}
+          .help-table .td, .help-table .th {{ width: {100 / max(col_count, 1):.6f}% !important; }}
+        </style>
       </head>
       <body>
         <div class='container'>
