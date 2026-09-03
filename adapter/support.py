@@ -142,6 +142,10 @@ def extract_message_target(event: Any) -> dict[str, Any]:
         "user_id": getattr(event, "user_id", None),
         "session_id": event.get_session_id() if hasattr(event, "get_session_id") else None,
     }
+    author = getattr(event, "author", None)
+    user_openid = getattr(event, "user_openid", None) or getattr(author, "user_openid", None)
+    if user_openid is not None:
+        target["user_openid"] = user_openid
     if event_is_group(event):
         for field in ("group_id", "group_openid", "channel_id", "guild_id"):
             value = getattr(event, field, None)

@@ -64,6 +64,8 @@ class QQOfficialMessageAdapter(MessageAdapter):
     async def send_message_to_target(self, bot: Bot, target: dict[str, Any], message: Any) -> Any:
         if target.get("group_openid") is not None:
             return await bot.send_to_group(group_openid=str(target["group_openid"]), message=message)
+        if target.get("user_openid") is not None:
+            return await bot.send_to_c2c(openid=str(target["user_openid"]), message=message)
         raise RuntimeError("无法识别消息目标")
 
     async def send_forward_messages(self, bot: Bot, event: Any, messages: list[Any], *, nickname: str = "FxBot") -> bool:
