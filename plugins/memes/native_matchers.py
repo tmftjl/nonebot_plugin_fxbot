@@ -22,7 +22,7 @@ from pypinyin import Style, pinyin
 
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
-from ...adapter.message import first_mention_target
+from ...adapter.message import MENTION_SEGMENT_TYPES, first_mention_target
 from ...adapter.uninfo import QryItrface, Uninfo
 from ...utils.paths import cache_dir
 from .config import (
@@ -338,7 +338,7 @@ async def extract_inputs(
     for seg in msg:
         seg_type = getattr(seg, "type", None)
 
-        if seg_type in {"at", "mention"}:
+        if seg_type in MENTION_SEGMENT_TYPES:
             if has_actual_image:
                 continue
             target = (
