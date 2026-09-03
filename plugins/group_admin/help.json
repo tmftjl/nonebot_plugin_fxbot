@@ -22,8 +22,8 @@
         {"icon": 1, "title": "#拉黑踢", "desc": "踢出群并拉黑"},
         {"icon": 12, "title": "#禁言", "desc": "禁言"},
         {"icon": 14, "title": "#解禁", "desc": "取消禁言"},
-        {"icon": 1, "title": "#开启全体禁言", "desc": "开启全体禁言"},
-        {"icon": 12, "title": "#关闭全体禁言", "desc": "开启全体禁言"},
+        {"icon": 1, "title": "#全体禁言", "desc": "全体禁言"},
+        {"icon": 12, "title": "#全体解禁", "desc": "全体解禁"},
         {"icon": 1, "title": "#撤回", "desc": "撤回"},
         {"icon": 12, "title": "#设置精华", "desc": "设置精华"},
         {"icon": 12, "title": "#取消精华", "desc": "取消精华"}
