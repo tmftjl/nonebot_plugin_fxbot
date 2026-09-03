@@ -31,9 +31,7 @@ class PlatformAdapter(ABC):
         """构造平台消息对象。"""
 
     @abstractmethod
-    async def send_message_to_target(
-        self, bot: Any, target: dict[str, Any], message: Any
-    ) -> Any:
+    async def send_message_to_target(self, bot: Any, target: dict[str, Any], message: Any) -> Any:
         """向持久化目标发送消息。"""
 
     # 常用发送封装
@@ -47,9 +45,7 @@ class PlatformAdapter(ABC):
         target = {"user_id": user_id, "user_openid": user_id}
         return await self.send_message_to_target(bot, target, message)
 
-    async def send_text_to_target(
-        self, bot: Any, target: dict[str, Any], text: str
-    ) -> Any:
+    async def send_text_to_target(self, bot: Any, target: dict[str, Any], text: str) -> Any:
         """发送纯文本消息。"""
         message = self.build_message(bot, [self.build_segment(bot, "text", text)])
         return await self.send_message_to_target(bot, target, message)
@@ -79,11 +75,7 @@ class PlatformAdapter(ABC):
                 continue
             data = getattr(segment, "data", {}) or {}
             source = data.get("url") or data.get("file")
-            if (
-                isinstance(source, str)
-                and source
-                and not source.startswith("base64://")
-            ):
+            if isinstance(source, str) and source and not source.startswith("base64://"):
                 sources.append(source)
         return sources
 
@@ -106,9 +98,7 @@ class PlatformAdapter(ABC):
         """提取 @ 消息段的目标 ID。"""
         return None
 
-    def mention_targets(
-        self, message: Any, ignored_targets: set[str] | None = None
-    ) -> list[str]:
+    def mention_targets(self, message: Any, ignored_targets: set[str] | None = None) -> list[str]:
         """提取消息中的所有 @ 目标。"""
         ignored = {str(target) for target in (ignored_targets or set())}
         return [
@@ -175,9 +165,7 @@ class PlatformAdapter(ABC):
         """设置全体禁言。"""
         return await self._unsupported("全体禁言")
 
-    async def set_admin(
-        self, bot: Any, group_id: str, user_id: str, enable: bool
-    ) -> Any:
+    async def set_admin(self, bot: Any, group_id: str, user_id: str, enable: bool) -> Any:
         """设置或取消管理员。"""
         return await self._unsupported("管理员")
 

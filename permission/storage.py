@@ -24,9 +24,7 @@ def scan_plugins_for_permissions() -> dict[str, Any]:
         if not plugin_dir.is_dir() or not (plugin_dir / "__init__.py").exists():
             continue
         plugin_name = plugin_dir.name
-        node = sub_map.setdefault(
-            plugin_name, {"top": perm_entry_default(), "commands": {}}
-        )
+        node = sub_map.setdefault(plugin_name, {"top": perm_entry_default(), "commands": {}})
         commands = node.setdefault("commands", {})
         for file_path in plugin_dir.rglob("*.py"):
             _scan_file_for_commands(file_path, commands)
@@ -74,9 +72,7 @@ def _scan_file_for_commands(file_path: Path, commands: dict[str, Any]) -> None:
                 elif kw.arg == "scene":
                     scene = _scan_enum_value(kw.value, "PermScene") or scene
             if command_name:
-                commands.setdefault(
-                    command_name, perm_entry_default(level=level, scene=scene)
-                )
+                commands.setdefault(command_name, perm_entry_default(level=level, scene=scene))
 
 
 def _scan_enum_value(node: ast.AST, enum_name: str) -> str | None:
@@ -107,9 +103,7 @@ class PermissionStorage:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         if not self._path.exists():
             self._path.write_text(
-                json.dumps(
-                    scan_plugins_for_permissions(), ensure_ascii=False, indent=2
-                ),
+                json.dumps(scan_plugins_for_permissions(), ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
 

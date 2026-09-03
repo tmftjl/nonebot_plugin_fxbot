@@ -103,9 +103,7 @@ class BannedWordsManager:
             data = json.loads(path.read_text(encoding="utf-8"))
             return data if isinstance(data, dict) else cls._default()
         except Exception:
-            logger.opt(exception=True).warning(
-                f"[banwords] 加载违禁词配置失败: {group_id}"
-            )
+            logger.opt(exception=True).warning(f"[banwords] 加载违禁词配置失败: {group_id}")
             return cls._default()
 
     @classmethod
@@ -113,9 +111,7 @@ class BannedWordsManager:
         """保存群违禁词配置。"""
         path = cls._path(group_id)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
     @staticmethod
     def invalidate_cache(group_id: int) -> None:
@@ -138,9 +134,7 @@ class BannedWordsManager:
         return merged
 
     @classmethod
-    def compile_banned_words(
-        cls, group_id: int
-    ) -> list[tuple[re.Pattern[str], dict[str, Any]]]:
+    def compile_banned_words(cls, group_id: int) -> list[tuple[re.Pattern[str], dict[str, Any]]]:
         """编译群违禁词规则。"""
         cached = _compiled_cache.get(group_id)
         if cached is not None:
@@ -231,21 +225,15 @@ class BannedWordsManager:
         cls.invalidate_cache(group_id)
 
     @classmethod
-    async def check_message(
-        cls, group_id: int, text: str
-    ) -> tuple[str, dict[str, Any]] | None:
+    async def check_message(cls, group_id: int, text: str) -> tuple[str, dict[str, Any]] | None:
         """检查消息是否命中违禁词。"""
         compact_text = re.sub(r"\s+", "", text)
         for pattern, meta in cls.compile_banned_words(group_id):
             try:
-                if pattern.search(text) or (
-                    compact_text != text and pattern.search(compact_text)
-                ):
+                if pattern.search(text) or (compact_text != text and pattern.search(compact_text)):
                     return str(meta.get("raw_word", "")), meta
             except Exception:
-                logger.opt(exception=True).warning(
-                    f"[banwords] 匹配违禁词异常: {group_id}"
-                )
+                logger.opt(exception=True).warning(f"[banwords] 匹配违禁词异常: {group_id}")
         return None
 
 
@@ -321,9 +309,7 @@ banword_mute_time = P.on_regex(
 
 
 @banword_add.handle()
-async def _handle_banword_add(
-    matcher: Matcher, event: Event, groups: tuple = RegexGroup()
-) -> None:
+async def _handle_banword_add(matcher: Matcher, event: Event, groups: tuple = RegexGroup()) -> None:
     """添加违禁词。"""
     group_id = _gid(event)
     user_id = _uid(event) or 0
@@ -344,15 +330,11 @@ async def _handle_banword_add(
         )
     except ValueError as exc:
         await matcher.finish(str(exc))
-    await matcher.finish(
-        f"✅ 已添加违禁词\n词条: {word}\n匹配: {match_cn}\n处罚: {penalty_cn}"
-    )
+    await matcher.finish(f"✅ 已添加违禁词\n词条: {word}\n匹配: {match_cn}\n处罚: {penalty_cn}")
 
 
 @banword_del.handle()
-async def _handle_banword_del(
-    matcher: Matcher, event: Event, groups: tuple = RegexGroup()
-) -> None:
+async def _handle_banword_del(matcher: Matcher, event: Event, groups: tuple = RegexGroup()) -> None:
     """删除违禁词。"""
     group_id = _gid(event)
     if group_id is None:
@@ -392,12 +374,8 @@ async def _handle_banword_list(matcher: Matcher, event: Event) -> None:
         lines.append("词条: 暂无")
         await matcher.finish("\n".join(lines))
 
-    match_names = {
-        value: key for key, value in BannedWordsManager.MATCH_TYPE_MAP.items()
-    }
-    penalty_names = {
-        value: key for key, value in BannedWordsManager.PENALTY_TYPE_MAP.items()
-    }
+    match_names = {value: key for key, value in BannedWordsManager.MATCH_TYPE_MAP.items()}
+    penalty_names = {value: key for key, value in BannedWordsManager.PENALTY_TYPE_MAP.items()}
     for index, (word, meta) in enumerate(banned_words.items(), 1):
         match_cn = match_names.get(meta.get("match_type", "exact"), "精确")
         penalty_cn = penalty_names.get(meta.get("penalty_type", "mute"), "禁")
@@ -491,9 +469,7 @@ async def _handle_banword_interceptor(bot: Bot, event: Event) -> None:
     word, meta = result
     penalty_type = meta.get("penalty_type", "mute")
     mute_seconds = int(config.get("mute_seconds", 300) or 300)
-    logger.warning(
-        f"[banwords] 违禁词拦截 [{group_id}] {user_id}: {word} ({penalty_type})"
-    )
+    logger.warning(f"[banwords] 违禁词拦截 [{group_id}] {user_id}: {word} ({penalty_type})")
 
     message_id = getattr(event, "message_id", None)
     if message_id is not None:

@@ -114,9 +114,7 @@ def _snapshot_signature(
 ) -> str:
     """生成只反映当前营业状态和商品内容的稳定签名。"""
     product_labels = [f"{item.name}|{item.detail}|{item.image}" for item in products]
-    signature_seed = "\n".join(
-        [status, str(round_no or ""), started_at, "\n".join(product_labels)]
-    )
+    signature_seed = "\n".join([status, str(round_no or ""), started_at, "\n".join(product_labels)])
     return hashlib.sha256(signature_seed.encode("utf-8", errors="ignore")).hexdigest()
 
 

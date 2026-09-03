@@ -98,9 +98,7 @@ def _build_html(
 
     bg_uri = _data_uri(background)
     footer_text = (
-        footer
-        if footer and str(footer).strip()
-        else "Created by dggb | Rendered by Playwright"
+        footer if footer and str(footer).strip() else "Created by dggb | Rendered by Playwright"
     )
     return f"""
     <!doctype html>
@@ -150,9 +148,7 @@ async def render_help_image(
         draw.text((50, 120), sub_title, fill=(80, 80, 80), font=font_sub)
         y = 180
         for group in groups[:10]:
-            draw.text(
-                (50, y), f"- {group.get('group', '')}", fill=(40, 40, 40), font=font_sub
-            )
+            draw.text((50, y), f"- {group.get('group', '')}", fill=(40, 40, 40), font=font_sub)
             y += 40
         buffer = io.BytesIO()
         image.save(buffer, format="PNG")
@@ -182,14 +178,10 @@ async def render_help_image(
             browser = await ensure_browser()
             page = await browser.new_page(device_scale_factor=scale)
             try:
-                await asyncio.wait_for(
-                    page.set_content(html, wait_until="load"), timeout=15.0
-                )
+                await asyncio.wait_for(page.set_content(html, wait_until="load"), timeout=15.0)
                 element = await page.query_selector(".container")
                 if element:
-                    return await asyncio.wait_for(
-                        element.screenshot(type="png"), timeout=15.0
-                    )
+                    return await asyncio.wait_for(element.screenshot(type="png"), timeout=15.0)
                 return await asyncio.wait_for(
                     page.screenshot(type="png", full_page=True), timeout=15.0
                 )

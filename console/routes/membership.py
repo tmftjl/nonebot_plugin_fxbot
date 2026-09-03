@@ -100,9 +100,7 @@ async def generate_code_for_console(payload: dict[str, Any]) -> dict[str, Any]:
     try:
         expire_days = int(payload.get("expire_days") or 0)
         expires_at = (
-            datetime.now(timezone.utc) + timedelta(days=expire_days)
-            if expire_days > 0
-            else None
+            datetime.now(timezone.utc) + timedelta(days=expire_days) if expire_days > 0 else None
         )
         row = await membership_service.generate_code(
             duration_value=int(payload.get("length")),
@@ -137,9 +135,7 @@ async def extend_from_console(payload: dict[str, Any]) -> dict[str, Any]:
                 group_id,
                 duration_value=int(payload.get("length")),
                 duration_unit=_duration_unit(str(payload.get("unit"))),
-                operator_user_id=str(
-                    payload.get("renewer") or payload.get("renewed_by") or ""
-                )
+                operator_user_id=str(payload.get("renewer") or payload.get("renewed_by") or "")
                 or None,
                 code="console",
             )
@@ -172,11 +168,7 @@ async def remind_group(payload: dict[str, Any]) -> dict[str, int]:
 @router.post("/notify")
 async def notify_groups(payload: dict[str, Any]) -> dict[str, int]:
     """批量发送群通知。"""
-    group_ids = [
-        str(item).strip()
-        for item in payload.get("group_ids") or []
-        if str(item).strip()
-    ]
+    group_ids = [str(item).strip() for item in payload.get("group_ids") or [] if str(item).strip()]
     text = str(payload.get("text") or "").strip()
     if not group_ids:
         raise HTTPException(status_code=400, detail="群列表不能为空")

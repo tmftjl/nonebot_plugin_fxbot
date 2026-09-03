@@ -31,9 +31,7 @@ class ChatService:
         runtime = runtime or ToolRuntime()
         messages = self.session_store.get(request.session_id)
         persona_text = get_persona_text(
-            request.metadata.get("persona_name")
-            if isinstance(request.metadata, dict)
-            else None
+            request.metadata.get("persona_name") if isinstance(request.metadata, dict) else None
         )
         if persona_text:
             if not messages or messages[0].get("role") != "system":

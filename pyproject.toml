@@ -1,0 +1,36 @@
+[project]
+name = "nonebot-plugin-fxbot"
+version = "0.1.0"
+description = "FxBot NoneBot plugin"
+requires-python = ">=3.10"
+dependencies = [
+    "nonebot2[fastapi,httpx]",
+    "nonebot-adapter-onebot",
+    "nonebot-plugin-apscheduler",
+    "pydantic",
+    "sqlmodel",
+    "sqlalchemy",
+    "aiosqlite",
+    "httpx",
+    "fastapi",
+    "Pillow>=9.2",
+    "playwright>=1.40",
+    "psutil>=5.9.0",
+    "arclet-alconna>=1.8.35,<2.0",
+    "matplotlib>=3.7.0",
+    "pypinyin>=0.44.0,<1.0.0",
+    "python-dateutil>=2.8.2",
+    "PyYAML>=6.0",
+    "rapidfuzz>=3.9.0",
+    "curl_cffi>=0.13.0,<1.0.0,!=0.14.0",
+    "bilibili-api-python>=17.4.1,<18.0.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"

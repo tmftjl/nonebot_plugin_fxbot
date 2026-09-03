@@ -164,9 +164,7 @@ def _draw_star_rating(
         for i in range(10):
             angle = math.pi / 5 * i - math.pi / 2
             radius = star_size / 2 if i % 2 == 0 else star_size / 4
-            vertices.append(
-                (cx + radius * math.cos(angle), y + radius * math.sin(angle))
-            )
+            vertices.append((cx + radius * math.cos(angle), y + radius * math.sin(angle)))
         if ch == "★":
             draw.polygon(vertices, fill=(0, 0, 0, 220))
         else:
@@ -282,7 +280,5 @@ async def _handle_fortune(matcher: Matcher, bot: Bot, event: Event) -> None:
     except Exception as exc:
         await matcher.finish(f"生成失败：{exc}")
     background = await _get_background_image()
-    image = _generate_fortune_canvas(
-        _nickname(event, user_id), data, background=background
-    )
+    image = _generate_fortune_canvas(_nickname(event, user_id), data, background=background)
     await matcher.finish(build_message(bot, build_message_segment(bot, "image", image)))

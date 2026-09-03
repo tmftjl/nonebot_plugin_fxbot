@@ -106,9 +106,7 @@ def set_command_display_name(plugin: str, command: str, display_name: str) -> No
 
 def get_command_display_names() -> dict[str, dict[str, str]]:
     """获取命令展示名映射。"""
-    return {
-        plugin: dict(commands) for plugin, commands in _COMMAND_DISPLAY_NAMES.items()
-    }
+    return {plugin: dict(commands) for plugin, commands in _COMMAND_DISPLAY_NAMES.items()}
 
 
 class Plugin:
@@ -225,9 +223,7 @@ class Plugin:
         matcher = factory(*factory_args, **kwargs)
 
         if not (isinstance(matcher, type) and issubclass(matcher, Matcher)):
-            raise TypeError(
-                f"NoneBot matcher 工厂返回了无效类型: {type(matcher).__name__}"
-            )
+            raise TypeError(f"NoneBot matcher 工厂返回了无效类型: {type(matcher).__name__}")
 
         if log:
             plugin_display = _PLUGIN_DISPLAY_NAMES.get(self.name, self.name)

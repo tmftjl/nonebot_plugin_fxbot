@@ -171,13 +171,9 @@ def _section(img: Image.Image, draw: ImageDraw.ImageDraw, y: int, title: str) ->
     return y + SECTION_HEIGHT
 
 
-def _draw_type_badges(
-    img: Image.Image, draw: ImageDraw.ImageDraw, pet: dict[str, Any]
-) -> None:
+def _draw_type_badges(img: Image.Image, draw: ImageDraw.ImageDraw, pet: dict[str, Any]) -> None:
     mask_bar = _asset("mask_bar.png")
-    for index, type_name in enumerate(
-        [str(item) for item in pet.get("unit_type") or []]
-    ):
+    for index, type_name in enumerate([str(item) for item in pet.get("unit_type") or []]):
         color = TYPE_COLORS.get(type_name, TYPE_COLORS["无"])
         type_img = Image.new("RGBA", (142, 38), color)
         type_icon_path = POKEDEX_DIR / f"{type_name}.png"
@@ -191,9 +187,7 @@ def _draw_type_badges(
         img.paste(masked, (150 * index + 90, 970), masked)
 
 
-def _draw_stats(
-    img: Image.Image, draw: ImageDraw.ImageDraw, pet: dict[str, Any]
-) -> None:
+def _draw_stats(img: Image.Image, draw: ImageDraw.ImageDraw, pet: dict[str, Any]) -> None:
     rocom_title = _asset("a_title.png")
     table_img = _asset("table.png")
     tags_img = _asset("tags.png")
@@ -211,12 +205,8 @@ def _draw_stats(
             img.paste(tags_img, (tag_x, tag_y), tags_img)
             value = int(attr.get(field) or 0)
             if col == 0:
-                draw.text(
-                    (tag_x - 95, tag_y + 22), TAG_TITLES[row], TEXT_COLOR, RC_34, "lm"
-                )
-                draw.text(
-                    (tag_x + 58, tag_y + 22), str(value), (240, 236, 225), RC_32, "mm"
-                )
+                draw.text((tag_x - 95, tag_y + 22), TAG_TITLES[row], TEXT_COLOR, RC_34, "lm")
+                draw.text((tag_x + 58, tag_y + 22), str(value), (240, 236, 225), RC_32, "mm")
             elif col == 1:
                 draw.text(
                     (tag_x + 58, tag_y + 22),
@@ -235,14 +225,10 @@ def _draw_stats(
                 )
 
 
-def _draw_evolution(
-    img: Image.Image, draw: ImageDraw.ImageDraw, pet: dict[str, Any]
-) -> None:
+def _draw_evolution(img: Image.Image, draw: ImageDraw.ImageDraw, pet: dict[str, Any]) -> None:
     jinhua_bg = _asset("jinhua_bg.png")
     right_jinhua = _asset("right_jinhua.png")
-    evolution = [
-        item for item in pet.get("evolution_list") or [] if isinstance(item, dict)
-    ]
+    evolution = [item for item in pet.get("evolution_list") or [] if isinstance(item, dict)]
     evolution = evolution[:3]
     count = len(evolution)
     if not count:
@@ -252,9 +238,7 @@ def _draw_evolution(
     for index, item in enumerate(evolution):
         icon_x = base_x + EVOLUTION_X.get(f"{count}_{index}", 220)
         img.paste(jinhua_bg, (icon_x, base_y), jinhua_bg)
-        pet_icon = _load_pet_icon(
-            str(item.get("icon") or ""), 150, str(item.get("name") or "")
-        )
+        pet_icon = _load_pet_icon(str(item.get("icon") or ""), 150, str(item.get("name") or ""))
         img.paste(pet_icon, (icon_x - 5, base_y + 10), pet_icon)
         draw.text(
             (icon_x + 70, base_y + 220),
@@ -301,9 +285,7 @@ def _draw_skill_group(
             family_icon = Image.open(family_icon_path).convert("RGBA").resize((45, 45))
             temp.paste(family_icon, (-5, -5), family_icon)
         temp_draw = ImageDraw.Draw(temp)
-        temp_draw.text(
-            (94, 35), str(skill.get("name") or "")[:6], WHITE, SKILL_22, "lm"
-        )
+        temp_draw.text((94, 35), str(skill.get("name") or "")[:6], WHITE, SKILL_22, "lm")
         temp.paste(cost_star, (92, 52), cost_star)
         temp_draw.text((120, 65), str(skill.get("cost") or "0"), WHITE, SKILL_22, "lm")
         img.paste(temp, (208 * col + 82, row * 99 + y), temp)
@@ -318,35 +300,23 @@ def _skill_group_height(skills: list[dict[str, Any]]) -> int:
 
 async def render_pokedex_image(pet: dict[str, Any], pet_id: str) -> bytes:
     """按照 RocomUID 图鉴布局生成图片。"""
-    level_skills = [
-        item for item in pet.get("level_skill_list") or [] if isinstance(item, dict)
-    ]
-    blood_skills = [
-        item for item in pet.get("blood_skill_list") or [] if isinstance(item, dict)
-    ]
+    level_skills = [item for item in pet.get("level_skill_list") or [] if isinstance(item, dict)]
+    blood_skills = [item for item in pet.get("blood_skill_list") or [] if isinstance(item, dict)]
     machine_skills = [
         item for item in pet.get("machine_skill_list") or [] if isinstance(item, dict)
     ]
     feature = pet.get("feature") or {}
     feature_name = str(feature.get("name") or "")
-    feature_lines = _wrap_text(
-        str(feature.get("desc") or ""), SKILL_32, FEATURE_TEXT_MAX_WIDTH
-    )
-    desc_lines = _wrap_text(
-        str(pet.get("description") or ""), SKILL_32, INFO_TEXT_MAX_WIDTH
-    )
+    feature_lines = _wrap_text(str(feature.get("desc") or ""), SKILL_32, FEATURE_TEXT_MAX_WIDTH)
+    desc_lines = _wrap_text(str(pet.get("description") or ""), SKILL_32, INFO_TEXT_MAX_WIDTH)
 
     info_body_height = (
-        len(desc_lines) * TEXT_LINE_HEIGHT
-        + (TEXT_LINE_HEIGHT if pet.get("egg_group") else 0)
-        + 15
+        len(desc_lines) * TEXT_LINE_HEIGHT + (TEXT_LINE_HEIGHT if pet.get("egg_group") else 0) + 15
     )
     feature_line_count = len(feature_lines) or 1
     feature_body_height = max(
         FEATURE_ICON_SIZE + FEATURE_BOTTOM_PADDING,
-        FEATURE_DESC_CENTER_OFFSET
-        + feature_line_count * TEXT_LINE_HEIGHT
-        + FEATURE_BOTTOM_PADDING,
+        FEATURE_DESC_CENTER_OFFSET + feature_line_count * TEXT_LINE_HEIGHT + FEATURE_BOTTOM_PADDING,
     )
     bg_height = 1030
     bg_height += SECTION_HEIGHT + info_body_height
@@ -356,11 +326,7 @@ async def render_pokedex_image(pet: dict[str, Any], pet_id: str) -> bytes:
     bg_height += _skill_group_height(machine_skills)
     bg_height += 40
 
-    img = (
-        Image.open(POKEDEX_DIR / "bg.jpg")
-        .convert("RGB")
-        .resize((IMAGE_WIDTH, bg_height))
-    )
+    img = Image.open(POKEDEX_DIR / "bg.jpg").convert("RGB").resize((IMAGE_WIDTH, bg_height))
     title_img = _asset("title.png")
     pet_bg_mask = _asset("pet_bg.png").resize((575, 575))
     img.paste(title_img, (0, 0), title_img)
@@ -369,13 +335,9 @@ async def render_pokedex_image(pet: dict[str, Any], pet_id: str) -> bytes:
     draw.text((600, 260), _pet_name(pet), TEXT_COLOR, RC_64, "mm")
 
     first_type = str((pet.get("unit_type") or ["无"])[0])
-    pet_bg = Image.new(
-        "RGBA", (575, 575), TYPE_COLORS.get(first_type, TYPE_COLORS["无"])
-    )
+    pet_bg = Image.new("RGBA", (575, 575), TYPE_COLORS.get(first_type, TYPE_COLORS["无"]))
     img.paste(pet_bg, (-6, 359), pet_bg_mask)
-    pet_icon = _load_pet_icon(
-        str(pet.get("icon") or ""), 552, str(pet.get("name") or "")
-    )
+    pet_icon = _load_pet_icon(str(pet.get("icon") or ""), 552, str(pet.get("name") or ""))
     img.paste(pet_icon, (0, 371), pet_icon)
 
     _draw_stats(img, draw, pet)
@@ -412,9 +374,7 @@ async def render_pokedex_image(pet: dict[str, Any], pet_id: str) -> bytes:
     )
     line_y = FEATURE_DESC_CENTER_OFFSET
     for line in feature_lines or ["暂无特性说明"]:
-        draw.text(
-            (FEATURE_TEXT_X, feature_body_y + line_y), line, TEXT_COLOR, SKILL_32, "lm"
-        )
+        draw.text((FEATURE_TEXT_X, feature_body_y + line_y), line, TEXT_COLOR, SKILL_32, "lm")
         line_y += TEXT_LINE_HEIGHT
     y = feature_body_y + feature_body_height + 15
 

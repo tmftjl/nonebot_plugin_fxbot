@@ -36,9 +36,7 @@ class PlatformBot:
         return await self.adapter.get_group_info(self.raw, str(group_id))
 
     async def get_group_member(self, group_id: str, user_id: str):
-        return await self.adapter.get_group_member(
-            self.raw, str(group_id), str(user_id)
-        )
+        return await self.adapter.get_group_member(self.raw, str(group_id), str(user_id))
 
     async def get_group_members(self, group_id: str):
         return await self.adapter.get_group_members(self.raw, str(group_id))
@@ -59,25 +57,19 @@ class PlatformBot:
         return await self.adapter.ban(self.raw, str(group_id), str(user_id), duration)
 
     async def kick(self, group_id: str, user_id: str, reject_add_request: bool = False):
-        return await self.adapter.kick(
-            self.raw, str(group_id), str(user_id), reject_add_request
-        )
+        return await self.adapter.kick(self.raw, str(group_id), str(user_id), reject_add_request)
 
     async def whole_ban(self, group_id: str, enable: bool):
         return await self.adapter.whole_ban(self.raw, str(group_id), enable)
 
     async def set_admin(self, group_id: str, user_id: str, enable: bool):
-        return await self.adapter.set_admin(
-            self.raw, str(group_id), str(user_id), enable
-        )
+        return await self.adapter.set_admin(self.raw, str(group_id), str(user_id), enable)
 
     async def leave_group(self, group_id: str):
         return await self.adapter.leave_group(self.raw, str(group_id))
 
     async def set_special_title(self, group_id: str, user_id: str, title: str):
-        return await self.adapter.set_special_title(
-            self.raw, str(group_id), str(user_id), title
-        )
+        return await self.adapter.set_special_title(self.raw, str(group_id), str(user_id), title)
 
     async def like(self, user_id: str, times: int = 1):
         return await self.adapter.like(self.raw, str(user_id), times)
@@ -91,9 +83,7 @@ class PlatformBot:
     def mention_targets(self, message: Any, ignored_targets: set[str] | None = None):
         return self.adapter.mention_targets(message, ignored_targets)
 
-    def first_mention_target(
-        self, message: Any, ignored_targets: set[str] | None = None
-    ):
+    def first_mention_target(self, message: Any, ignored_targets: set[str] | None = None):
         values = self.mention_targets(message, ignored_targets)
         return values[0] if values else None
 
@@ -102,9 +92,7 @@ def platform_bot(bot: Any) -> PlatformBot:
     return PlatformBot(bot)
 
 
-_current: ContextVar[PlatformBot | None] = ContextVar(
-    "fxbot_platform_bot", default=None
-)
+_current: ContextVar[PlatformBot | None] = ContextVar("fxbot_platform_bot", default=None)
 
 
 def bind_bot(bot: Any) -> PlatformBot:

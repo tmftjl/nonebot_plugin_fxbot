@@ -45,9 +45,7 @@ async def parse(url: str) -> VideoResult:
         title=str(photo.get("caption") or "快手视频"),
         video_url=video_url,
         cover_url=_cdn_url(first(photo.get("coverUrls"))),
-        duration=(float(photo.get("duration")) / 1000)
-        if photo.get("duration")
-        else None,
+        duration=(float(photo.get("duration")) / 1000) if photo.get("duration") else None,
         source_url=resolved,
         text=str(photo.get("userName") or ""),
         headers=HEADERS.copy(),

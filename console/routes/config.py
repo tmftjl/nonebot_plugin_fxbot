@@ -12,9 +12,7 @@ from ...config import SYSTEM_DEFAULTS, get_manager
 from ...utils.paths import built_in_plugins_dir
 from ..auth import bearer_auth
 
-router = APIRouter(
-    prefix="/config", tags=["fxbot-config"], dependencies=[Depends(bearer_auth)]
-)
+router = APIRouter(prefix="/config", tags=["fxbot-config"], dependencies=[Depends(bearer_auth)])
 
 
 def _system_config_tab() -> dict[str, Any]:
@@ -53,18 +51,14 @@ def _system_config_tab() -> dict[str, Any]:
                         "field": "expire_prompt_text_prefixes",
                         "label": "提示文本前缀",
                         "component": "GTags",
-                        "default": SYSTEM_DEFAULTS["membership"][
-                            "expire_prompt_text_prefixes"
-                        ],
+                        "default": SYSTEM_DEFAULTS["membership"]["expire_prompt_text_prefixes"],
                         "helpMessage": "普通消息以这些文本开头时，也触发会员快到期提示。",
                     },
                     {
                         "field": "auto_leave_expired_groups",
                         "label": "过期自动退群",
                         "component": "Switch",
-                        "default": SYSTEM_DEFAULTS["membership"][
-                            "auto_leave_expired_groups"
-                        ],
+                        "default": SYSTEM_DEFAULTS["membership"]["auto_leave_expired_groups"],
                         "helpMessage": "到期后自动让托管 Bot 退群。",
                     },
                     {
@@ -142,18 +136,14 @@ def _system_config_tab() -> dict[str, Any]:
                         "field": "qq_group_requires_mention",
                         "label": "QQ 群需 @Bot",
                         "component": "Switch",
-                        "default": SYSTEM_DEFAULTS["message"][
-                            "qq_group_requires_mention"
-                        ],
+                        "default": SYSTEM_DEFAULTS["message"]["qq_group_requires_mention"],
                         "helpMessage": "开启后 FxBot 忽略 QQ 官方群内未 @ 本机器人的消息，不影响其他插件接收消息。",
                     },
                     {
                         "field": "ignored_mention_bot_ids",
                         "label": "忽略 @Bot",
                         "component": "GTags",
-                        "default": SYSTEM_DEFAULTS["message"][
-                            "ignored_mention_bot_ids"
-                        ],
+                        "default": SYSTEM_DEFAULTS["message"]["ignored_mention_bot_ids"],
                         "helpMessage": "消息中 @ 到这些 Bot QQ 时，本机器人不处理该消息。",
                     },
                 ],
@@ -239,9 +229,7 @@ def _plugin_config_tabs() -> list[dict[str, Any]]:
             module = importlib.import_module(module_name)
             schema = module.get_ui_schema()
         except Exception as exc:
-            logger.warning(
-                f"[Config] 加载插件配置界面失败: {plugin_path.name} err={exc}"
-            )
+            logger.warning(f"[Config] 加载插件配置界面失败: {plugin_path.name} err={exc}")
             continue
         if isinstance(schema, dict):
             tabs.append(schema)

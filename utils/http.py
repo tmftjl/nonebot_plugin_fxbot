@@ -62,9 +62,7 @@ async def _get_text_with_curl(
     try:
         import curl_cffi
     except Exception as exc:  # pragma: no cover - 依赖缺失只会出现在运行环境
-        raise RuntimeError(
-            "HTTP 请求失败，且缺少 curl_cffi 依赖，无法使用浏览器 TLS 兜底"
-        ) from exc
+        raise RuntimeError("HTTP 请求失败，且缺少 curl_cffi 依赖，无法使用浏览器 TLS 兜底") from exc
 
     try:
         async with curl_cffi.AsyncSession(
@@ -72,12 +70,8 @@ async def _get_text_with_curl(
             impersonate="chrome",
             default_encoding="utf-8",
         ) as session:
-            response = await session.get(
-                url, headers=dict(headers or {}), timeout=timeout
-            )
+            response = await session.get(url, headers=dict(headers or {}), timeout=timeout)
             response.raise_for_status()
             return response.text
     except Exception as exc:
-        raise RuntimeError(
-            f"HTTP 请求失败，浏览器 TLS 兜底请求也未成功：{exc}"
-        ) from cause
+        raise RuntimeError(f"HTTP 请求失败，浏览器 TLS 兜底请求也未成功：{exc}") from cause

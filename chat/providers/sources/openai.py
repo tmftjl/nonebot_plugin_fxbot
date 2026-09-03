@@ -54,9 +54,7 @@ class OpenAIProvider(ChatProvider):
             raise
 
         msg = resp.choices[0].message
-        response = LLMResponse(
-            role="assistant", content=msg.content or "", raw_response=resp
-        )
+        response = LLMResponse(role="assistant", content=msg.content or "", raw_response=resp)
         if msg.tool_calls:
             response.tool_calls = [
                 {
@@ -169,9 +167,7 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
     async def embed(self, texts: list[str]) -> list[list[float]]:
         """批量获取文本嵌入向量。"""
         try:
-            resp = await self.client.embeddings.create(
-                input=texts, model=self.model_name
-            )
+            resp = await self.client.embeddings.create(input=texts, model=self.model_name)
             return [data.embedding for data in resp.data]
         except Exception as exc:
             logger.error(f"[{self.provider_id}] Embed 请求失败: {exc}")

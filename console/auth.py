@@ -47,14 +47,10 @@ def verify_bearer_token(request: Request) -> None:
     auth_header = request.headers.get("authorization", "")
     prefix = "Bearer "
     if not auth_header.startswith(prefix):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="缺少认证 token"
-        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="缺少认证 token")
     token = auth_header[len(prefix) :].strip()
     if not secrets.compare_digest(token, get_console_token()):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="认证 token 无效"
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="认证 token 无效")
 
 
 async def bearer_auth(request: Request) -> None:

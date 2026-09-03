@@ -221,6 +221,4 @@ async def generate_meme(
 ) -> bytes:
     files = [("images", image) for image in images]
     data = {"texts": texts, "args": json.dumps(args)}
-    return await send_request(
-        f"/memes/{meme_key}/", "POST", "BYTES", files=files, data=data
-    )
+    return await send_request(f"/memes/{meme_key}/", "POST", "BYTES", files=files, data=data)

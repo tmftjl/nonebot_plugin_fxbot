@@ -77,9 +77,7 @@ class ProviderManager:
         self._providers[cache_key] = provider
         return provider
 
-    def _resolve_config(
-        self, name: str, *, capability: str
-    ) -> tuple[str, dict[str, Any]]:
+    def _resolve_config(self, name: str, *, capability: str) -> tuple[str, dict[str, Any]]:
         configs = _provider_configs()
         provider_name = name or _default_provider_name()
 
@@ -121,9 +119,7 @@ class ProviderManager:
 
     def list_registered(self) -> dict[str, str]:
         """列出已注册的 Provider 类型。"""
-        return {
-            name: meta.display_name or name for name, meta in provider_registry.items()
-        }
+        return {name: meta.display_name or name for name, meta in provider_registry.items()}
 
     def list_providers_by_type(self, provider_type: str = "chat") -> list[str]:
         """按能力类型列出配置中的 Provider 名称。"""

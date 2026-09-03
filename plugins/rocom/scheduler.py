@@ -38,9 +38,7 @@ async def _push_snapshot(snapshot) -> int:
     image = await render_merchant_image(snapshot)
     group_count = sum(1 for s in subscriptions if s.get("type", "group") == "group")
     private_count = sum(1 for s in subscriptions if s.get("type") == "private")
-    logger.info(
-        f"[rocom] 开始推送远行商人刷新: {group_count} 个群订阅, {private_count} 个私聊订阅"
-    )
+    logger.info(f"[rocom] 开始推送远行商人刷新: {group_count} 个群订阅, {private_count} 个私聊订阅")
     pushed = 0
     for subscription in subscriptions:
         if await _send_to_subscription(subscription, image):
@@ -104,9 +102,7 @@ def setup_rocom_merchant_tasks() -> None:
     try:
         from nonebot_plugin_apscheduler import scheduler
     except Exception:
-        logger.warning(
-            "[rocom] nonebot-plugin-apscheduler 未安装或未加载，跳过定时任务"
-        )
+        logger.warning("[rocom] nonebot-plugin-apscheduler 未安装或未加载，跳过定时任务")
         return
 
     if not _startup_hook_registered:

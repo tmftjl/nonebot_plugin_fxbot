@@ -198,10 +198,7 @@ async def find_meme(matcher: Matcher, meme_name: str) -> MemeInfo:
         if searched_memes := meme_manager.search(meme_name, limit=5):
             await matcher.finish(
                 f"表情 {meme_name} 不存在，你可能在找：\n"
-                + "\n".join(
-                    f"* {meme.key} ({'/'.join(meme.keywords)})"
-                    for meme in searched_memes
-                )
+                + "\n".join(f"* {meme.key} ({'/'.join(meme.keywords)})" for meme in searched_memes)
             )
         await matcher.finish(f"表情 {meme_name} 不存在！")
 
@@ -211,9 +208,7 @@ async def find_meme(matcher: Matcher, meme_name: str) -> MemeInfo:
     target_name = meme_name.strip().lower()
     for meme in found_memes:
         if meme.key.lower() == target_name:
-            logger.warning(
-                f"[memes] 表情别名重复，已优先选择完全同名项: {meme_name} -> {meme.key}"
-            )
+            logger.warning(f"[memes] 表情别名重复，已优先选择完全同名项: {meme_name} -> {meme.key}")
             return meme
 
     chosen = found_memes[0]
@@ -276,20 +271,16 @@ def _reprioritize_protected_mentions(
     protected_indices = {
         i
         for i, user_id in enumerate(image_user_ids)
-        if (
-            image_from_mentions[i]
-            and user_id
-            and protection_manager.is_in_whitelist(user_id)
-        )
+        if (image_from_mentions[i] and user_id and protection_manager.is_in_whitelist(user_id))
     }
     if not protected_indices:
         return images, image_user_ids, image_from_mentions
 
     indexed = list(zip(images, image_user_ids, image_from_mentions))
     if meme.params_type.max_images == 1:
-        ordered = [
-            item for i, item in enumerate(indexed) if i not in protected_indices
-        ] + [item for i, item in enumerate(indexed) if i in protected_indices]
+        ordered = [item for i, item in enumerate(indexed) if i not in protected_indices] + [
+            item for i, item in enumerate(indexed) if i in protected_indices
+        ]
     else:
         ordered = [item for i, item in enumerate(indexed) if i in protected_indices] + [
             item for i, item in enumerate(indexed) if i not in protected_indices
@@ -339,9 +330,7 @@ async def extract_inputs(
     except Exception:
         pass
 
-    has_actual_image = reply_has_image or any(
-        getattr(seg, "type", None) == "image" for seg in msg
-    )
+    has_actual_image = reply_has_image or any(getattr(seg, "type", None) == "image" for seg in msg)
 
     for seg in msg:
         seg_type = getattr(seg, "type", None)
@@ -373,9 +362,7 @@ async def extract_inputs(
         elif seg.is_text():
             for token in _split_text(str(seg)):
                 if token.startswith("@") and token[1:]:
-                    avatar = await _avatar_bytes_of(
-                        matcher, session, interface, token[1:]
-                    )
+                    avatar = await _avatar_bytes_of(matcher, session, interface, token[1:])
                     if avatar:
                         images.append(avatar)
                         image_user_ids.append(token[1:])  # 记录@的用户ID
@@ -393,20 +380,12 @@ async def extract_inputs(
                     texts.append(token)
 
     if meme is not None:
-        if (
-            meme.params_type.min_images == 2
-            and len(images) == 1
-            and session.user.avatar
-        ):
+        if meme.params_type.min_images == 2 and len(images) == 1 and session.user.avatar:
             images.insert(0, await download_url(session.user.avatar))
             image_user_ids.insert(0, str(session.user.id))  # 发送者的头像
             image_from_mentions.insert(0, False)
 
-        if (
-            meme.params_type.min_images == 1
-            and len(images) == 0
-            and session.user.avatar
-        ):
+        if meme.params_type.min_images == 1 and len(images) == 0 and session.user.avatar:
             images.append(await download_url(session.user.avatar))
             image_user_ids.append(str(session.user.id))  # 发送者的头像
             image_from_mentions.append(False)
@@ -468,9 +447,7 @@ async def _send_image(matcher: Matcher, bot: Bot, event: Event, img: bytes, text
     if V11Bot is not None and isinstance(bot, V11Bot):
         assert V11Message is not None and V11MessageSegment is not None
         b64 = base64.b64encode(img).decode()
-        await matcher.finish(
-            V11Message(text) + V11MessageSegment.image(f"base64://{b64}")
-        )
+        await matcher.finish(V11Message(text) + V11MessageSegment.image(f"base64://{b64}"))
 
     if V12Bot is not None and isinstance(bot, V12Bot):
         assert V12Message is not None and V12MessageSegment is not None
@@ -659,9 +636,7 @@ async def _help(bot: Bot, event: Event, matcher: Matcher, session: Uninfo):
     user_key = get_user_id(session)
     memes = sorted(
         meme_manager.get_memes(),
-        key=lambda m: "".join(
-            chain.from_iterable(pinyin(m.keywords[0], style=Style.TONE3))
-        ),
+        key=lambda m: "".join(chain.from_iterable(pinyin(m.keywords[0], style=Style.TONE3))),
     )
     meme_generation_keys = await get_meme_generation_keys(
         session,
@@ -677,9 +652,7 @@ async def _help(bot: Bot, event: Event, matcher: Matcher, session: Uninfo):
         if meme_generation_keys.count(meme.key) >= 21:
             labels.append("hot")
         disabled = not meme_manager.check(user_key, meme.key)
-        meme_list.append(
-            MemeKeyWithProperties(meme_key=meme.key, disabled=disabled, labels=labels)
-        )
+        meme_list.append(MemeKeyWithProperties(meme_key=meme.key, disabled=disabled, labels=labels))
 
     meme_list_hashable = [
         (
@@ -927,12 +900,8 @@ async def _do_statistics(
         )
         meme_keys = [meme.key] * len(meme_times)
     else:
-        meme_records = await get_meme_generation_records(
-            session, id_type, time_start=start
-        )
-        meme_records = [
-            record for record in meme_records if meme_manager.get_meme(record.meme_key)
-        ]
+        meme_records = await get_meme_generation_records(session, id_type, time_start=start)
+        meme_records = [record for record in meme_records if meme_manager.get_meme(record.meme_key)]
         meme_times = [record.time for record in meme_records]
         meme_keys = [record.meme_key for record in meme_records]
 
@@ -981,9 +950,7 @@ async def _do_statistics(
         for key, count in key_counts.items():
             if m := meme_manager.get_meme(key):
                 meme_counts["/".join(m.keywords)] = count
-        output = await plot_meme_and_duration_counts(
-            meme_counts, duration_counts, title
-        )
+        output = await plot_meme_and_duration_counts(meme_counts, duration_counts, title)
 
     await _send_image(matcher, bot, event, output, "")
 
@@ -1008,9 +975,7 @@ async def _global_statistics(
     session: Uninfo,
     arg: Message = CommandArg(),
 ):
-    await _do_statistics(
-        bot, event, matcher, session, id_type=SessionIdType.GLOBAL, arg=arg
-    )
+    await _do_statistics(bot, event, matcher, session, id_type=SessionIdType.GLOBAL, arg=arg)
 
 
 @block_cmd.handle()
@@ -1119,9 +1084,7 @@ async def _random(
         await matcher.finish("没有找到符合条件的表情")
 
     meme = random.choice(candidates)
-    texts, images, _ = await extract_inputs(
-        bot, event, matcher, session, interface, meme, arg
-    )
+    texts, images, _ = await extract_inputs(bot, event, matcher, session, interface, meme, arg)
     texts = await normalize_meme_params(matcher, meme, texts, images)
 
     try:
@@ -1159,9 +1122,7 @@ async def _meme(
     if not meme_manager.check(user_key, meme.key):
         await matcher.finish("表情已被禁用")
 
-    texts, images, _ = await extract_inputs(
-        bot, event, matcher, session, interface, meme, msg
-    )
+    texts, images, _ = await extract_inputs(bot, event, matcher, session, interface, meme, msg)
     texts = await normalize_meme_params(matcher, meme, texts, images)
 
     try:

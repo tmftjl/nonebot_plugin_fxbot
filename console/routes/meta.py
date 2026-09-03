@@ -31,9 +31,7 @@ async def get_commands() -> dict[str, dict[str, str]]:
 async def get_stats_today() -> dict[str, Any]:
     """转发获取消息统计服务的今日数据。"""
     cfg = get_manager().get_system()
-    stats_api_url = (
-        str((cfg.get("console") or {}).get("stats_api_url") or "").strip().rstrip("/")
-    )
+    stats_api_url = str((cfg.get("console") or {}).get("stats_api_url") or "").strip().rstrip("/")
     if not stats_api_url:
         raise HTTPException(status_code=400, detail="未配置消息统计 API 地址")
     try:
@@ -85,17 +83,13 @@ async def get_ai_knowledge_stats(persona_name: str) -> dict[str, Any]:
 
 
 @router.post("/ai_chat/knowledge/{persona_name}/text")
-async def import_ai_knowledge_text(
-    persona_name: str, payload: dict[str, Any]
-) -> dict[str, Any]:
+async def import_ai_knowledge_text(persona_name: str, payload: dict[str, Any]) -> dict[str, Any]:
     """导入知识库文本占位接口。"""
     return {"success": False, "message": "知识库功能未启用", "count": 0}
 
 
 @router.post("/ai_chat/knowledge/{persona_name}/file")
-async def import_ai_knowledge_file(
-    persona_name: str, payload: dict[str, Any]
-) -> dict[str, Any]:
+async def import_ai_knowledge_file(persona_name: str, payload: dict[str, Any]) -> dict[str, Any]:
     """导入知识库文件占位接口。"""
     return {"success": False, "message": "知识库功能未启用", "count": 0}
 

@@ -88,9 +88,7 @@ def _find_item(data: Any) -> dict[str, Any] | None:
             value = data.get(key)
             if isinstance(value, dict) and (value.get("video") or value.get("images")):
                 return value
-        items = (
-            data.get("item_list") or data.get("aweme_list") or data.get("aweme_details")
-        )
+        items = data.get("item_list") or data.get("aweme_list") or data.get("aweme_details")
         if isinstance(items, list):
             item = first(items)
             if isinstance(item, dict):
@@ -134,9 +132,7 @@ def _build_result(item: dict[str, Any], *, source_url: str) -> VideoResult:
         title=title,
         video_url=video_url,
         cover_url=first(cover.get("url_list")),
-        duration=(float(video.get("duration")) / 1000)
-        if video.get("duration")
-        else None,
+        duration=(float(video.get("duration")) / 1000) if video.get("duration") else None,
         source_url=source_url,
         text=str(author.get("nickname") or ""),
         headers=IOS_HEADERS.copy(),
@@ -174,9 +170,7 @@ async def _parse_detail_api(video_id: str, *, source_url: str) -> VideoResult:
     query = urlencode(params)
     signature = await _generate_a_bogus(query, headers["User-Agent"])
     params["a_bogus"] = signature
-    async with httpx.AsyncClient(
-        timeout=timeout(), proxy=proxy(), verify=False
-    ) as client:
+    async with httpx.AsyncClient(timeout=timeout(), proxy=proxy(), verify=False) as client:
         response = await client.get(api_url, params=params, headers=headers)
         response.raise_for_status()
         if not response.content:
@@ -202,9 +196,7 @@ async def _douyin_request_headers(base: dict[str, str]) -> dict[str, str]:
         headers["Cookie"] = cookie
         return headers
 
-    async with httpx.AsyncClient(
-        timeout=timeout(), proxy=proxy(), verify=False
-    ) as client:
+    async with httpx.AsyncClient(timeout=timeout(), proxy=proxy(), verify=False) as client:
         response = await client.post(
             "https://ttwid.bytedance.com/ttwid/union/register/",
             json={
@@ -216,9 +208,7 @@ async def _douyin_request_headers(base: dict[str, str]) -> dict[str, str]:
                 "service": "www.ixigua.com",
                 "migrate_info": {"ticket": "", "source": "node"},
             },
-            headers={
-                "User-Agent": headers.get("User-Agent", COMMON_HEADERS["User-Agent"])
-            },
+            headers={"User-Agent": headers.get("User-Agent", COMMON_HEADERS["User-Agent"])},
         )
         response.raise_for_status()
         ttwid = response.cookies.get("ttwid")
@@ -265,9 +255,7 @@ async def _parse_slides(video_id: str, *, source_url: str) -> VideoResult:
         "aweme_ids": f"[{video_id}]",
         "request_source": "200",
     }
-    async with httpx.AsyncClient(
-        timeout=timeout(), proxy=proxy(), verify=False
-    ) as client:
+    async with httpx.AsyncClient(timeout=timeout(), proxy=proxy(), verify=False) as client:
         response = await client.get(url, params=params, headers=ANDROID_HEADERS)
         response.raise_for_status()
         data = response.json()

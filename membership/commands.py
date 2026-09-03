@@ -380,14 +380,10 @@ async def _handle_adjust_bot(matcher: Matcher, event: Event) -> None:
             failed_bots.append(str(bot_id))
             continue
 
-    updated_count, unchanged_count = await _command_store.adjust_managed_bots(
-        groups_by_bot
-    )
+    updated_count, unchanged_count = await _command_store.adjust_managed_bots(groups_by_bot)
 
     await membership_guard.reload_all_cache()
-    result_msg = (
-        f"续费调整完成\n更新: {updated_count} 个群\n未变: {unchanged_count} 个群"
-    )
+    result_msg = f"续费调整完成\n更新: {updated_count} 个群\n未变: {unchanged_count} 个群"
     if failed_bots:
         result_msg += f"\n失败bot: {', '.join(failed_bots)}"
     await matcher.finish(result_msg)

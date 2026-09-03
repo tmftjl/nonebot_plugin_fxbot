@@ -62,9 +62,7 @@ async def _handle_like(matcher: Matcher, bot: Bot, event: Event) -> None:
     except Exception:
         ok = False
     await matcher.finish(
-        f"已为你点赞 {MAX_LIKE_TIMES} 次"
-        if ok
-        else "当前适配器不支持点赞或今日已达上限"
+        f"已为你点赞 {MAX_LIKE_TIMES} 次" if ok else "当前适配器不支持点赞或今日已达上限"
     )
 
 

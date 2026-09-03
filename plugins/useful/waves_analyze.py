@@ -77,9 +77,7 @@ async def _encode_images_to_b64(images: Iterable[bytes]) -> list[str]:
     return encoded
 
 
-async def _post_score(
-    images_b64: list[str], command_str: str
-) -> tuple[bytes | None, str | None]:
+async def _post_score(images_b64: list[str], command_str: str) -> tuple[bytes | None, str | None]:
     """调用评分服务。"""
     cfg = cfg_waves_analyze()
     api_url = str(cfg["api_url"]).strip()
@@ -93,9 +91,7 @@ async def _post_score(
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     try:
         client = await get_shared_async_client()
-        response = await client.post(
-            api_url, headers=headers, json=payload, timeout=120.0
-        )
+        response = await client.post(api_url, headers=headers, json=payload, timeout=120.0)
         if response.status_code != 200:
             logger.warning(
                 f"[waves_analyze] 评分服务状态异常: {response.status_code} {response.text[:200]}"
@@ -139,6 +135,4 @@ async def _handle_waves_analyze(
     result_image, tip = await _post_score(images_b64, command_str)
     if not result_image:
         await matcher.finish(f"分析失败: {tip}" if tip else "分析失败，请重试")
-    await matcher.finish(
-        build_message(bot, build_message_segment(bot, "image", result_image))
-    )
+    await matcher.finish(build_message(bot, build_message_segment(bot, "image", result_image)))

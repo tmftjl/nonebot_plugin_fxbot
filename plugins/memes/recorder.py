@@ -38,12 +38,8 @@ class _MemeRecordStore:
     """表情调用记录存储。"""
 
     @with_session
-    async def add_record(
-        self, db_session: AsyncSession, session: Session, meme_key: str
-    ) -> None:
-        session_persist_id = await get_session_persist_id(
-            session, db_session=db_session
-        )
+    async def add_record(self, db_session: AsyncSession, session: Session, meme_key: str) -> None:
+        session_persist_id = await get_session_persist_id(session, db_session=db_session)
         db_session.add(
             MemeGenerationRecord(
                 session_persist_id=session_persist_id,
@@ -53,9 +49,7 @@ class _MemeRecordStore:
         )
 
     @with_session
-    async def list_records(
-        self, db_session: AsyncSession, statement: Any
-    ) -> list[MemeRecord]:
+    async def list_records(self, db_session: AsyncSession, statement: Any) -> list[MemeRecord]:
         results = (await db_session.execute(statement)).all()
         return [MemeRecord(result[0], result[1]) for result in results]
 
@@ -161,9 +155,7 @@ async def get_meme_generation_keys(
     time_start: Optional[datetime] = None,
     time_stop: Optional[datetime] = None,
 ) -> list[str]:
-    whereclause = filter_statement(
-        session, id_type, time_start=time_start, time_stop=time_stop
-    )
+    whereclause = filter_statement(session, id_type, time_start=time_start, time_stop=time_stop)
     statement = (
         select(MemeGenerationRecord.meme_key)
         .where(*whereclause)

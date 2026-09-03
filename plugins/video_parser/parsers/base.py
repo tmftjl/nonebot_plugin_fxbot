@@ -80,9 +80,7 @@ def _match_enabled_platform(url: str) -> str | None:
     platforms = cfg_platforms()
     lower = url.lower()
 
-    if platforms.get("douyin", True) and (
-        "douyin.com" in lower or "iesdouyin.com" in lower
-    ):
+    if platforms.get("douyin", True) and ("douyin.com" in lower or "iesdouyin.com" in lower):
         return "douyin"
     if platforms.get("kuaishou", True) and (
         "kuaishou.com" in lower or "chenzhongtech.com" in lower

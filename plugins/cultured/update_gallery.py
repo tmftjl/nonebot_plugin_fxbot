@@ -80,9 +80,7 @@ async def _handle_update(matcher: Matcher, event: Event) -> None:
             await matcher.send("开始更新图库，请稍候")
             args = ["git", "pull", "--rebase"]
             if force:
-                code, out, err = await _run_git(
-                    ["git", "reset", "--hard", "origin/main"], POKE_DIR
-                )
+                code, out, err = await _run_git(["git", "reset", "--hard", "origin/main"], POKE_DIR)
                 if code != 0:
                     await matcher.finish(f"图库强制更新失败：{(err or out).strip()}")
             code, out, err = await _run_git(args, POKE_DIR)
@@ -99,9 +97,7 @@ async def _handle_update(matcher: Matcher, event: Event) -> None:
 
         await matcher.send("开始安装图库，请稍候")
         RES_DIR.mkdir(parents=True, exist_ok=True)
-        code, out, err = await _run_git(
-            ["git", "clone", "--depth=1", repo, "poke"], RES_DIR
-        )
+        code, out, err = await _run_git(["git", "clone", "--depth=1", repo, "poke"], RES_DIR)
         if code != 0:
             await matcher.finish(f"图库安装失败：{(err or out).strip()}")
         await matcher.finish("图库安装完成")

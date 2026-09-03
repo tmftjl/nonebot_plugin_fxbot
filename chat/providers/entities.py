@@ -59,9 +59,7 @@ class LLMRequest:
                 return content
             if isinstance(content, list):
                 return "".join(
-                    item.get("text", "")
-                    for item in content
-                    if item.get("type") == "text"
+                    item.get("text", "") for item in content if item.get("type") == "text"
                 )
         return ""
 

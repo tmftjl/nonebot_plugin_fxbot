@@ -36,9 +36,7 @@ def load_state() -> dict[str, Any]:
 def save_state(data: dict[str, Any]) -> None:
     """保存插件状态。"""
     DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
-    DATA_FILE.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    DATA_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def get_subscriptions() -> list[dict[str, Any]]:
@@ -126,9 +124,7 @@ def remove_room(sub_type: str, sub_key: str, room_id: int) -> bool:
     for item in subscriptions:
         if not isinstance(item, dict):
             continue
-        is_target = (
-            item.get("type") == sub_type and str(item.get(key_field) or "") == sub_key
-        )
+        is_target = item.get("type") == sub_type and str(item.get(key_field) or "") == sub_key
         if is_target:
             rooms = item.get("rooms")
             if isinstance(rooms, dict) and rooms.pop(str(room_id), None) is not None:

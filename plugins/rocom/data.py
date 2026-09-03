@@ -138,9 +138,7 @@ def find_skill(name: str) -> dict[str, Any] | None:
 def _extract_one(query: str, choices: Any, score_cutoff: int) -> str | None:
     """从候选项中取最接近的名称。"""
     if process is not None and fuzz is not None:
-        result = process.extractOne(
-            query, choices, scorer=fuzz.WRatio, score_cutoff=score_cutoff
-        )
+        result = process.extractOne(query, choices, scorer=fuzz.WRatio, score_cutoff=score_cutoff)
         return str(result[0]) if result else None
     best_name = ""
     best_score = 0.0
@@ -192,10 +190,7 @@ def search_eggs(length_m: float, weight_kg: float, egg_type: str = "") -> list[s
         height_high = int(breeding.get("height_high") or 0)
         weight_low = int(breeding.get("weight_low") or 0)
         weight_high = int(breeding.get("weight_high") or 0)
-        if (
-            height_low <= length_cm <= height_high
-            and weight_low <= weight_g <= weight_high
-        ):
+        if height_low <= length_cm <= height_high and weight_low <= weight_g <= weight_high:
             results.append(_pet_display_name(pet))
     return results
 
@@ -213,9 +208,7 @@ def parse_search_criteria(raw: str) -> dict[str, str]:
     return criteria
 
 
-def search_pets(
-    criteria: dict[str, str], limit: int = 80
-) -> list[tuple[str, dict[str, Any]]]:
+def search_pets(criteria: dict[str, str], limit: int = 80) -> list[tuple[str, dict[str, Any]]]:
     """按条件筛选精灵。"""
     results: list[tuple[str, dict[str, Any]]] = []
     for pet_id, pet in get_pet_list().items():
@@ -231,9 +224,7 @@ def _match_pet(pet: dict[str, Any], criteria: dict[str, str]) -> bool:
     """判断单个精灵是否符合条件。"""
     for key, value in criteria.items():
         if key == "名字":
-            if value not in _pet_display_name(pet) and value not in str(
-                pet.get("name") or ""
-            ):
+            if value not in _pet_display_name(pet) and value not in str(pet.get("name") or ""):
                 return False
         elif key == "特性":
             feature = pet.get("feature") or {}

@@ -57,9 +57,7 @@ class GeminiProvider(ChatProvider):
                     parts = []
                     for item in content:
                         if item.get("type") == "text":
-                            parts.append(
-                                types.Part.from_text(text=item.get("text", ""))
-                            )
+                            parts.append(types.Part.from_text(text=item.get("text", "")))
                         elif item.get("type") == "image_url":
                             url = item["image_url"]["url"]
                             if url.startswith("data:"):
@@ -73,9 +71,7 @@ class GeminiProvider(ChatProvider):
                     contents.append(types.UserContent(parts=parts))
                 else:
                     contents.append(
-                        types.UserContent(
-                            parts=[types.Part.from_text(text=content or " ")]
-                        )
+                        types.UserContent(parts=[types.Part.from_text(text=content or " ")])
                     )
             elif role == "assistant":
                 parts = []
@@ -87,9 +83,7 @@ class GeminiProvider(ChatProvider):
                         args = json.loads(func.get("arguments", "{}"))
                     except Exception:
                         args = {}
-                    parts.append(
-                        types.Part.from_function_call(name=func.get("name"), args=args)
-                    )
+                    parts.append(types.Part.from_function_call(name=func.get("name"), args=args))
                 if parts:
                     contents.append(types.ModelContent(parts=parts))
             elif role == "tool":
@@ -246,8 +240,7 @@ class GeminiProvider(ChatProvider):
             return [
                 model.name.replace("models/", "")
                 for model in models
-                if model.supported_actions
-                and "generateContent" in model.supported_actions
+                if model.supported_actions and "generateContent" in model.supported_actions
             ]
         except Exception as exc:
             logger.warning(f"[{self.provider_id}] 获取模型列表失败: {exc}")
@@ -272,9 +265,7 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
     async def embed(self, texts: list[str]) -> list[list[float]]:
         """批量获取文本嵌入向量。"""
         try:
-            resp = await self.client.models.embed_content(
-                model=self.model_name, contents=texts
-            )
+            resp = await self.client.models.embed_content(model=self.model_name, contents=texts)
             return [list(embedding.values) for embedding in resp.embeddings]
         except Exception as exc:
             logger.error(f"[{self.provider_id}] Gemini embed 失败: {exc}")

@@ -98,9 +98,7 @@ resource_download = P.on_regex(
 
 
 @pokedex_query.handle()
-async def _handle_pokedex(
-    matcher: Matcher, bot: Bot, groups: tuple = RegexGroup()
-) -> None:
+async def _handle_pokedex(matcher: Matcher, bot: Bot, groups: tuple = RegexGroup()) -> None:
     """查询精灵图鉴。"""
     name = str(groups[0]).strip()
     result = find_pet(name)
@@ -175,8 +173,7 @@ async def _handle_pet_search(matcher: Matcher, groups: tuple = RegexGroup()) -> 
     if not results:
         await matcher.finish("没有找到符合条件的精灵")
     names = [
-        str(pet.get("name") or pet_id) + (str(pet.get("form") or ""))
-        for pet_id, pet in results
+        str(pet.get("name") or pet_id) + (str(pet.get("form") or "")) for pet_id, pet in results
     ]
     shown = "、".join(names[:60])
     suffix = (

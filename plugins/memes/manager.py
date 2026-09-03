@@ -159,22 +159,17 @@ class MemeManager:
                     logger.warning("表情列表解析失败，将重新生成")
         try:
             meme_list = {
-                name: type_validate_python(MemeConfig, config)
-                for name, config in raw_list.items()
+                name: type_validate_python(MemeConfig, config) for name, config in raw_list.items()
             }
         except Exception:
             meme_list = {}
             logger.warning("表情列表解析失败，将重新生成")
-        self.__meme_config = {
-            meme_key: MemeConfig() for meme_key in self.__meme_dict.keys()
-        }
+        self.__meme_config = {meme_key: MemeConfig() for meme_key in self.__meme_dict.keys()}
         self.__meme_config.update(meme_list)
 
     def __dump(self):
         self.__path.parent.mkdir(parents=True, exist_ok=True)
-        meme_list = {
-            name: model_dump(config) for name, config in self.__meme_config.items()
-        }
+        meme_list = {name: model_dump(config) for name, config in self.__meme_config.items()}
         with self.__path.open("w", encoding="utf-8") as f:
             yaml.dump(meme_list, f, allow_unicode=True)
 

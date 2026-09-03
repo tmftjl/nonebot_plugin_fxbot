@@ -129,9 +129,7 @@ bili_login_cmd = P.on_regex(
 
 
 @video_matcher.handle()
-async def _handle_video(
-    matcher: Matcher, bot: Bot, event: Event, state: T_State
-) -> None:
+async def _handle_video(matcher: Matcher, bot: Bot, event: Event, state: T_State) -> None:
     """处理视频解析。"""
     url = str(state.get(STATE_URL_KEY) or "")
     if not can_parse_url(url):

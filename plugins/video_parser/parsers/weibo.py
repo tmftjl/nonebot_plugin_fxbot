@@ -65,9 +65,7 @@ async def _parse_article(article_id: str, *, source: str) -> VideoResult:
         "id": article_id,
         "_t": int(time() * 1000),
     }
-    async with httpx.AsyncClient(
-        timeout=timeout(), proxy=proxy(), verify=False
-    ) as client:
+    async with httpx.AsyncClient(timeout=timeout(), proxy=proxy(), verify=False) as client:
         response = await client.get(
             "https://card.weibo.com/article/m/aj/detail", params=params, headers=HEADERS
         )
@@ -85,9 +83,7 @@ async def _parse_article(article_id: str, *, source: str) -> VideoResult:
     user = data.get("userinfo") or {}
     return VideoResult(
         platform="微博",
-        title=str(
-            data.get("title") or (parsed.text[:40] if parsed.text else "微博文章")
-        ),
+        title=str(data.get("title") or (parsed.text[:40] if parsed.text else "微博文章")),
         image_urls=image_urls,
         cover_url=image_urls[0],
         source_url=str(data.get("url") or source),
@@ -105,9 +101,7 @@ async def _parse_fid(fid: str, *, source: str) -> VideoResult:
         "Content-Type": "application/x-www-form-urlencoded",
     }
     content = 'data={"Component_Play_Playinfo":{"oid":"' + fid + '"}}'
-    async with httpx.AsyncClient(
-        timeout=timeout(), proxy=proxy(), verify=False
-    ) as client:
+    async with httpx.AsyncClient(timeout=timeout(), proxy=proxy(), verify=False) as client:
         response = await client.post(req_url, headers=headers, content=content)
         response.raise_for_status()
         data = response.json()
@@ -122,9 +116,7 @@ async def _parse_fid(fid: str, *, source: str) -> VideoResult:
         title=str(play.get("title") or "微博视频"),
         video_url=video_url,
         cover_url=_normalize_scheme(play.get("cover_image")),
-        duration=float(play.get("duration_time"))
-        if play.get("duration_time")
-        else None,
+        duration=float(play.get("duration_time")) if play.get("duration_time") else None,
         source_url=source,
         text=_strip_html(str(play.get("text") or "")),
         headers=HEADERS.copy(),
@@ -161,14 +153,10 @@ def _collect_status(data: dict[str, Any], *, source: str) -> VideoResult:
     page = data.get("page_info") or {}
     media = page.get("media_info") or {}
     urls = page.get("urls") or {}
-    video_url = (
-        urls.get("mp4_720p_mp4") or urls.get("mp4_hd_mp4") or urls.get("mp4_ld_mp4")
-    )
+    video_url = urls.get("mp4_720p_mp4") or urls.get("mp4_hd_mp4") or urls.get("mp4_ld_mp4")
     video_url = video_url or media.get("stream_url") or media.get("stream_urls_hd")
     user = data.get("user") or {}
-    title = (
-        page.get("title") or _strip_html(str(data.get("text") or ""))[:40] or "微博视频"
-    )
+    title = page.get("title") or _strip_html(str(data.get("text") or ""))[:40] or "微博视频"
     cover = (page.get("page_pic") or {}).get("url")
 
     if not video_url:

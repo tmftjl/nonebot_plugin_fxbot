@@ -46,9 +46,7 @@ async def _handle_sick(matcher: Matcher, bot: Bot, event: Event) -> None:
 
     text = str(data.get("message") or data.get("msg") or "")
     user_id = (
-        event.get_user_id()
-        if hasattr(event, "get_user_id")
-        else getattr(event, "user_id", None)
+        event.get_user_id() if hasattr(event, "get_user_id") else getattr(event, "user_id", None)
     )
     await matcher.finish(
         build_message(

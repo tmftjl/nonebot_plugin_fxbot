@@ -25,9 +25,7 @@ def _ignored_mention_bot_ids() -> set[str]:
     value: Any = get_config_manager().get_system()["message"]["ignored_mention_bot_ids"]
     if not isinstance(value, (list, tuple, set)):
         return set()
-    return {
-        str(item).strip() for item in value if item is not None and str(item).strip()
-    }
+    return {str(item).strip() for item in value if item is not None and str(item).strip()}
 
 
 @event_preprocessor

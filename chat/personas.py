@@ -64,9 +64,7 @@ def load_personas() -> dict[str, PersonaItem]:
         try:
             personas[key] = PersonaItem(key=key, details=_read_text(path))
         except Exception as exc:
-            logger.opt(exception=True).warning(
-                f"[AI Chat] 读取人格失败: {path.name} err={exc}"
-            )
+            logger.opt(exception=True).warning(f"[AI Chat] 读取人格失败: {path.name} err={exc}")
     if "default" not in personas:
         personas["default"] = PersonaItem(key="default", details="")
     return personas

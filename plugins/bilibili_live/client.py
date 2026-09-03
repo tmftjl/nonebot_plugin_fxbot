@@ -132,9 +132,7 @@ async def fetch_room(room_id: int, *, known_name: str = "") -> LiveRoomSnapshot:
         uid=uid,
         name=name or f"UID {uid}",
         title=str(data.get("title") or "未设置直播标题").strip(),
-        area=str(
-            data.get("area_name") or data.get("parent_area_name") or "未知分区"
-        ).strip(),
+        area=str(data.get("area_name") or data.get("parent_area_name") or "未知分区").strip(),
         cover=str(data.get("keyframe") or data.get("user_cover") or "").strip(),
         live_status=int(data.get("live_status") or 0),
         live_time=str(data.get("live_time") or "").strip(),

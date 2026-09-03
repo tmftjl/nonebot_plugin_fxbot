@@ -49,9 +49,7 @@ def _import_plugin_model_modules() -> None:
         model_path = plugin_dir / "models.py"
         if not model_path.is_file():
             continue
-        _import_model_file(
-            f"{__package__}.plugins.{plugin_dir.name}.models", model_path
-        )
+        _import_model_file(f"{__package__}.plugins.{plugin_dir.name}.models", model_path)
 
 
 async def init() -> None:
@@ -91,9 +89,7 @@ async def init() -> None:
 
         setup_membership_tasks()
     except Exception:
-        logger.opt(exception=True).warning(
-            "[FxBot] 会员定时任务注册失败，核心功能继续启动"
-        )
+        logger.opt(exception=True).warning("[FxBot] 会员定时任务注册失败，核心功能继续启动")
 
     try:
         from .console.server import mount_console
@@ -104,9 +100,7 @@ async def init() -> None:
         try:
             mount_console()
         except Exception:
-            logger.opt(exception=True).warning(
-                "[FxBot] 控制台挂载失败，核心功能继续启动"
-            )
+            logger.opt(exception=True).warning("[FxBot] 控制台挂载失败，核心功能继续启动")
 
     load_plugins(str(built_in_plugins_dir()))
     _initialized = True

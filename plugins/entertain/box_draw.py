@@ -37,8 +37,7 @@ def create_image(avatar: bytes, reply: list[str]) -> bytes:
     temp_draw = ImageDraw.Draw(temp_img)
     if emoji is not None:
         measure_text = "".join(
-            "一" if getattr(emoji, "is_emoji", None) and emoji.is_emoji(ch) else ch
-            for ch in text
+            "一" if getattr(emoji, "is_emoji", None) and emoji.is_emoji(ch) else ch for ch in text
         )
     else:
         measure_text = text
@@ -85,9 +84,7 @@ def create_image(avatar: bytes, reply: list[str]) -> bytes:
     return buffer.getvalue()
 
 
-def _draw_multi(
-    image: Image.Image, text: str, text_x: int = 10, text_y: int = 10
-) -> Image.Image:
+def _draw_multi(image: Image.Image, text: str, text_x: int = 10, text_y: int = 10) -> Image.Image:
     """逐字绘制文本，保持旧版随机颜色和 emoji 字体。"""
     draw = ImageDraw.Draw(image)
     current_y = text_y

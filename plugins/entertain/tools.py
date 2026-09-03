@@ -37,9 +37,7 @@ from .musicshare import (
         "required": [],
     },
 )
-async def get_fortune_tool(
-    ctx: ToolContext, rt: ToolRuntime, nickname: str = "您"
-) -> str:
+async def get_fortune_tool(ctx: ToolContext, rt: ToolRuntime, nickname: str = "您") -> str:
     """AI 工具：发送今日运势图片。"""
     try:
         if not ctx.user_id:
@@ -100,9 +98,7 @@ async def play_music_tool(
         song = songs[0]
         audio_url = await _get_song_url_with_pool(ctx.user_id, platform, song)
         if not audio_url:
-            raise ToolError(
-                f"无法获取歌曲播放链接：{song.song}", code="url_unavailable"
-            )
+            raise ToolError(f"无法获取歌曲播放链接：{song.song}", code="url_unavailable")
 
         bot = rt.require_bot()
         segment = build_message_segment(bot, "record", audio_url)

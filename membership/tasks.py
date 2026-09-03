@@ -55,9 +55,7 @@ class _MembershipTaskStore:
                 group_in_session.expired_at = utc_now()
                 group_in_session.updated_at = utc_now()
                 result.expired += 1
-                if auto_leave and await _leave_group(
-                    group.managed_by_bot, group.group_id
-                ):
+                if auto_leave and await _leave_group(group.managed_by_bot, group.group_id):
                     result.left += 1
                 if delay:
                     await asyncio.sleep(delay)
@@ -131,9 +129,7 @@ def setup_membership_tasks() -> None:
     try:
         from nonebot_plugin_apscheduler import scheduler
     except Exception:
-        logger.warning(
-            "[MembershipTask] nonebot-plugin-apscheduler 未安装或未加载，跳过定时任务"
-        )
+        logger.warning("[MembershipTask] nonebot-plugin-apscheduler 未安装或未加载，跳过定时任务")
         return
 
     cfg = _membership_cfg()

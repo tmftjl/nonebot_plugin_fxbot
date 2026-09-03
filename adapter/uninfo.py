@@ -116,9 +116,7 @@ class Role:
 
     @classmethod
     def load(cls, data: dict[str, Any]) -> "Role":
-        return cls(
-            id=str(data["id"]), level=int(data.get("level") or 0), name=data.get("name")
-        )
+        return cls(id=str(data["id"]), level=int(data.get("level") or 0), name=data.get("name"))
 
 
 @dataclass
@@ -192,26 +190,14 @@ class Session:
     @property
     def scene_path(self) -> str:
         if self.scene.is_private:
-            return (
-                f"{self.scene.parent.id}_{self.user.id}"
-                if self.scene.parent
-                else self.user.id
-            )
+            return f"{self.scene.parent.id}_{self.user.id}" if self.scene.parent else self.user.id
         if self.scene.is_group:
             return self.scene.id
-        return (
-            f"{self.scene.parent.id}_{self.scene.id}"
-            if self.scene.parent
-            else self.scene.id
-        )
+        return f"{self.scene.parent.id}_{self.scene.id}" if self.scene.parent else self.scene.id
 
     @property
     def basic(self) -> dict[str, str]:
-        scope = (
-            self.scope.value
-            if isinstance(self.scope, SupportScope)
-            else str(self.scope)
-        )
+        scope = self.scope.value if isinstance(self.scope, SupportScope) else str(self.scope)
         return {"self_id": self.self_id, "adapter": self.adapter, "scope": scope}
 
 
@@ -408,9 +394,7 @@ class UserModel(SQLModel, table=True):
 
     __tablename__ = "nonebot_plugin_uninfo_usermodel"
     __table_args__ = (
-        UniqueConstraint(
-            "bot_persist_id", "user_id", name="nonebot_plugin_uninfo_unique_user"
-        ),
+        UniqueConstraint("bot_persist_id", "user_id", name="nonebot_plugin_uninfo_unique_user"),
     )
 
     id: int | None = Field(default=None, primary_key=True)
@@ -436,9 +420,7 @@ class SessionModel(SQLModel, table=True):
     bot_persist_id: int = Field(nullable=False)
     scene_persist_id: int = Field(nullable=False)
     user_persist_id: int = Field(nullable=False)
-    member_data: dict | None = Field(
-        default=None, sa_column=Column(JSON, nullable=True)
-    )
+    member_data: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))
 
 
 _insert_mutex: asyncio.Lock | None = None
@@ -455,9 +437,7 @@ class _UninfoStore:
     """会话信息持久化存储。"""
 
     @with_session
-    async def get_bot_persist_id(
-        self, db_session: AsyncSession, basic_info: dict[str, str]
-    ) -> int:
+    async def get_bot_persist_id(self, db_session: AsyncSession, basic_info: dict[str, str]) -> int:
         statement = (
             select(BotModel)
             .where(BotModel.self_id == basic_info["self_id"])
@@ -492,9 +472,7 @@ class _UninfoStore:
     ) -> int:
         bot_persist_id = await self.get_bot_persist_id(basic_info, session=db_session)
         parent_id = (
-            await self.get_scene_persist_id(
-                basic_info, scene.parent, session=db_session
-            )
+            await self.get_scene_persist_id(basic_info, scene.parent, session=db_session)
             if scene.parent
             else None
         )
@@ -548,9 +526,7 @@ class _UninfoStore:
             assert row.id is not None
             return row.id
 
-        row = UserModel(
-            bot_persist_id=bot_persist_id, user_id=user.id, user_data=user_data
-        )
+        row = UserModel(bot_persist_id=bot_persist_id, user_id=user.id, user_data=user_data)
         async with _get_insert_mutex():
             try:
                 db_session.add(row)
@@ -564,21 +540,15 @@ class _UninfoStore:
                 return persisted_id
 
     @with_session
-    async def get_session_persist_id(
-        self, db_session: AsyncSession, info_session: Session
-    ) -> int:
-        bot_persist_id = await self.get_bot_persist_id(
-            info_session.basic, session=db_session
-        )
+    async def get_session_persist_id(self, db_session: AsyncSession, info_session: Session) -> int:
+        bot_persist_id = await self.get_bot_persist_id(info_session.basic, session=db_session)
         scene_persist_id = await self.get_scene_persist_id(
             info_session.basic, info_session.scene, session=db_session
         )
         user_persist_id = await self.get_user_persist_id(
             info_session.basic, info_session.user, session=db_session
         )
-        member_data = (
-            json.loads(info_session.member.dump_json()) if info_session.member else None
-        )
+        member_data = json.loads(info_session.member.dump_json()) if info_session.member else None
         statement = (
             select(SessionModel)
             .where(SessionModel.bot_persist_id == bot_persist_id)

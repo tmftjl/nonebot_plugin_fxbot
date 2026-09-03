@@ -56,9 +56,7 @@ update_cmd = P.on_regex(
 )
 
 
-def _save_restart_info(
-    bot: Bot, event: Event, success_message: str = "✅ FxBot 重启成功"
-) -> None:
+def _save_restart_info(bot: Bot, event: Event, success_message: str = "✅ FxBot 重启成功") -> None:
     """保存重启后通知目标。"""
     try:
         restart_info: dict[str, Any] = {
@@ -138,9 +136,7 @@ def _git_already_up_to_date(output: str) -> bool:
     return any(marker.lower() in normalized for marker in _GIT_UP_TO_DATE_MARKERS)
 
 
-def _build_update_report(
-    ok: bool, output: str, logs: list[str] | None = None
-) -> list[str]:
+def _build_update_report(ok: bool, output: str, logs: list[str] | None = None) -> list[str]:
     """构造更新结果转发摘要，不暴露 git 文件变更列表。"""
     if ok:
         if _git_already_up_to_date(output):
@@ -174,9 +170,7 @@ async def _run_git(args: list[str]) -> tuple[int, str]:
     )
     stdout, stderr = await process.communicate()
     output = "\n".join(
-        part.decode("utf-8", errors="replace").strip()
-        for part in (stdout, stderr)
-        if part
+        part.decode("utf-8", errors="replace").strip() for part in (stdout, stderr) if part
     ).strip()
     return process.returncode, output
 
@@ -204,9 +198,7 @@ async def _git_log_messages(before: str, after: str) -> list[str]:
     return [item.strip() for item in output.split("\x1e") if item.strip()]
 
 
-async def _send_update_report(
-    matcher: Matcher, bot: Bot, event: Event, lines: list[str]
-) -> None:
+async def _send_update_report(matcher: Matcher, bot: Bot, event: Event, lines: list[str]) -> None:
     """优先用合并转发发送更新结果，失败时退回普通文本。"""
     if await send_forward_texts(bot, event, lines, nickname="小助手"):
         return
@@ -232,9 +224,7 @@ async def _git_pull_plugin() -> tuple[bool, str, list[str]]:
         return False, "git pull 超时", []
 
     output = "\n".join(
-        part.decode("utf-8", errors="replace").strip()
-        for part in (stdout, stderr)
-        if part
+        part.decode("utf-8", errors="replace").strip() for part in (stdout, stderr) if part
     ).strip()
     if process.returncode == 0:
         after = await _git_head()
@@ -276,17 +266,13 @@ async def _handle_update(matcher: Matcher, bot: Bot, event: Event) -> None:
     ok, output, logs = await _git_pull_plugin()
     if not ok:
         logger.error(f"{_UPDATE_LOG_PREFIX} git pull 失败: {_truncate_output(output)}")
-        await _send_update_report(
-            matcher, bot, event, _build_update_report(False, output, logs)
-        )
+        await _send_update_report(matcher, bot, event, _build_update_report(False, output, logs))
         await matcher.finish()
 
     try:
         status = "无更新" if _git_already_up_to_date(output) else "已更新"
         logger.info(f"{_UPDATE_LOG_PREFIX} git pull 完成: {status}")
-        await _send_update_report(
-            matcher, bot, event, _build_update_report(True, output, logs)
-        )
+        await _send_update_report(matcher, bot, event, _build_update_report(True, output, logs))
     except Exception as exc:
         logger.error(f"{_UPDATE_LOG_PREFIX} 发送更新提示失败: {exc}")
     _save_restart_info(bot, event, "✅ FxBot 更新重启成功")

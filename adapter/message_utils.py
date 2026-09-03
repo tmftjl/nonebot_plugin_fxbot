@@ -35,9 +35,7 @@ async def fetch_image_bytes(src: str | bytes) -> bytes | None:
         try:
             from ..utils.http import get_shared_async_client
 
-            response = await (await get_shared_async_client()).get(
-                value, follow_redirects=True
-            )
+            response = await (await get_shared_async_client()).get(value, follow_redirects=True)
             response.raise_for_status()
             return response.content
         except Exception:
@@ -48,17 +46,13 @@ async def fetch_image_bytes(src: str | bytes) -> bytes | None:
         return None
 
 
-async def image_sources_from_event_or_reply(
-    bot: Bot, event: Event
-) -> list[str | bytes]:
+async def image_sources_from_event_or_reply(bot: Bot, event: Event) -> list[str | bytes]:
     message = event_message(event)
     sources = extract_raw_image_sources(message)
     if sources:
         return sources
     reply = getattr(event, "reply", None)
-    sources = extract_raw_image_sources(
-        getattr(reply, "message", None) if reply else None
-    )
+    sources = extract_raw_image_sources(getattr(reply, "message", None) if reply else None)
     if sources:
         return sources
     reply_id = extract_reply_message_id(message)
@@ -345,9 +339,7 @@ async def send_text_to_target(bot: Bot, target: dict[str, Any], text: str) -> An
 
 async def send_message_to_target(bot: Bot, target: dict[str, Any], message: Any) -> Any:
     """根据保存的目标信息发送消息。"""
-    return await require_message_adapter(bot).send_message_to_target(
-        bot, target, message
-    )
+    return await require_message_adapter(bot).send_message_to_target(bot, target, message)
 
 
 async def send_forward_messages(
@@ -364,9 +356,7 @@ async def send_forward_texts(
     bot: Bot, event: Event, texts: list[str], *, nickname: str = "FxBot"
 ) -> bool:
     """尝试把多段文本作为 OneBot V11 合并转发发送。"""
-    messages = [
-        build_message(bot, build_message_segment(bot, "text", text)) for text in texts
-    ]
+    messages = [build_message(bot, build_message_segment(bot, "text", text)) for text in texts]
     return await send_forward_messages(bot, event, messages, nickname=nickname)
 
 
@@ -406,9 +396,7 @@ class _GenericMessageAdapter(MessageAdapter):
     def build_message(self, bot: Bot, segments: list[Any]) -> Any:
         return "".join(str(segment) for segment in segments)
 
-    async def send_message_to_target(
-        self, bot: Bot, target: dict[str, Any], message: Any
-    ) -> Any:
+    async def send_message_to_target(self, bot: Bot, target: dict[str, Any], message: Any) -> Any:
         raise RuntimeError("无法识别消息目标")
 
 

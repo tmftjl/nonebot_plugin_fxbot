@@ -73,9 +73,7 @@ async def init_database() -> None:
 
             engine = eng
             sqlite_semaphore = asyncio.Semaphore(20)
-            async_maker = async_sessionmaker(
-                engine, expire_on_commit=False, class_=AsyncSession
-            )
+            async_maker = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
             async with engine.begin() as conn:
                 await conn.run_sync(SQLModel.metadata.create_all)
@@ -90,9 +88,7 @@ async def init_database() -> None:
                             await conn.execute(text(sql))
                             logger.debug(f"[DB] 迁移成功: {sql[:50]}...")
                         except Exception as e:
-                            logger.debug(
-                                f"[DB] 迁移跳过 (可能已存在): {sql[:50]}... | {e}"
-                            )
+                            logger.debug(f"[DB] 迁移跳过 (可能已存在): {sql[:50]}... | {e}")
 
             _db_initialized = True
             logger.info("[DB] SQLite initialized successfully")

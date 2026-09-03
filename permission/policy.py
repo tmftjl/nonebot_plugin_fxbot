@@ -12,18 +12,14 @@ class PermissionPolicy(abc.ABC):
     """权限策略基类。"""
 
     @abc.abstractmethod
-    async def evaluate(
-        self, config: dict[str, Any], context: PermContext
-    ) -> PolicyResult:
+    async def evaluate(self, config: dict[str, Any], context: PermContext) -> PolicyResult:
         """评估策略。"""
 
 
 class EnabledPolicy(PermissionPolicy):
     """功能开关策略。"""
 
-    async def evaluate(
-        self, config: dict[str, Any], context: PermContext
-    ) -> PolicyResult:
+    async def evaluate(self, config: dict[str, Any], context: PermContext) -> PolicyResult:
         if not config.get("enabled", True):
             return PolicyResult.deny("该功能已禁用")
         return PolicyResult.allow()
@@ -32,12 +28,8 @@ class EnabledPolicy(PermissionPolicy):
 class BlacklistPolicy(PermissionPolicy):
     """黑名单策略。"""
 
-    async def evaluate(
-        self, config: dict[str, Any], context: PermContext
-    ) -> PolicyResult:
-        blacklist = (
-            config.get("blacklist") if isinstance(config.get("blacklist"), dict) else {}
-        )
+    async def evaluate(self, config: dict[str, Any], context: PermContext) -> PolicyResult:
+        blacklist = config.get("blacklist") if isinstance(config.get("blacklist"), dict) else {}
         if context.user_id in blacklist.get("users", []):
             return PolicyResult.deny("用户在黑名单中")
         if context.group_id and context.group_id in blacklist.get("groups", []):
@@ -48,12 +40,8 @@ class BlacklistPolicy(PermissionPolicy):
 class WhitelistPolicy(PermissionPolicy):
     """白名单策略。"""
 
-    async def evaluate(
-        self, config: dict[str, Any], context: PermContext
-    ) -> PolicyResult:
-        whitelist = (
-            config.get("whitelist") if isinstance(config.get("whitelist"), dict) else {}
-        )
+    async def evaluate(self, config: dict[str, Any], context: PermContext) -> PolicyResult:
+        whitelist = config.get("whitelist") if isinstance(config.get("whitelist"), dict) else {}
         users = whitelist.get("users", [])
         groups = whitelist.get("groups", [])
         if not users and not groups:
@@ -70,9 +58,7 @@ class WhitelistPolicy(PermissionPolicy):
 class ScenePolicy(PermissionPolicy):
     """群聊/私聊场景策略。"""
 
-    async def evaluate(
-        self, config: dict[str, Any], context: PermContext
-    ) -> PolicyResult:
+    async def evaluate(self, config: dict[str, Any], context: PermContext) -> PolicyResult:
         scene = PermScene.from_str(config.get("scene", "all"))
         if scene == PermScene.ALL:
             return PolicyResult.allow()
@@ -86,9 +72,7 @@ class ScenePolicy(PermissionPolicy):
 class LevelPolicy(PermissionPolicy):
     """权限等级策略。"""
 
-    async def evaluate(
-        self, config: dict[str, Any], context: PermContext
-    ) -> PolicyResult:
+    async def evaluate(self, config: dict[str, Any], context: PermContext) -> PolicyResult:
         required_level = PermLevel.from_str(config.get("level", "member"))
         if context.is_private and required_level in {PermLevel.ADMIN, PermLevel.OWNER}:
             required_level = PermLevel.LOW
@@ -109,16 +93,12 @@ class PolicyChain:
             LevelPolicy(),
         ]
 
-    async def evaluate(
-        self, config: dict[str, Any], context: PermContext
-    ) -> PolicyResult:
+    async def evaluate(self, config: dict[str, Any], context: PermContext) -> PolicyResult:
         """按顺序执行策略并返回最终结果。"""
         for policy in self._policies:
             result = await policy.evaluate(config, context)
             if result.decision == Decision.DENY:
                 return result
-            if result.decision == Decision.ALLOW and isinstance(
-                policy, WhitelistPolicy
-            ):
+            if result.decision == Decision.ALLOW and isinstance(policy, WhitelistPolicy):
                 return result
         return PolicyResult.allow()

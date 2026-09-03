@@ -46,9 +46,7 @@ async def _handle_doro(matcher: Matcher, bot: Bot) -> None:
         logger.opt(exception=True).warning("[entertain] 获取 doro 结局失败")
         await matcher.finish("获取 doro 结局失败，请稍后重试")
 
-    text = (
-        f"今日doro结局：\n\n{data.get('title', '')}\n\n{data.get('description', '')}\n"
-    )
+    text = f"今日doro结局：\n\n{data.get('title', '')}\n\n{data.get('description', '')}\n"
     parts = [build_message_segment(bot, "text", text)]
     if image := data.get("image"):
         parts.append(build_message_segment(bot, "image", str(image)))

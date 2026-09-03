@@ -57,9 +57,7 @@ async def parse(url: str) -> VideoResult:
             avid=avid, page_num=page_num, source=_clean_av_source(avid, page_num)
         )
 
-    dynamic = re.search(
-        r"(?:bilibili\.com/(?:opus|dynamic)/|t\.bilibili\.com/)(?P<id>\d+)", url
-    )
+    dynamic = re.search(r"(?:bilibili\.com/(?:opus|dynamic)/|t\.bilibili\.com/)(?P<id>\d+)", url)
     if dynamic:
         return await _parse_dynamic_or_opus(int(dynamic.group("id")), source=url)
 
@@ -80,16 +78,12 @@ def _setup_client() -> None:
 
 def _clean_video_source(bvid: str, page_num: int) -> str:
     """构造干净的视频源地址。"""
-    return f"https://www.bilibili.com/video/{bvid}" + (
-        f"?p={page_num}" if page_num > 1 else ""
-    )
+    return f"https://www.bilibili.com/video/{bvid}" + (f"?p={page_num}" if page_num > 1 else "")
 
 
 def _clean_av_source(avid: int, page_num: int) -> str:
     """构造干净的 av 源地址。"""
-    return f"https://www.bilibili.com/video/av{avid}" + (
-        f"?p={page_num}" if page_num > 1 else ""
-    )
+    return f"https://www.bilibili.com/video/av{avid}" + (f"?p={page_num}" if page_num > 1 else "")
 
 
 async def _parse_video(
@@ -104,9 +98,7 @@ async def _parse_video(
             VideoStreamDownloadURL,
         )
     except Exception as exc:
-        raise ParseError(
-            "缺少 bilibili-api-python 依赖，请先安装 requirements.txt"
-        ) from exc
+        raise ParseError("缺少 bilibili-api-python 依赖，请先安装 requirements.txt") from exc
 
     _setup_client()
     credential = await load_credential()
@@ -162,13 +154,9 @@ def _select_download_urls(
         preferred_video_streams = [
             stream
             for stream in video_streams
-            if 0
-            < _enum_int(getattr(stream, "video_quality", None))
-            <= BILI_MAX_VIDEO_QUALITY
+            if 0 < _enum_int(getattr(stream, "video_quality", None)) <= BILI_MAX_VIDEO_QUALITY
         ]
-        video_stream = max(
-            preferred_video_streams or video_streams, key=_video_stream_rank
-        )
+        video_stream = max(preferred_video_streams or video_streams, key=_video_stream_rank)
         video_url = _stream_url(video_stream)
         if not video_url:
             raise ParseError("B 站没有可下载的视频流")
@@ -177,12 +165,8 @@ def _select_download_urls(
             for stream in streams
             if isinstance(stream, audio_stream_type) and _stream_url(stream)
         ]
-        audio_stream = (
-            max(audio_streams, key=_audio_stream_rank) if audio_streams else None
-        )
-        return video_url, _stream_url(
-            audio_stream
-        ) if audio_stream is not None else None
+        audio_stream = max(audio_streams, key=_audio_stream_rank) if audio_streams else None
+        return video_url, _stream_url(audio_stream) if audio_stream is not None else None
 
     merged_streams = [stream for stream in streams if _stream_url(stream)]
     if merged_streams:
@@ -213,9 +197,7 @@ def _audio_stream_rank(stream: Any) -> tuple[int, int]:
     """给音频流排序。"""
     quality = getattr(stream, "audio_quality", None)
     quality_name = str(getattr(quality, "name", "") or "")
-    special_rank = (
-        2 if quality_name == "DOLBY" else 1 if quality_name == "HI_RES" else 0
-    )
+    special_rank = 2 if quality_name == "DOLBY" else 1 if quality_name == "HI_RES" else 0
     return special_rank, _enum_int(quality)
 
 
@@ -238,17 +220,13 @@ async def _parse_dynamic_or_opus(dynamic_id: int, *, source: str) -> VideoResult
     try:
         from bilibili_api.dynamic import Dynamic
     except Exception as exc:
-        raise ParseError(
-            "缺少 bilibili-api-python 依赖，请先安装 requirements.txt"
-        ) from exc
+        raise ParseError("缺少 bilibili-api-python 依赖，请先安装 requirements.txt") from exc
 
     _setup_client()
     dynamic = Dynamic(dynamic_id, await load_credential())
     try:
         if await dynamic.is_article():
-            return await _parse_bili_opus(
-                await _maybe_await(dynamic.turn_to_opus()), source=source
-            )
+            return await _parse_bili_opus(await _maybe_await(dynamic.turn_to_opus()), source=source)
         info = await dynamic.get_info()
     except Exception as exc:
         raise ParseError("B站动态解析失败") from exc
@@ -260,15 +238,11 @@ async def _parse_article(read_id: int, *, source: str) -> VideoResult:
     try:
         from bilibili_api.article import Article
     except Exception as exc:
-        raise ParseError(
-            "缺少 bilibili-api-python 依赖，请先安装 requirements.txt"
-        ) from exc
+        raise ParseError("缺少 bilibili-api-python 依赖，请先安装 requirements.txt") from exc
 
     _setup_client()
     article = Article(read_id)
-    return await _parse_bili_opus(
-        await _maybe_await(article.turn_to_opus()), source=source
-    )
+    return await _parse_bili_opus(await _maybe_await(article.turn_to_opus()), source=source)
 
 
 async def _maybe_await(value: Any) -> Any:
@@ -297,9 +271,7 @@ async def _parse_bili_opus(opus: Any, *, source: str) -> VideoResult:
         for paragraph in content.get("paragraphs") or []:
             text = paragraph.get("text") or {}
             nodes = text.get("nodes") or []
-            words = "".join(
-                str(((node.get("word") or {}).get("words")) or "") for node in nodes
-            )
+            words = "".join(str(((node.get("word") or {}).get("words")) or "") for node in nodes)
             if words.strip():
                 text_parts.append(words.strip())
             pic = paragraph.get("pic") or {}
@@ -330,9 +302,7 @@ async def _result_from_dynamic(item: dict[str, Any], *, source: str) -> VideoRes
         return await _parse_video(bvid=str(archive["bvid"]), page_num=1, source=source)
     opus = major.get("opus") or {}
     pics = opus.get("pics") or []
-    image_urls = [
-        str(pic["url"]) for pic in pics if isinstance(pic, dict) and pic.get("url")
-    ]
+    image_urls = [str(pic["url"]) for pic in pics if isinstance(pic, dict) and pic.get("url")]
     title = (
         opus.get("title")
         or ((opus.get("summary") or {}).get("text"))
@@ -374,9 +344,7 @@ async def create_qrcode() -> bytes:
     try:
         from bilibili_api.login_v2 import QrCodeLogin
     except Exception as exc:
-        raise ParseError(
-            "缺少 bilibili-api-python 依赖，请先安装 requirements.txt"
-        ) from exc
+        raise ParseError("缺少 bilibili-api-python 依赖，请先安装 requirements.txt") from exc
 
     _qr_login = QrCodeLogin()
     await _qr_login.generate_qrcode()

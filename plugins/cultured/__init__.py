@@ -154,9 +154,7 @@ picture_cmd = P.on_regex(
 async def _handle_list(matcher: Matcher) -> None:
     """发送图库列表。"""
     faces = face_list()
-    await matcher.finish(
-        "表情列表：\n" + ("、".join(faces) or "(空)") + "\n\n使用 #随机<名称>"
-    )
+    await matcher.finish("表情列表：\n" + ("、".join(faces) or "(空)") + "\n\n使用 #随机<名称>")
 
 
 @api_cmd.handle()
@@ -178,9 +176,7 @@ async def _handle_api_picture(matcher: Matcher, bot: Bot, event: Event) -> None:
                         if asyncio.iscoroutine(result):
                             result = await result
                     except Exception:
-                        logger.opt(exception=True).warning(
-                            f"[Cultured] API 图库 {name} 请求失败"
-                        )
+                        logger.opt(exception=True).warning(f"[Cultured] API 图库 {name} 请求失败")
                         await matcher.finish("图库接口请求失败")
                     if result:
                         await matcher.finish(result)

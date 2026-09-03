@@ -39,11 +39,7 @@ def face_list() -> list[str]:
         return []
     try:
         return sorted(
-            {
-                path.name
-                for path in POKE_DIR.iterdir()
-                if path.is_dir() and path.name != ".git"
-            }
+            {path.name for path in POKE_DIR.iterdir() if path.is_dir() and path.name != ".git"}
         )
     except Exception:
         logger.opt(exception=True).warning("[Cultured] 读取图库目录失败")

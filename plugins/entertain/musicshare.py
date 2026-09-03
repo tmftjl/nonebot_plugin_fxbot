@@ -265,9 +265,7 @@ def _decode_auth_data(auth: str) -> dict[str, Any]:
     encoded = token.split(".", 1)[0]
     padding = "=" * (-len(encoded) % 4)
     try:
-        decoded = base64.urlsafe_b64decode((encoded + padding).encode("utf-8")).decode(
-            "utf-8"
-        )
+        decoded = base64.urlsafe_b64decode((encoded + padding).encode("utf-8")).decode("utf-8")
         data = json.loads(decoded)
     except Exception:
         return {}
@@ -302,9 +300,7 @@ def _auth_account_identity(platform: Platform, account: dict[str, Any]) -> str |
     return None
 
 
-def _normalize_login_bucket(
-    owner: str, platform: Platform, data: Any = None
-) -> dict[str, Any]:
+def _normalize_login_bucket(owner: str, platform: Platform, data: Any = None) -> dict[str, Any]:
     """规范化登录桶数据。"""
     if not isinstance(data, dict):
         data = {}
@@ -366,9 +362,7 @@ async def _get_login_session_data(owner: str, platform: Platform) -> dict[str, A
     return bucket
 
 
-async def _save_login_bucket(
-    owner: str, platform: Platform, bucket: dict[str, Any]
-) -> None:
+async def _save_login_bucket(owner: str, platform: Platform, bucket: dict[str, Any]) -> None:
     """保存登录会话桶。"""
     bucket = _normalize_login_bucket(owner, platform, bucket)
     session_key = _login_session_key(owner, platform)
@@ -380,9 +374,7 @@ async def _save_login_bucket(
     _cache_set(_login_cache_key(owner, platform), bucket)
 
 
-async def _add_pending_login(
-    owner: str, platform: Platform, login_token: str
-) -> dict[str, Any]:
+async def _add_pending_login(owner: str, platform: Platform, login_token: str) -> dict[str, Any]:
     """新增待确认登录。"""
     bucket = await _get_login_session_data(owner, platform)
     pending = {
@@ -410,14 +402,10 @@ async def _update_pending_login(
     await _save_login_bucket(owner, platform, bucket)
 
 
-async def _remove_pending_login(
-    owner: str, platform: Platform, pending_id: str
-) -> None:
+async def _remove_pending_login(owner: str, platform: Platform, pending_id: str) -> None:
     """删除待确认登录。"""
     bucket = await _get_login_session_data(owner, platform)
-    bucket["pending"] = [
-        item for item in bucket["pending"] if item.get("id") != pending_id
-    ]
+    bucket["pending"] = [item for item in bucket["pending"] if item.get("id") != pending_id]
     await _save_login_bucket(owner, platform, bucket)
 
 
@@ -455,9 +443,7 @@ async def _add_auth_account(
 async def _remove_auth_account(owner: str, platform: Platform, auth: str) -> None:
     """移除失效登录账号。"""
     bucket = await _get_login_session_data(owner, platform)
-    bucket["accounts"] = [
-        item for item in bucket["accounts"] if item.get("auth") != auth
-    ]
+    bucket["accounts"] = [item for item in bucket["accounts"] if item.get("auth") != auth]
     await _save_login_bucket(owner, platform, bucket)
 
 
@@ -471,13 +457,9 @@ def _owners_with_platform(platform: Platform) -> list[str]:
     return list(dict.fromkeys(owners))
 
 
-async def _auth_candidates(
-    user_id: str, platform: Platform
-) -> list[tuple[str, dict[str, Any]]]:
+async def _auth_candidates(user_id: str, platform: Platform) -> list[tuple[str, dict[str, Any]]]:
     """获取可用登录账号候选。"""
-    owners = (
-        [user_id] if _login_mode() == "per_user" else _owners_with_platform(platform)
-    )
+    owners = [user_id] if _login_mode() == "per_user" else _owners_with_platform(platform)
     if _login_mode() == "shared" and user_id not in owners:
         owners.append(user_id)
 
@@ -506,9 +488,7 @@ async def _next_auth_account(
     if not candidates:
         return None
     cursor_key = (
-        f"{_login_mode()}:{platform}"
-        if _login_mode() == "shared"
-        else f"{user_id}:{platform}"
+        f"{_login_mode()}:{platform}" if _login_mode() == "shared" else f"{user_id}:{platform}"
     )
     index = _AUTH_POOL_CURSORS.get(cursor_key, 0) % len(candidates)
     _AUTH_POOL_CURSORS[cursor_key] = index + 1
@@ -569,11 +549,7 @@ async def _watch_login_status(
             await asyncio.sleep(2)
             bucket = await _get_login_session_data(owner, platform)
             pending = next(
-                (
-                    item
-                    for item in bucket.get("pending", [])
-                    if item.get("id") == pending_id
-                ),
+                (item for item in bucket.get("pending", []) if item.get("id") == pending_id),
                 None,
             )
             if not pending:
@@ -731,9 +707,7 @@ def _format_play_error(data: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
     return message, reason, detail
 
 
-async def _get_song_url_api(
-    platform: Platform, song: Song, auth: str | None = None
-) -> str | None:
+async def _get_song_url_api(platform: Platform, song: Song, auth: str | None = None) -> str | None:
     """通过本地 music-api 获取播放链接。"""
     token = auth or song.auth
     if not token:
@@ -765,9 +739,7 @@ async def _get_song_url_api(
     return None
 
 
-async def _search_songs_with_pool(
-    user_id: str, platform: Platform, keyword: str
-) -> list[Song]:
+async def _search_songs_with_pool(user_id: str, platform: Platform, keyword: str) -> list[Song]:
     """用登录账号池搜索歌曲。"""
     tried: set[str] = set()
     while True:
@@ -778,16 +750,12 @@ async def _search_songs_with_pool(
         auth = str(account.get("auth") or "")
         tried.add(auth)
         try:
-            return await _search_songs_api(
-                platform, keyword, auth=auth, auth_owner=owner
-            )
+            return await _search_songs_api(platform, keyword, auth=auth, auth_owner=owner)
         except MusicLoginRequired:
             await _remove_auth_account(owner, platform, auth)
 
 
-async def _get_song_url_with_pool(
-    user_id: str, platform: Platform, song: Song
-) -> str | None:
+async def _get_song_url_with_pool(user_id: str, platform: Platform, song: Song) -> str | None:
     """用登录账号池获取播放链接。"""
     tried: set[str] = set()
     last_play_error: MusicPlayUnavailable | None = None
@@ -887,9 +855,7 @@ def _draw_music_list(platform: Platform, keyword: str, songs: list[Song]) -> byt
         col = index % columns
         x = padding + col * (col_w + gap_x)
         y = start_y + row * (card_h + gap_y)
-        draw.rounded_rectangle(
-            [(x, y), (x + col_w, y + card_h)], radius=8, fill=card_bg
-        )
+        draw.rounded_rectangle([(x, y), (x + col_w, y + card_h)], radius=8, fill=card_bg)
 
         badge_size = 36
         bx = x + 15
@@ -1030,9 +996,7 @@ async def _handle_login(
 
 
 @login_poll_matcher.handle()
-async def _handle_login_poll(
-    matcher: Matcher, event: Event, groups: tuple = RegexGroup()
-) -> None:
+async def _handle_login_poll(matcher: Matcher, event: Event, groups: tuple = RegexGroup()) -> None:
     """手动检查 music-api 登录状态。"""
     user_id = _uid(event)
     if not user_id:
@@ -1043,9 +1007,7 @@ async def _handle_login_poll(
     if not bucket.get("pending"):
         account_count = len(bucket.get("accounts", []))
         if account_count:
-            await matcher.finish(
-                f"{_platform_name_cn(platform)} 已登录 {account_count} 个账号。"
-            )
+            await matcher.finish(f"{_platform_name_cn(platform)} 已登录 {account_count} 个账号。")
         await matcher.finish(
             f"还没有待确认的 {_platform_name_cn(platform)} 登录二维码，请先发送 #音乐登录{provider_hint}"
         )
@@ -1086,9 +1048,7 @@ async def _handle_login_poll(
             scanned = True
 
     if scanned:
-        await matcher.finish(
-            f"{_platform_name_cn(platform)} 已扫码，请在手机上确认登录。"
-        )
+        await matcher.finish(f"{_platform_name_cn(platform)} 已扫码，请在手机上确认登录。")
     if errors:
         await matcher.finish(f"检查登录状态失败: {errors[-1]}")
     await matcher.finish(f"{_platform_name_cn(platform)} 尚未登录，请扫码后再试。")
@@ -1124,9 +1084,7 @@ async def _handle_search(
 
 
 @select_matcher.handle()
-async def _handle_select(
-    matcher: Matcher, bot: Bot, event: Event, state: T_State
-) -> None:
+async def _handle_select(matcher: Matcher, bot: Bot, event: Event, state: T_State) -> None:
     """播放搜索结果中的歌曲。"""
     user_id = _uid(event)
     item = _music_cache.get(user_id)

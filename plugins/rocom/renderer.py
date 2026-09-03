@@ -57,9 +57,7 @@ def _text(
 def _time_label(product: MerchantProduct, snapshot: MerchantSnapshot) -> str:
     if product.starttime or product.endtime:
         return f"{product.starttime} ~ {product.endtime}".strip(" ~")
-    return (
-        f"下次刷新 {snapshot.next_refresh}" if snapshot.next_refresh else "远行商人商品"
-    )
+    return f"下次刷新 {snapshot.next_refresh}" if snapshot.next_refresh else "远行商人商品"
 
 
 async def render_merchant_image(snapshot: MerchantSnapshot) -> bytes:
@@ -113,9 +111,7 @@ async def render_merchant_image(snapshot: MerchantSnapshot) -> bytes:
             prop_img.paste(icon, (icon_x, icon_y), icon)
 
         prop_draw = ImageDraw.Draw(prop_img)
-        _text(
-            prop_draw, (210, 116), product.name[:12], (255, 255, 63), FONT_TITLE, "lm"
-        )
+        _text(prop_draw, (210, 116), product.name[:12], (255, 255, 63), FONT_TITLE, "lm")
         _text(
             prop_draw,
             (210, 152),

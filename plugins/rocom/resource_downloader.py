@@ -78,9 +78,7 @@ async def _choose_base_url(configured: str) -> tuple[str, str]:
     """选择可用资源站。"""
     client = await get_shared_async_client()
     candidates = [("[Config]", configured)] if configured else DEFAULT_URLS
-    tasks = [
-        asyncio.create_task(_probe(client, tag, url)) for tag, url in candidates if url
-    ]
+    tasks = [asyncio.create_task(_probe(client, tag, url)) for tag, url in candidates if url]
     try:
         for task in asyncio.as_completed(tasks):
             result = await task
@@ -146,9 +144,7 @@ def _parse_links(html: str) -> list[str]:
     ]
 
 
-async def _download_file(
-    client, url: str, path: Path, semaphore: asyncio.Semaphore
-) -> int:
+async def _download_file(client, url: str, path: Path, semaphore: asyncio.Semaphore) -> int:
     async with semaphore:
         response = await client.get(url, timeout=120.0, follow_redirects=True)
         response.raise_for_status()

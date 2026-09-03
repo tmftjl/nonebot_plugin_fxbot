@@ -31,9 +31,7 @@ def _load() -> dict[str, list[str]]:
 def _save(data: dict[str, list[str]]) -> None:
     """保存群解析开关状态。"""
     STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    STATE_PATH.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    STATE_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def is_group_enabled(group_id: str | None) -> bool:

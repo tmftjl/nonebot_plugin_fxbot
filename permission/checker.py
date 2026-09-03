@@ -59,8 +59,7 @@ def _is_superuser(user_id: str | None) -> bool:
 def _has_group_role(event: Any, role: str) -> bool:
     """判断 OneBot 群身份。"""
     return (
-        _is_group_event(event)
-        and str(getattr(getattr(event, "sender", None), "role", "")) == role
+        _is_group_event(event) and str(getattr(getattr(event, "sender", None), "role", "")) == role
     )
 
 
@@ -124,10 +123,7 @@ class PermissionChecker:
 
     def _disabled_by_switch(self, layers: list[Any]) -> bool:
         """功能开关关闭时对所有用户生效，包括超级用户。"""
-        return any(
-            isinstance(layer, dict) and not layer.get("enabled", True)
-            for layer in layers
-        )
+        return any(isinstance(layer, dict) and not layer.get("enabled", True) for layer in layers)
 
     async def check(self, feature: str, bot: Bot, event: Event) -> bool:
         """检查指定 feature 是否允许当前事件调用。"""
@@ -138,15 +134,11 @@ class PermissionChecker:
         plugin, command = self._parse_feature(feature)
         context = await self._build_context(event, config)
         sub_plugins = (
-            config.get("sub_plugins")
-            if isinstance(config.get("sub_plugins"), dict)
-            else {}
+            config.get("sub_plugins") if isinstance(config.get("sub_plugins"), dict) else {}
         )
         plugin_node = sub_plugins.get(plugin, {}) if plugin else {}
         commands = (
-            plugin_node.get("commands")
-            if isinstance(plugin_node.get("commands"), dict)
-            else {}
+            plugin_node.get("commands") if isinstance(plugin_node.get("commands"), dict) else {}
         )
 
         layers = [
@@ -189,8 +181,6 @@ def permission_for_plugin(plugin: str, *, category: str = "sub") -> Permission:
     return permission_for(plugin, category=category)
 
 
-def permission_for_cmd(
-    plugin: str, command: str, *, category: str = "sub"
-) -> Permission:
+def permission_for_cmd(plugin: str, command: str, *, category: str = "sub") -> Permission:
     """构造命令级权限。"""
     return permission_for(f"{plugin}:{command}", category=category)

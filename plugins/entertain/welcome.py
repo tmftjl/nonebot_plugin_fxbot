@@ -51,9 +51,7 @@ def _load_store() -> dict[str, dict[str, Any]]:
 def _save_store(data: dict[str, dict[str, Any]]) -> None:
     """保存欢迎语存储。"""
     WELCOME_FILE.parent.mkdir(parents=True, exist_ok=True)
-    WELCOME_FILE.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    WELCOME_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _group_key(event: Event) -> str | None:
@@ -155,11 +153,7 @@ def _strip_command_prefix(message: Any) -> list[Any]:
 def _has_valid_content(segments: list[Any]) -> bool:
     """判断欢迎语是否包含有效文本或图片。"""
     for segment in segments:
-        if (
-            isinstance(segment, tuple)
-            and segment[0] == "text"
-            and str(segment[1]).strip()
-        ):
+        if isinstance(segment, tuple) and segment[0] == "text" and str(segment[1]).strip():
             return True
         if getattr(segment, "type", None) == "image":
             return True
@@ -284,9 +278,7 @@ async def _handle_set_welcome(matcher: Matcher, bot: Bot, event: Event) -> None:
     store = _load_store()
     store[group_key] = {"enabled": True, "content": serialized}
     _save_store(store)
-    await matcher.finish(
-        f"已更新欢迎：图片 {meta['images_saved']} 张，文本 {meta['text_len']} 字"
-    )
+    await matcher.finish(f"已更新欢迎：图片 {meta['images_saved']} 张，文本 {meta['text_len']} 字")
 
 
 @show_welcome_cmd.handle()
@@ -343,10 +335,7 @@ async def _handle_group_increase(bot: Bot, event: Event) -> None:
     """新成员入群时发送欢迎语。"""
     notice_type = str(getattr(event, "notice_type", "") or "")
     sub_type = str(getattr(event, "sub_type", "") or "")
-    if (
-        notice_type != "group_increase"
-        and "increase" not in type(event).__name__.lower()
-    ):
+    if notice_type != "group_increase" and "increase" not in type(event).__name__.lower():
         return
     if sub_type == "invite" and getattr(event, "user_id", None) is None:
         return

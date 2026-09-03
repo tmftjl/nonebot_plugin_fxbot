@@ -43,9 +43,7 @@ _BROWSER: Optional[Browser] = None
 _BROWSER_INIT_LOCK = asyncio.Lock()
 
 # ========== 消息统计缓存 ==========
-_MESSAGE_CACHE: Dict[str, Dict[str, int]] = defaultdict(
-    lambda: {"received": 0, "sent": 0}
-)
+_MESSAGE_CACHE: Dict[str, Dict[str, int]] = defaultdict(lambda: {"received": 0, "sent": 0})
 _MESSAGE_CACHE_LOCK = asyncio.Lock()
 _MESSAGE_CACHE_DATE = datetime.now().strftime("%Y-%m-%d")
 
@@ -147,8 +145,7 @@ async def _collect_bot_info() -> List[Dict[str, Any]]:
             group_list = await bot.get_group_list()
             friend_list = await bot.get_friend_list()
             total_members = sum(
-                g.get("member_count", 0) or g.get("max_member_count", 0)
-                for g in group_list
+                g.get("member_count", 0) or g.get("max_member_count", 0) for g in group_list
             )
             count_contacts = {
                 "好友": len(friend_list),
@@ -184,9 +181,7 @@ async def _collect_hardware_info() -> List[Dict[str, Any]]:
         monitor = get_monitor()
         monitor_data = monitor.get_current_data()
         cpu_percent = (
-            monitor_data.cpu_history[-1][1]
-            if monitor_data and monitor_data.cpu_history
-            else 0.0
+            monitor_data.cpu_history[-1][1] if monitor_data and monitor_data.cpu_history else 0.0
         )
         cpu_count = psutil.cpu_count()
         cpu_freq = psutil.cpu_freq()
@@ -453,9 +448,7 @@ async def _collect_system_info() -> List[Dict[str, Any]]:
         info_items.append({"first": "Cursor", "tail": "Default"})
 
         # Terminal
-        info_items.append(
-            {"first": "Terminal", "tail": os.environ.get("TERM", "Unknown")}
-        )
+        info_items.append({"first": "Terminal", "tail": os.environ.get("TERM", "Unknown")})
 
         # CPU
         cpu_name = platform.processor() or "Unknown"
@@ -591,9 +584,7 @@ async def _build_status_html(data: Dict[str, Any]) -> str:
     # 构建背景样式
     background_style = ""
     if background_url:
-        background_style = (
-            f".container {{ background-image: url('{background_url}'); }}"
-        )
+        background_style = f".container {{ background-image: url('{background_url}'); }}"
 
     # 机器人数量
     bot_count = len(bot_info_list)
@@ -794,9 +785,7 @@ def _render_network(network: Dict[str, Any], chart_data_json: str) -> str:
             test_items.append(
                 f'{test["name"]}：<span style="color:{color};">{test["delay"]}</span>'
             )
-        website_tests_html = (
-            f'<div class="speed"><p>延迟</p><p>{" | ".join(test_items)}</p></div>'
-        )
+        website_tests_html = f'<div class="speed"><p>延迟</p><p>{" | ".join(test_items)}</p></div>'
 
     return f"""
     <div class="box" data-boxInfo="网络">
@@ -1301,9 +1290,7 @@ def _classify_chat(event: Any) -> Optional[Tuple[str, str]]:
         return ("private", str(user_id))
 
     # QQ 官方适配器
-    if group_target := (
-        getattr(event, "group_openid", None) or getattr(event, "group_code", None)
-    ):
+    if group_target := (getattr(event, "group_openid", None) or getattr(event, "group_code", None)):
         return ("group", str(group_target))
     if private_target := (
         getattr(event, "user_openid", None) or _get_nested(event, "author.user_openid")
@@ -1372,9 +1359,7 @@ async def _hook_bot_methods(bot: Bot):
                     async with _MESSAGE_CACHE_LOCK:
                         _MESSAGE_CACHE[f"bot_{bot.self_id}"]["received"] += 1
                 except Exception as e:
-                    logger.error(
-                        f"[bot_status] 接收消息统计失败: bot={bot.self_id} error={e}"
-                    )
+                    logger.error(f"[bot_status] 接收消息统计失败: bot={bot.self_id} error={e}")
 
             return result
 
@@ -1385,9 +1370,7 @@ async def _hook_bot_methods(bot: Bot):
         original_send = bot.send
 
         @wraps(original_send)
-        async def patched_send(
-            event: Any, message: Any, *args: Any, **kwargs: Any
-        ) -> Any:
+        async def patched_send(event: Any, message: Any, *args: Any, **kwargs: Any) -> Any:
             result = await original_send(event, message, *args, **kwargs)
 
             # 统计发送消息并上报
@@ -1398,14 +1381,10 @@ async def _hook_bot_methods(bot: Bot):
                     async with _MESSAGE_CACHE_LOCK:
                         _MESSAGE_CACHE[f"bot_{bot.self_id}"]["sent"] += 1
                 except Exception as e:
-                    logger.error(
-                        f"[bot_status] 发送消息统计失败: bot={bot.self_id} error={e}"
-                    )
+                    logger.error(f"[bot_status] 发送消息统计失败: bot={bot.self_id} error={e}")
 
                 # 异步上报中央API（不阻塞）
-                asyncio.create_task(
-                    _report_to_central_api(chat_type, bot.self_id, target_id)
-                )
+                asyncio.create_task(_report_to_central_api(chat_type, bot.self_id, target_id))
 
             return result
 

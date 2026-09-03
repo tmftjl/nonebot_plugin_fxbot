@@ -40,9 +40,7 @@ IOS_HEADERS = {
 
 async def parse(url: str) -> VideoResult:
     """解析小红书视频或图文。"""
-    resolved = (
-        await redirect_url(url, headers=IOS_HEADERS) if "xhslink.com" in url else url
-    )
+    resolved = await redirect_url(url, headers=IOS_HEADERS) if "xhslink.com" in url else url
     matched = re.search(
         r"(?:explore|discovery/item)/(?P<query>(?P<id>[0-9a-zA-Z]+)(?:\?[^#\s]+)?)",
         resolved,
@@ -63,9 +61,7 @@ async def parse(url: str) -> VideoResult:
 async def _parse_explore(url: str, note_id: str) -> VideoResult:
     """解析 explore 页面。"""
     html = await get_text(url, headers=HEADERS)
-    state = extract_json(
-        html, r"window\.__INITIAL_STATE__=(.*?)</script>", undefined_to_null=True
-    )
+    state = extract_json(html, r"window\.__INITIAL_STATE__=(.*?)</script>", undefined_to_null=True)
     detail_map = ((state.get("note") or {}).get("noteDetailMap")) or {}
     note = ((detail_map.get(note_id) or {}).get("note")) or {}
     if not note:
@@ -76,9 +72,7 @@ async def _parse_explore(url: str, note_id: str) -> VideoResult:
 async def _parse_discovery(url: str) -> VideoResult:
     """解析 discovery 页面。"""
     html = await get_text(url, headers=IOS_HEADERS)
-    state = extract_json(
-        html, r"window\.__INITIAL_STATE__=(.*?)</script>", undefined_to_null=True
-    )
+    state = extract_json(html, r"window\.__INITIAL_STATE__=(.*?)</script>", undefined_to_null=True)
     container = state.get("noteData") or {}
     note = ((container.get("data") or {}).get("noteData")) or {}
     preload = container.get("normalNotePreloadData") or {}
@@ -93,9 +87,7 @@ async def _parse_discovery(url: str) -> VideoResult:
     return result
 
 
-def _result_from_note(
-    note: dict[str, Any], *, source_url: str, discovery: bool
-) -> VideoResult:
+def _result_from_note(note: dict[str, Any], *, source_url: str, discovery: bool) -> VideoResult:
     """从笔记结构构造结果。"""
     user = note.get("user") or {}
     images = note.get("imageList") or []
@@ -145,9 +137,7 @@ def _video_url_and_duration(video: dict[str, Any]) -> tuple[str | None, float | 
         item = first(items)
         if isinstance(item, dict) and item.get("masterUrl"):
             duration = item.get("duration")
-            return str(item["masterUrl"]), (
-                float(duration) / 1000
-            ) if duration else None
+            return str(item["masterUrl"]), (float(duration) / 1000) if duration else None
     return None, None
 
 

@@ -21,9 +21,7 @@ try:
 except Exception:  # pragma: no cover
     render_help_image = None
 
-P = Plugin(
-    "help", display_name="帮助", enabled=True, level=PermLevel.LOW, scene=PermScene.ALL
-)
+P = Plugin("help", display_name="帮助", enabled=True, level=PermLevel.LOW, scene=PermScene.ALL)
 
 help_cmd = P.on_regex(
     r"^(?:#|＃|/)(.*?)帮助$",
@@ -52,9 +50,7 @@ def _asset_path(config: dict[str, Any], field: str) -> Path | None:
     return path if path.is_file() else None
 
 
-def _fallback_image(
-    title: str, sub_title: str, groups_data: list[dict[str, Any]]
-) -> bytes:
+def _fallback_image(title: str, sub_title: str, groups_data: list[dict[str, Any]]) -> bytes:
     """帮助图兜底渲染。"""
     text = f"{title}\n{sub_title}\n\n" + "\n".join(
         f"【{group.get('group', '')}】 "
@@ -79,9 +75,7 @@ def _fallback_image(
 
 
 @help_cmd.handle()
-async def _handle_help(
-    matcher: Matcher, bot: Bot, groups: tuple = RegexGroup()
-) -> None:
+async def _handle_help(matcher: Matcher, bot: Bot, groups: tuple = RegexGroup()) -> None:
     """发送旧版排版帮助图。"""
     keyword = str(groups[0]).strip() if groups and groups[0] else None
     resolved_ref = _resolve_config_ref(keyword)
@@ -111,13 +105,9 @@ async def _handle_help(
         ]
         asset_files = [path for path in [background, icon] if path is not None]
         mtimes = [
-            path.stat().st_mtime
-            for path in [*code_files, cfg_path, *asset_files]
-            if path.exists()
+            path.stat().st_mtime for path in [*code_files, cfg_path, *asset_files] if path.exists()
         ]
-        cache_valid = cache_file.exists() and cache_file.stat().st_mtime >= max(
-            mtimes, default=0
-        )
+        cache_valid = cache_file.exists() and cache_file.stat().st_mtime >= max(mtimes, default=0)
     except Exception:
         cache_valid = False
 
@@ -137,6 +127,4 @@ async def _handle_help(
     if not image_bytes:
         image_bytes = _fallback_image(title, sub_title, groups_data)
 
-    await matcher.finish(
-        build_message(bot, build_message_segment(bot, "image", image_bytes))
-    )
+    await matcher.finish(build_message(bot, build_message_segment(bot, "image", image_bytes)))

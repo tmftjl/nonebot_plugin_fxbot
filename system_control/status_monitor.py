@@ -59,9 +59,7 @@ class MonitorData:
     disk_write_speed: float
 
     # 历史数据用于绘制图表（最近60个采样点）
-    network_history: list[
-        tuple[float, float, float]
-    ]  # [(timestamp, upload, download), ...]
+    network_history: list[tuple[float, float, float]]  # [(timestamp, upload, download), ...]
     disk_io_history: list[tuple[float, float, float]]  # [(timestamp, read, write), ...]
     cpu_history: list[tuple[float, float]]  # [(timestamp, usage), ...]
     memory_history: list[tuple[float, float]]  # [(timestamp, percent), ...]
@@ -88,16 +86,10 @@ class StatusMonitor:
         self._current_data: Optional[MonitorData] = None
 
         # 历史数据队列
-        self._network_history: Deque[tuple[float, float, float]] = deque(
-            maxlen=self.max_history
-        )
-        self._disk_io_history: Deque[tuple[float, float, float]] = deque(
-            maxlen=self.max_history
-        )
+        self._network_history: Deque[tuple[float, float, float]] = deque(maxlen=self.max_history)
+        self._disk_io_history: Deque[tuple[float, float, float]] = deque(maxlen=self.max_history)
         self._cpu_history: Deque[tuple[float, float]] = deque(maxlen=self.max_history)
-        self._memory_history: Deque[tuple[float, float]] = deque(
-            maxlen=self.max_history
-        )
+        self._memory_history: Deque[tuple[float, float]] = deque(maxlen=self.max_history)
 
         # 进程监控配置
         self.top_process_count = 30  # 监控TOP30进程
@@ -211,12 +203,8 @@ class StatusMonitor:
             time_delta = now - self._last_network_snapshot.timestamp
             if time_delta > 0:
                 # 计算差值，避免计数器回退
-                sent_diff = max(
-                    net_io.bytes_sent - self._last_network_snapshot.bytes_sent, 0
-                )
-                recv_diff = max(
-                    net_io.bytes_recv - self._last_network_snapshot.bytes_recv, 0
-                )
+                sent_diff = max(net_io.bytes_sent - self._last_network_snapshot.bytes_sent, 0)
+                recv_diff = max(net_io.bytes_recv - self._last_network_snapshot.bytes_recv, 0)
 
                 upload_speed = sent_diff / time_delta
                 download_speed = recv_diff / time_delta
@@ -238,12 +226,8 @@ class StatusMonitor:
                 time_delta = now - self._last_disk_snapshot.timestamp
                 if time_delta > 0:
                     # 计算差值，避免计数器回退
-                    read_diff = max(
-                        disk_io.read_bytes - self._last_disk_snapshot.read_bytes, 0
-                    )
-                    write_diff = max(
-                        disk_io.write_bytes - self._last_disk_snapshot.write_bytes, 0
-                    )
+                    read_diff = max(disk_io.read_bytes - self._last_disk_snapshot.read_bytes, 0)
+                    write_diff = max(disk_io.write_bytes - self._last_disk_snapshot.write_bytes, 0)
 
                     disk_read_speed = read_diff / time_delta
                     disk_write_speed = write_diff / time_delta
@@ -317,9 +301,7 @@ class StatusMonitor:
             for p in top_processes:
                 self._process_cache[p["pid"]] = p["proc"]
 
-            logger.debug(
-                f"[status_monitor] 刷新进程缓存: {len(self._process_cache)} 个进程"
-            )
+            logger.debug(f"[status_monitor] 刷新进程缓存: {len(self._process_cache)} 个进程")
         except Exception as e:
             logger.exception(f"[status_monitor] 刷新进程缓存失败: {e}")
 
@@ -371,12 +353,8 @@ class StatusMonitor:
                 self._process_cache.pop(pid, None)
 
             # 排序获取TOP5
-            top_cpu = sorted(
-                all_processes, key=lambda x: x["cpu_percent"], reverse=True
-            )[:5]
-            top_mem = sorted(all_processes, key=lambda x: x["mem_bytes"], reverse=True)[
-                :5
-            ]
+            top_cpu = sorted(all_processes, key=lambda x: x["cpu_percent"], reverse=True)[:5]
+            top_mem = sorted(all_processes, key=lambda x: x["mem_bytes"], reverse=True)[:5]
 
             # 状态中文映射
             status_map = {
@@ -391,9 +369,7 @@ class StatusMonitor:
                 "waiting": "等待中",
                 "suspended": "已暂停",
             }
-            status_counts_cn = {
-                status_map.get(k, k): v for k, v in status_counts.items()
-            }
+            status_counts_cn = {status_map.get(k, k): v for k, v in status_counts.items()}
 
             # 获取总进程数
             total_count = len(list(psutil.process_iter()))

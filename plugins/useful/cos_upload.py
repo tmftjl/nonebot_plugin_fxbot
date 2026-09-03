@@ -128,9 +128,7 @@ async def _handle_cos_list(matcher: Matcher) -> None:
     """查看 COS 图片库统计。"""
     if not DATA_DIR.exists():
         await matcher.finish("暂无COS图片")
-    date_dirs = sorted(
-        [path for path in DATA_DIR.iterdir() if path.is_dir()], reverse=True
-    )
+    date_dirs = sorted([path for path in DATA_DIR.iterdir() if path.is_dir()], reverse=True)
     if not date_dirs:
         await matcher.finish("暂无COS图片")
 

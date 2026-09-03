@@ -27,11 +27,7 @@ async def execute_tool(
         return {"ok": False, "error": f"工具不存在: {name}"}
 
     try:
-        args = (
-            json.loads(arguments)
-            if isinstance(arguments, str)
-            else dict(arguments or {})
-        )
+        args = json.loads(arguments) if isinstance(arguments, str) else dict(arguments or {})
     except json.JSONDecodeError as exc:
         return {"ok": False, "error": f"工具参数不是合法 JSON: {exc}"}
 

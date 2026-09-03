@@ -50,9 +50,7 @@ def event_is_private(event: Event) -> bool:
 
 def event_is_tome(event: Event) -> bool:
     return (
-        bool(event.is_tome())
-        if hasattr(event, "is_tome")
-        else bool(getattr(event, "to_me", False))
+        bool(event.is_tome()) if hasattr(event, "is_tome") else bool(getattr(event, "to_me", False))
     )
 
 
@@ -69,9 +67,7 @@ def event_user_name(event: Event, user_id: str = "") -> str:
         ),
     ):
         for key in keys:
-            name = (
-                value.get(key) if isinstance(value, dict) else getattr(value, key, None)
-            )
+            name = value.get(key) if isinstance(value, dict) else getattr(value, key, None)
             if name:
                 return str(name)
     return str(user_id or "")
@@ -80,14 +76,10 @@ def event_user_name(event: Event, user_id: str = "") -> str:
 def extract_message_target(event: Any) -> dict[str, Any]:
     target = {
         "user_id": getattr(event, "user_id", None),
-        "session_id": event.get_session_id()
-        if hasattr(event, "get_session_id")
-        else None,
+        "session_id": event.get_session_id() if hasattr(event, "get_session_id") else None,
     }
     author = getattr(event, "author", None)
-    user_openid = getattr(event, "user_openid", None) or getattr(
-        author, "user_openid", None
-    )
+    user_openid = getattr(event, "user_openid", None) or getattr(author, "user_openid", None)
     if user_openid is not None:
         target["user_openid"] = user_openid
     if event_is_group(event):

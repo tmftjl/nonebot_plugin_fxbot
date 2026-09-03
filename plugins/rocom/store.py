@@ -34,9 +34,7 @@ def load_state() -> dict[str, Any]:
 def save_state(data: dict[str, Any]) -> None:
     """保存订阅状态。"""
     DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
-    DATA_FILE.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    DATA_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def get_subscriptions() -> list[dict[str, Any]]:

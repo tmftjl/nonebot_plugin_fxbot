@@ -28,6 +28,4 @@ def get_platform_adapter(bot: Any) -> PlatformAdapter:
     for adapter in _adapters:
         if adapter.match(bot):
             return adapter
-    raise PlatformError(
-        f"未注册的平台适配器: {getattr(bot, 'type', type(bot).__name__)}"
-    )
+    raise PlatformError(f"未注册的平台适配器: {getattr(bot, 'type', type(bot).__name__)}")

@@ -26,10 +26,7 @@ class QQOfficialMessageAdapter(PlatformAdapter):
         if not self.is_mention_segment(segment):
             return None
         data = getattr(segment, "data", {}) or {}
-        return (
-            str(data.get("user_id") or data.get("id") or data.get("target") or "")
-            or None
-        )
+        return str(data.get("user_id") or data.get("id") or data.get("target") or "") or None
 
     def user_avatar(self, bot, user_id):
         return f"https://q.qlogo.cn/qqapp/{getattr(bot, 'self_id', '')}/{user_id}/100"
@@ -70,9 +67,7 @@ class QQOfficialMessageAdapter(PlatformAdapter):
                 path = Path(data)
                 if path.exists():
                     return MessageSegment.file_video(path)
-            raise ValueError(
-                "QQ 官方适配器视频发送仅支持 URL、base64、本地路径或字节数据"
-            )
+            raise ValueError("QQ 官方适配器视频发送仅支持 URL、base64、本地路径或字节数据")
         raise ValueError(f"不支持的消息段类型: {seg_type}")
 
     def build_message(self, bot: Bot, segments: list[Any]) -> Any:
@@ -80,17 +75,13 @@ class QQOfficialMessageAdapter(PlatformAdapter):
 
         return Message(segments)
 
-    async def send_message_to_target(
-        self, bot: Bot, target: dict[str, Any], message: Any
-    ) -> Any:
+    async def send_message_to_target(self, bot: Bot, target: dict[str, Any], message: Any) -> Any:
         if target.get("group_openid") is not None:
             return await bot.send_to_group(
                 group_openid=str(target["group_openid"]), message=message
             )
         if target.get("user_openid") is not None:
-            return await bot.send_to_c2c(
-                openid=str(target["user_openid"]), message=message
-            )
+            return await bot.send_to_c2c(openid=str(target["user_openid"]), message=message)
         raise RuntimeError("无法识别消息目标")
 
     async def send_group_message(self, bot, group_id, message):
