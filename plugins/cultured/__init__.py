@@ -11,14 +11,20 @@ from nonebot import logger
 from nonebot.adapters import Bot, Event
 from nonebot.matcher import Matcher
 
+from ...adapter import build_message, build_message_segment
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
-from ...adapter import build_message, build_message_segment
 from ...utils.http import get_shared_async_client
-from .config import face_list, load_all_commands, load_cfg, random_local_image
 from . import update_gallery as update_gallery
+from .config import face_list, load_all_commands, load_cfg, random_local_image
 
-P = Plugin("cultured", display_name="图库", enabled=True, level=PermLevel.MEMBER, scene=PermScene.ALL)
+P = Plugin(
+    "cultured",
+    display_name="图库",
+    enabled=True,
+    level=PermLevel.MEMBER,
+    scene=PermScene.ALL,
+)
 
 
 def _event_text(event: Event) -> str:
@@ -148,7 +154,9 @@ picture_cmd = P.on_regex(
 async def _handle_list(matcher: Matcher) -> None:
     """发送图库列表。"""
     faces = face_list()
-    await matcher.finish("表情列表：\n" + ("、".join(faces) or "(空)") + "\n\n使用 #随机<名称>")
+    await matcher.finish(
+        "表情列表：\n" + ("、".join(faces) or "(空)") + "\n\n使用 #随机<名称>"
+    )
 
 
 @api_cmd.handle()
@@ -170,7 +178,9 @@ async def _handle_api_picture(matcher: Matcher, bot: Bot, event: Event) -> None:
                         if asyncio.iscoroutine(result):
                             result = await result
                     except Exception:
-                        logger.opt(exception=True).warning(f"[Cultured] API 图库 {name} 请求失败")
+                        logger.opt(exception=True).warning(
+                            f"[Cultured] API 图库 {name} 请求失败"
+                        )
                         await matcher.finish("图库接口请求失败")
                     if result:
                         await matcher.finish(result)

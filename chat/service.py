@@ -8,7 +8,6 @@ from typing import Any
 from nonebot import logger
 
 from ..config import get_manager as get_config_manager
-
 from .personas import get_persona_text
 from .providers import provider_manager
 from .session import ChatSessionStore, default_session_store
@@ -22,14 +21,20 @@ class ChatService:
     def __init__(self, session_store: ChatSessionStore = default_session_store) -> None:
         self.session_store = session_store
 
-    async def process(self, request: ChatRequest, runtime: ToolRuntime | None = None) -> ChatResponse:
+    async def process(
+        self, request: ChatRequest, runtime: ToolRuntime | None = None
+    ) -> ChatResponse:
         """处理一次对话请求。"""
         chat_cfg = get_config_manager().get_system()["chat"]
         self.session_store.max_messages = int(chat_cfg["max_history"])
         provider = provider_manager.get_provider()
         runtime = runtime or ToolRuntime()
         messages = self.session_store.get(request.session_id)
-        persona_text = get_persona_text(request.metadata.get("persona_name") if isinstance(request.metadata, dict) else None)
+        persona_text = get_persona_text(
+            request.metadata.get("persona_name")
+            if isinstance(request.metadata, dict)
+            else None
+        )
         if persona_text:
             if not messages or messages[0].get("role") != "system":
                 messages.insert(0, {"role": "system", "content": persona_text})

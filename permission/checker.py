@@ -8,7 +8,7 @@ from nonebot import get_driver
 from nonebot.adapters import Bot, Event
 from nonebot.permission import Permission
 
-from ..adapter.support import event_group_id, event_is_group, event_is_private
+from ..adapter.events import event_group_id, event_is_group, event_is_private
 from .policy import PolicyChain
 from .storage import get_storage
 from .types import Decision, PermContext, PermLevel
@@ -58,13 +58,19 @@ def _is_superuser(user_id: str | None) -> bool:
 
 def _has_group_role(event: Any, role: str) -> bool:
     """判断 OneBot 群身份。"""
-    return _is_group_event(event) and str(getattr(getattr(event, "sender", None), "role", "")) == role
+    return (
+        _is_group_event(event)
+        and str(getattr(getattr(event, "sender", None), "role", "")) == role
+    )
 
 
 def _bot_admins(config: dict[str, Any]) -> set[str]:
     """从系统配置和权限配置中读取 bot_admins。"""
     ids: list[str] = []
-    for source in (config, config.get("top") if isinstance(config.get("top"), dict) else {}):
+    for source in (
+        config,
+        config.get("top") if isinstance(config.get("top"), dict) else {},
+    ):
         value = source.get("bot_admins") if isinstance(source, dict) else None
         if isinstance(value, (list, tuple, set)):
             ids.extend(str(item) for item in value if item is not None)
@@ -118,7 +124,10 @@ class PermissionChecker:
 
     def _disabled_by_switch(self, layers: list[Any]) -> bool:
         """功能开关关闭时对所有用户生效，包括超级用户。"""
-        return any(isinstance(layer, dict) and not layer.get("enabled", True) for layer in layers)
+        return any(
+            isinstance(layer, dict) and not layer.get("enabled", True)
+            for layer in layers
+        )
 
     async def check(self, feature: str, bot: Bot, event: Event) -> bool:
         """检查指定 feature 是否允许当前事件调用。"""
@@ -128,9 +137,17 @@ class PermissionChecker:
 
         plugin, command = self._parse_feature(feature)
         context = await self._build_context(event, config)
-        sub_plugins = config.get("sub_plugins") if isinstance(config.get("sub_plugins"), dict) else {}
+        sub_plugins = (
+            config.get("sub_plugins")
+            if isinstance(config.get("sub_plugins"), dict)
+            else {}
+        )
         plugin_node = sub_plugins.get(plugin, {}) if plugin else {}
-        commands = plugin_node.get("commands") if isinstance(plugin_node.get("commands"), dict) else {}
+        commands = (
+            plugin_node.get("commands")
+            if isinstance(plugin_node.get("commands"), dict)
+            else {}
+        )
 
         layers = [
             config.get("top"),
@@ -172,6 +189,8 @@ def permission_for_plugin(plugin: str, *, category: str = "sub") -> Permission:
     return permission_for(plugin, category=category)
 
 
-def permission_for_cmd(plugin: str, command: str, *, category: str = "sub") -> Permission:
+def permission_for_cmd(
+    plugin: str, command: str, *, category: str = "sub"
+) -> Permission:
     """构造命令级权限。"""
     return permission_for(f"{plugin}:{command}", category=category)

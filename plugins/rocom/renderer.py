@@ -43,14 +43,23 @@ def _fit_icon(icon: Image.Image, size: int = 145) -> Image.Image:
     return icon.resize((max(1, int(width * scale)), max(1, int(height * scale))))
 
 
-def _text(draw: ImageDraw.ImageDraw, xy: tuple[int, int], value: str, fill: tuple[int, int, int], font, anchor: str) -> None:
+def _text(
+    draw: ImageDraw.ImageDraw,
+    xy: tuple[int, int],
+    value: str,
+    fill: tuple[int, int, int],
+    font,
+    anchor: str,
+) -> None:
     draw.text(xy, value, fill, font, anchor)
 
 
 def _time_label(product: MerchantProduct, snapshot: MerchantSnapshot) -> str:
     if product.starttime or product.endtime:
         return f"{product.starttime} ~ {product.endtime}".strip(" ~")
-    return f"下次刷新 {snapshot.next_refresh}" if snapshot.next_refresh else "远行商人商品"
+    return (
+        f"下次刷新 {snapshot.next_refresh}" if snapshot.next_refresh else "远行商人商品"
+    )
 
 
 async def render_merchant_image(snapshot: MerchantSnapshot) -> bytes:
@@ -77,7 +86,14 @@ async def render_merchant_image(snapshot: MerchantSnapshot) -> bytes:
     _text(draw, (285, 270), f"当前商品 {prop_num}", (255, 255, 255), FONT_META, "mm")
     round_label = f"第 {snapshot.round_no}/4 轮" if snapshot.round_no else "远行商人"
     _text(draw, (500, 270), round_label, (255, 255, 255), FONT_META, "mm")
-    _text(draw, (706, 270), f"剩余 {snapshot.remaining_time or '--'}", (255, 255, 255), FONT_META, "mm")
+    _text(
+        draw,
+        (706, 270),
+        f"剩余 {snapshot.remaining_time or '--'}",
+        (255, 255, 255),
+        FONT_META,
+        "mm",
+    )
 
     if not products:
         _text(draw, (500, 520), "暂未解析到商品明细", (255, 255, 63), FONT_TITLE, "mm")
@@ -97,8 +113,17 @@ async def render_merchant_image(snapshot: MerchantSnapshot) -> bytes:
             prop_img.paste(icon, (icon_x, icon_y), icon)
 
         prop_draw = ImageDraw.Draw(prop_img)
-        _text(prop_draw, (210, 116), product.name[:12], (255, 255, 63), FONT_TITLE, "lm")
-        _text(prop_draw, (210, 152), _time_label(product, snapshot)[:26], (198, 222, 246), FONT_SMALL, "lm")
+        _text(
+            prop_draw, (210, 116), product.name[:12], (255, 255, 63), FONT_TITLE, "lm"
+        )
+        _text(
+            prop_draw,
+            (210, 152),
+            _time_label(product, snapshot)[:26],
+            (198, 222, 246),
+            FONT_SMALL,
+            "lm",
+        )
         if product.name in RECOMMEND_NAMES:
             prop_img.paste(susume, (371, 37), susume)
         img.paste(prop_img, (453 * col + 14, row * 206 + start_height), prop_img)

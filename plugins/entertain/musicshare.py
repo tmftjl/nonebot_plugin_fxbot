@@ -10,7 +10,6 @@ import re
 import time
 import uuid
 from dataclasses import dataclass, replace
-
 from typing import Any, Literal
 
 from nonebot import logger
@@ -22,9 +21,9 @@ from nonebot.rule import Rule
 from nonebot.typing import T_State
 from PIL import Image, ImageDraw
 
+from ...adapter import build_message, build_message_segment
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
-from ...adapter import build_message, build_message_segment
 from ...utils.fonts import (
     draw_text_with_fallback,
     get_shared_font_path,
@@ -38,7 +37,13 @@ from .config import cfg_music
 
 Platform = Literal["qq", "netease"]
 
-P = Plugin("entertain", display_name="娱乐", enabled=True, level=PermLevel.LOW, scene=PermScene.ALL)
+P = Plugin(
+    "entertain",
+    display_name="娱乐",
+    enabled=True,
+    level=PermLevel.LOW,
+    scene=PermScene.ALL,
+)
 
 _CACHE_TTL = 600
 _LOGIN_TTL = 7 * 24 * 60 * 60
@@ -75,7 +80,9 @@ class MusicLoginRequired(Exception):
 class MusicPlayUnavailable(Exception):
     """music-api 返回播放失败原因。"""
 
-    def __init__(self, message: str, reason: str = "", detail: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self, message: str, reason: str = "", detail: dict[str, Any] | None = None
+    ) -> None:
         super().__init__(message)
         self.message = message
         self.reason = reason
@@ -94,7 +101,18 @@ class MusicPlayUnavailable(Exception):
     def is_login_related(self) -> bool:
         """是否像登录态失效。"""
         text = f"{self.reason} {self.message}".lower()
-        keys = ("login", "auth", "token", "session", "cookie", "uin", "登录", "登陆", "未登录", "失效")
+        keys = (
+            "login",
+            "auth",
+            "token",
+            "session",
+            "cookie",
+            "uin",
+            "登录",
+            "登陆",
+            "未登录",
+            "失效",
+        )
         return any(key in text for key in keys)
 
 
@@ -214,7 +232,9 @@ def _save_login_sessions() -> None:
                 }
         _LOGIN_SESSION_FILE.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = _LOGIN_SESSION_FILE.with_suffix(".tmp")
-        tmp_path.write_text(json.dumps(persist_data, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp_path.write_text(
+            json.dumps(persist_data, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
         tmp_path.replace(_LOGIN_SESSION_FILE)
     except Exception:
         logger.opt(exception=True).warning("[musicshare] 保存音乐登录会话失败")
@@ -245,7 +265,9 @@ def _decode_auth_data(auth: str) -> dict[str, Any]:
     encoded = token.split(".", 1)[0]
     padding = "=" * (-len(encoded) % 4)
     try:
-        decoded = base64.urlsafe_b64decode((encoded + padding).encode("utf-8")).decode("utf-8")
+        decoded = base64.urlsafe_b64decode((encoded + padding).encode("utf-8")).decode(
+            "utf-8"
+        )
         data = json.loads(decoded)
     except Exception:
         return {}
@@ -253,7 +275,6 @@ def _decode_auth_data(auth: str) -> dict[str, Any]:
         return {}
     inner = data.get("data")
     return inner if isinstance(inner, dict) else data
-
 
 
 def _auth_account_identity(platform: Platform, account: dict[str, Any]) -> str | None:
@@ -281,7 +302,9 @@ def _auth_account_identity(platform: Platform, account: dict[str, Any]) -> str |
     return None
 
 
-def _normalize_login_bucket(owner: str, platform: Platform, data: Any = None) -> dict[str, Any]:
+def _normalize_login_bucket(
+    owner: str, platform: Platform, data: Any = None
+) -> dict[str, Any]:
     """规范化登录桶数据。"""
     if not isinstance(data, dict):
         data = {}
@@ -312,7 +335,14 @@ def _normalize_login_bucket(owner: str, platform: Platform, data: Any = None) ->
             continue
         login_token = str(item.get("loginToken") or "").strip()
         if login_token:
-            normalized_pending.append({**item, "loginToken": login_token, "owner": owner, "provider": platform})
+            normalized_pending.append(
+                {
+                    **item,
+                    "loginToken": login_token,
+                    "owner": owner,
+                    "provider": platform,
+                }
+            )
 
     return {
         "provider": platform,
@@ -329,12 +359,16 @@ async def _get_login_session_data(owner: str, platform: Platform) -> dict[str, A
     if cached is not None:
         bucket = _normalize_login_bucket(owner, platform, cached)
     else:
-        bucket = _normalize_login_bucket(owner, platform, _LOGIN_SESSIONS.get(_login_session_key(owner, platform)))
+        bucket = _normalize_login_bucket(
+            owner, platform, _LOGIN_SESSIONS.get(_login_session_key(owner, platform))
+        )
     _cache_set(cache_key, bucket)
     return bucket
 
 
-async def _save_login_bucket(owner: str, platform: Platform, bucket: dict[str, Any]) -> None:
+async def _save_login_bucket(
+    owner: str, platform: Platform, bucket: dict[str, Any]
+) -> None:
     """保存登录会话桶。"""
     bucket = _normalize_login_bucket(owner, platform, bucket)
     session_key = _login_session_key(owner, platform)
@@ -346,7 +380,9 @@ async def _save_login_bucket(owner: str, platform: Platform, bucket: dict[str, A
     _cache_set(_login_cache_key(owner, platform), bucket)
 
 
-async def _add_pending_login(owner: str, platform: Platform, login_token: str) -> dict[str, Any]:
+async def _add_pending_login(
+    owner: str, platform: Platform, login_token: str
+) -> dict[str, Any]:
     """新增待确认登录。"""
     bucket = await _get_login_session_data(owner, platform)
     pending = {
@@ -361,7 +397,9 @@ async def _add_pending_login(owner: str, platform: Platform, login_token: str) -
     return pending
 
 
-async def _update_pending_login(owner: str, platform: Platform, pending_id: str, login_token: str) -> None:
+async def _update_pending_login(
+    owner: str, platform: Platform, pending_id: str, login_token: str
+) -> None:
     """更新待确认登录 token。"""
     bucket = await _get_login_session_data(owner, platform)
     for item in bucket["pending"]:
@@ -372,10 +410,14 @@ async def _update_pending_login(owner: str, platform: Platform, pending_id: str,
     await _save_login_bucket(owner, platform, bucket)
 
 
-async def _remove_pending_login(owner: str, platform: Platform, pending_id: str) -> None:
+async def _remove_pending_login(
+    owner: str, platform: Platform, pending_id: str
+) -> None:
     """删除待确认登录。"""
     bucket = await _get_login_session_data(owner, platform)
-    bucket["pending"] = [item for item in bucket["pending"] if item.get("id") != pending_id]
+    bucket["pending"] = [
+        item for item in bucket["pending"] if item.get("id") != pending_id
+    ]
     await _save_login_bucket(owner, platform, bucket)
 
 
@@ -413,7 +455,9 @@ async def _add_auth_account(
 async def _remove_auth_account(owner: str, platform: Platform, auth: str) -> None:
     """移除失效登录账号。"""
     bucket = await _get_login_session_data(owner, platform)
-    bucket["accounts"] = [item for item in bucket["accounts"] if item.get("auth") != auth]
+    bucket["accounts"] = [
+        item for item in bucket["accounts"] if item.get("auth") != auth
+    ]
     await _save_login_bucket(owner, platform, bucket)
 
 
@@ -427,9 +471,13 @@ def _owners_with_platform(platform: Platform) -> list[str]:
     return list(dict.fromkeys(owners))
 
 
-async def _auth_candidates(user_id: str, platform: Platform) -> list[tuple[str, dict[str, Any]]]:
+async def _auth_candidates(
+    user_id: str, platform: Platform
+) -> list[tuple[str, dict[str, Any]]]:
     """获取可用登录账号候选。"""
-    owners = [user_id] if _login_mode() == "per_user" else _owners_with_platform(platform)
+    owners = (
+        [user_id] if _login_mode() == "per_user" else _owners_with_platform(platform)
+    )
     if _login_mode() == "shared" and user_id not in owners:
         owners.append(user_id)
 
@@ -457,7 +505,11 @@ async def _next_auth_account(
     ]
     if not candidates:
         return None
-    cursor_key = f"{_login_mode()}:{platform}" if _login_mode() == "shared" else f"{user_id}:{platform}"
+    cursor_key = (
+        f"{_login_mode()}:{platform}"
+        if _login_mode() == "shared"
+        else f"{user_id}:{platform}"
+    )
     index = _AUTH_POOL_CURSORS.get(cursor_key, 0) % len(candidates)
     _AUTH_POOL_CURSORS[cursor_key] = index + 1
     return candidates[index]
@@ -474,7 +526,9 @@ async def _send_login_text(bot: Bot, event: Event, text: str) -> None:
     await bot.send(event, build_message(bot, build_message_segment(bot, "text", text)))
 
 
-async def _music_api_get(path: str, params: dict[str, Any], allow_error_body: bool = False) -> dict[str, Any]:
+async def _music_api_get(
+    path: str, params: dict[str, Any], allow_error_body: bool = False
+) -> dict[str, Any]:
     """请求本地 music-api。"""
     url = f"{_music_api_base()}{path}"
     client = await get_shared_async_client()
@@ -514,12 +568,21 @@ async def _watch_login_status(
         for _ in range(60):
             await asyncio.sleep(2)
             bucket = await _get_login_session_data(owner, platform)
-            pending = next((item for item in bucket.get("pending", []) if item.get("id") == pending_id), None)
+            pending = next(
+                (
+                    item
+                    for item in bucket.get("pending", [])
+                    if item.get("id") == pending_id
+                ),
+                None,
+            )
             if not pending:
                 return
             login_token = str(pending.get("loginToken") or login_token)
             try:
-                data = await _music_api_get("/api/login/poll", {"provider": platform, "loginToken": login_token})
+                data = await _music_api_get(
+                    "/api/login/poll", {"provider": platform, "loginToken": login_token}
+                )
             except Exception as exc:
                 logger.debug(f"[musicshare] 自动检查音乐登录状态失败: {exc}")
                 continue
@@ -533,7 +596,9 @@ async def _watch_login_status(
                 await _add_auth_account(owner, platform, auth, data)
                 nickname = data.get("nickname")
                 suffix = f"：{nickname}" if nickname else ""
-                await _send_login_text(bot, event, f"{provider_name} 登录成功{suffix}，现在可以点歌了。")
+                await _send_login_text(
+                    bot, event, f"{provider_name} 登录成功{suffix}，现在可以点歌了。"
+                )
                 return
 
             next_token = str(data.get("loginToken") or "").strip()
@@ -543,7 +608,11 @@ async def _watch_login_status(
             status = str(data.get("status") or "pending")
             if status == "expired":
                 await _remove_pending_login(owner, platform, pending_id)
-                await _send_login_text(bot, event, f"{provider_name} 登录二维码已过期，请重新发送 #音乐登录{provider_hint}")
+                await _send_login_text(
+                    bot,
+                    event,
+                    f"{provider_name} 登录二维码已过期，请重新发送 #音乐登录{provider_hint}",
+                )
                 return
     except asyncio.CancelledError:
         raise
@@ -572,7 +641,6 @@ def _start_login_watcher(
     )
 
 
-
 def _quality_for_api(platform: Platform) -> str:
     """转换本地 music-api 音质参数。"""
     config = cfg_music()
@@ -580,7 +648,16 @@ def _quality_for_api(platform: Platform) -> str:
         qualities = ["m4a", "128", "320", "flac", "ape"]
         value = config["qq_quality"]
     else:
-        qualities = ["standard", "higher", "exhigh", "lossless", "hires", "jyeffect", "sky", "jymaster"]
+        qualities = [
+            "standard",
+            "higher",
+            "exhigh",
+            "lossless",
+            "hires",
+            "jyeffect",
+            "sky",
+            "jymaster",
+        ]
         value = config["netease_quality"]
     level = int(value)
     level = max(1, min(level, len(qualities)))
@@ -654,7 +731,9 @@ def _format_play_error(data: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
     return message, reason, detail
 
 
-async def _get_song_url_api(platform: Platform, song: Song, auth: str | None = None) -> str | None:
+async def _get_song_url_api(
+    platform: Platform, song: Song, auth: str | None = None
+) -> str | None:
     """通过本地 music-api 获取播放链接。"""
     token = auth or song.auth
     if not token:
@@ -680,11 +759,15 @@ async def _get_song_url_api(platform: Platform, song: Song, auth: str | None = N
         return str(url)
     if data.get("error") or data.get("reason") or data.get("detail"):
         message, reason, detail = _format_play_error(data)
-        raise MusicPlayUnavailable(message or "music-api 未返回播放链接", reason=reason, detail=detail)
+        raise MusicPlayUnavailable(
+            message or "music-api 未返回播放链接", reason=reason, detail=detail
+        )
     return None
 
 
-async def _search_songs_with_pool(user_id: str, platform: Platform, keyword: str) -> list[Song]:
+async def _search_songs_with_pool(
+    user_id: str, platform: Platform, keyword: str
+) -> list[Song]:
     """用登录账号池搜索歌曲。"""
     tried: set[str] = set()
     while True:
@@ -695,12 +778,16 @@ async def _search_songs_with_pool(user_id: str, platform: Platform, keyword: str
         auth = str(account.get("auth") or "")
         tried.add(auth)
         try:
-            return await _search_songs_api(platform, keyword, auth=auth, auth_owner=owner)
+            return await _search_songs_api(
+                platform, keyword, auth=auth, auth_owner=owner
+            )
         except MusicLoginRequired:
             await _remove_auth_account(owner, platform, auth)
 
 
-async def _get_song_url_with_pool(user_id: str, platform: Platform, song: Song) -> str | None:
+async def _get_song_url_with_pool(
+    user_id: str, platform: Platform, song: Song
+) -> str | None:
     """用登录账号池获取播放链接。"""
     tried: set[str] = set()
     last_play_error: MusicPlayUnavailable | None = None
@@ -780,8 +867,12 @@ def _draw_music_list(platform: Platform, keyword: str, songs: list[Song]) -> byt
     draw = ImageDraw.Draw(image)
     draw.rectangle([(0, 0), (width, header_h)], fill=header_color)
     draw_text_with_fallback(
-        draw, (padding, 25), f"搜索结果: {keyword}",
-        primary=font_title_fb[0], fallback=font_title_fb[1], fill=(255, 255, 255),
+        draw,
+        (padding, 25),
+        f"搜索结果: {keyword}",
+        primary=font_title_fb[0],
+        fallback=font_title_fb[1],
+        fill=(255, 255, 255),
     )
     draw.text(
         (padding, 75),
@@ -796,7 +887,9 @@ def _draw_music_list(platform: Platform, keyword: str, songs: list[Song]) -> byt
         col = index % columns
         x = padding + col * (col_w + gap_x)
         y = start_y + row * (card_h + gap_y)
-        draw.rounded_rectangle([(x, y), (x + col_w, y + card_h)], radius=8, fill=card_bg)
+        draw.rounded_rectangle(
+            [(x, y), (x + col_w, y + card_h)], radius=8, fill=card_bg
+        )
 
         badge_size = 36
         bx = x + 15
@@ -805,7 +898,10 @@ def _draw_music_list(platform: Platform, keyword: str, songs: list[Song]) -> byt
         idx_str = str(index + 1)
         bbox = draw.textbbox((0, 0), idx_str, font=font_badge)
         draw.text(
-            (bx + (badge_size - (bbox[2] - bbox[0])) / 2, by + (badge_size - (bbox[3] - bbox[1])) / 2 - 2),
+            (
+                bx + (badge_size - (bbox[2] - bbox[0])) / 2,
+                by + (badge_size - (bbox[3] - bbox[1])) / 2 - 2,
+            ),
             idx_str,
             fill=accent,
             font=font_badge,
@@ -814,20 +910,36 @@ def _draw_music_list(platform: Platform, keyword: str, songs: list[Song]) -> byt
         text_x = bx + badge_size + 15
         content_w = col_w - (text_x - x) - 10
         song_name = truncate_text_with_fallback(
-            song.song, content_w, primary=font_song_fb[0], fallback=font_song_fb[1],
+            song.song,
+            content_w,
+            primary=font_song_fb[0],
+            fallback=font_song_fb[1],
         )
         draw_text_with_fallback(
-            draw, (text_x, y + 12), song_name, primary=font_song_fb[0], fallback=font_song_fb[1],
+            draw,
+            (text_x, y + 12),
+            song_name,
+            primary=font_song_fb[0],
+            fallback=font_song_fb[1],
             fill=text_main,
         )
         draw_text_with_fallback(
-            draw, (text_x, y + 42), song.singer, primary=font_artist_fb[0], fallback=font_artist_fb[1],
+            draw,
+            (text_x, y + 42),
+            song.singer,
+            primary=font_artist_fb[0],
+            fallback=font_artist_fb[1],
             fill=text_sub,
         )
 
     footer = "发送 #序号 (如 #1) 即可播放"
     bbox = draw.textbbox((0, 0), footer, font=font_footer)
-    draw.text(((width - (bbox[2] - bbox[0])) / 2, height - 30), footer, fill=(150, 150, 150), font=font_footer)
+    draw.text(
+        ((width - (bbox[2] - bbox[0])) / 2, height - 30),
+        footer,
+        fill=(150, 150, 150),
+        font=font_footer,
+    )
 
     buffer = io.BytesIO()
     image.save(buffer, format="PNG")
@@ -875,7 +987,9 @@ select_matcher = P.on_regex(
 
 
 @login_matcher.handle()
-async def _handle_login(matcher: Matcher, bot: Bot, event: Event, groups: tuple = RegexGroup()) -> None:
+async def _handle_login(
+    matcher: Matcher, bot: Bot, event: Event, groups: tuple = RegexGroup()
+) -> None:
     """创建 music-api 登录二维码。"""
     user_id = _uid(event)
     if not user_id:
@@ -916,7 +1030,9 @@ async def _handle_login(matcher: Matcher, bot: Bot, event: Event, groups: tuple 
 
 
 @login_poll_matcher.handle()
-async def _handle_login_poll(matcher: Matcher, event: Event, groups: tuple = RegexGroup()) -> None:
+async def _handle_login_poll(
+    matcher: Matcher, event: Event, groups: tuple = RegexGroup()
+) -> None:
     """手动检查 music-api 登录状态。"""
     user_id = _uid(event)
     if not user_id:
@@ -927,8 +1043,12 @@ async def _handle_login_poll(matcher: Matcher, event: Event, groups: tuple = Reg
     if not bucket.get("pending"):
         account_count = len(bucket.get("accounts", []))
         if account_count:
-            await matcher.finish(f"{_platform_name_cn(platform)} 已登录 {account_count} 个账号。")
-        await matcher.finish(f"还没有待确认的 {_platform_name_cn(platform)} 登录二维码，请先发送 #音乐登录{provider_hint}")
+            await matcher.finish(
+                f"{_platform_name_cn(platform)} 已登录 {account_count} 个账号。"
+            )
+        await matcher.finish(
+            f"还没有待确认的 {_platform_name_cn(platform)} 登录二维码，请先发送 #音乐登录{provider_hint}"
+        )
 
     scanned = False
     errors: list[str] = []
@@ -938,7 +1058,9 @@ async def _handle_login_poll(matcher: Matcher, event: Event, groups: tuple = Reg
         if not pending_id or not login_token:
             continue
         try:
-            data = await _music_api_get("/api/login/poll", {"provider": platform, "loginToken": login_token})
+            data = await _music_api_get(
+                "/api/login/poll", {"provider": platform, "loginToken": login_token}
+            )
         except Exception as exc:
             logger.opt(exception=True).warning("[musicshare] 轮询音乐登录状态失败")
             errors.append(str(exc))
@@ -964,14 +1086,18 @@ async def _handle_login_poll(matcher: Matcher, event: Event, groups: tuple = Reg
             scanned = True
 
     if scanned:
-        await matcher.finish(f"{_platform_name_cn(platform)} 已扫码，请在手机上确认登录。")
+        await matcher.finish(
+            f"{_platform_name_cn(platform)} 已扫码，请在手机上确认登录。"
+        )
     if errors:
         await matcher.finish(f"检查登录状态失败: {errors[-1]}")
     await matcher.finish(f"{_platform_name_cn(platform)} 尚未登录，请扫码后再试。")
 
 
 @search_matcher.handle()
-async def _handle_search(matcher: Matcher, bot: Bot, event: Event, groups: tuple = RegexGroup()) -> None:
+async def _handle_search(
+    matcher: Matcher, bot: Bot, event: Event, groups: tuple = RegexGroup()
+) -> None:
     """搜索歌曲。"""
     alias = str(groups[0] or "") if groups else ""
     keyword = str(groups[1] or "").strip() if groups and len(groups) > 1 else ""
@@ -998,7 +1124,9 @@ async def _handle_search(matcher: Matcher, bot: Bot, event: Event, groups: tuple
 
 
 @select_matcher.handle()
-async def _handle_select(matcher: Matcher, bot: Bot, event: Event, state: T_State) -> None:
+async def _handle_select(
+    matcher: Matcher, bot: Bot, event: Event, state: T_State
+) -> None:
     """播放搜索结果中的歌曲。"""
     user_id = _uid(event)
     item = _music_cache.get(user_id)
@@ -1019,7 +1147,9 @@ async def _handle_select(matcher: Matcher, bot: Bot, event: Event, state: T_Stat
     except MusicLoginRequired:
         await matcher.finish(_login_hint(platform))
     except MusicPlayUnavailable as exc:
-        logger.error(f"[musicshare] 无法播放音乐: {song.song}, 平台: {platform}, 错误: {exc.log_text()}")
+        logger.error(
+            f"[musicshare] 无法播放音乐: {song.song}, 平台: {platform}, 错误: {exc.log_text()}"
+        )
         await matcher.finish(f"播放失败：{song.song} - {song.singer}\n{exc}")
     if not audio_url:
         logger.error(f"[musicshare] 无法获取播放链接: {song.song}, 平台: {platform}")

@@ -62,7 +62,11 @@ def _current_round() -> tuple[int, str, str]:
             hours = int(left.total_seconds() // 3600)
             minutes = int((left.total_seconds() % 3600) // 60)
             label = f"{hours}时{minutes}分" if hours else f"{minutes}分"
-            return round_no, label, f"{end_hour + 1:02d}:00" if end_hour < 23 else "次日 08:00"
+            return (
+                round_no,
+                label,
+                f"{end_hour + 1:02d}:00" if end_hour < 23 else "次日 08:00",
+            )
     return 0, "未刷新", "08:00"
 
 
@@ -71,7 +75,9 @@ def _guess_image(name: str) -> str:
     return ""
 
 
-def _product_from_mapping(item: dict[str, Any], starttime: str = "", endtime: str = "") -> MerchantProduct | None:
+def _product_from_mapping(
+    item: dict[str, Any], starttime: str = "", endtime: str = ""
+) -> MerchantProduct | None:
     """将页面商品对象转换为内部商品结构。"""
     name = str(item.get("name") or "").strip()
     if not name:
@@ -94,14 +100,23 @@ def _product_from_mapping(item: dict[str, Any], starttime: str = "", endtime: st
 
 def _round_window(round_no: int | None) -> tuple[str, str]:
     """返回轮次起止时间。"""
-    windows = {1: ("08:00", "12:00"), 2: ("12:00", "16:00"), 3: ("16:00", "20:00"), 4: ("20:00", "24:00")}
+    windows = {
+        1: ("08:00", "12:00"),
+        2: ("12:00", "16:00"),
+        3: ("16:00", "20:00"),
+        4: ("20:00", "24:00"),
+    }
     return windows.get(round_no or 0, ("", ""))
 
 
-def _snapshot_signature(status: str, round_no: int | None, started_at: str, products: list[MerchantProduct]) -> str:
+def _snapshot_signature(
+    status: str, round_no: int | None, started_at: str, products: list[MerchantProduct]
+) -> str:
     """生成只反映当前营业状态和商品内容的稳定签名。"""
     product_labels = [f"{item.name}|{item.detail}|{item.image}" for item in products]
-    signature_seed = "\n".join([status, str(round_no or ""), started_at, "\n".join(product_labels)])
+    signature_seed = "\n".join(
+        [status, str(round_no or ""), started_at, "\n".join(product_labels)]
+    )
     return hashlib.sha256(signature_seed.encode("utf-8", errors="ignore")).hexdigest()
 
 
@@ -136,7 +151,9 @@ def parse_merchant_json(source_url: str, data: dict[str, Any]) -> MerchantSnapsh
     started_at = str(data.get("startedAtBeijing") or "").strip()
     next_refresh = str(data.get("nextRefreshBeijing") or fallback_next).strip()
     updated_at = _parse_iso_time(str(data.get("fetchedAt") or "").strip())
-    signature = _snapshot_signature(status or ("open" if products else "closed"), round_no, started_at, products)
+    signature = _snapshot_signature(
+        status or ("open" if products else "closed"), round_no, started_at, products
+    )
 
     return MerchantSnapshot(
         source_url=source_url,

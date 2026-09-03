@@ -5,13 +5,19 @@ from __future__ import annotations
 from nonebot.adapters import Bot, Event
 from nonebot.matcher import Matcher
 
+from ...adapter import build_message, build_message_segment
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
-from ...adapter import build_message, build_message_segment
 from ...utils.http import get_shared_async_client
 from .config import cfg_api_urls
 
-P = Plugin("entertain", display_name="娱乐", enabled=True, level=PermLevel.LOW, scene=PermScene.ALL)
+P = Plugin(
+    "entertain",
+    display_name="娱乐",
+    enabled=True,
+    level=PermLevel.LOW,
+    scene=PermScene.ALL,
+)
 
 sick_cmd = P.on_regex(
     r"^(?:#|＃|/)?发病语录",
@@ -39,7 +45,11 @@ async def _handle_sick(matcher: Matcher, bot: Bot, event: Event) -> None:
         await matcher.finish("获取发病语录失败，请稍后重试")
 
     text = str(data.get("message") or data.get("msg") or "")
-    user_id = event.get_user_id() if hasattr(event, "get_user_id") else getattr(event, "user_id", None)
+    user_id = (
+        event.get_user_id()
+        if hasattr(event, "get_user_id")
+        else getattr(event, "user_id", None)
+    )
     await matcher.finish(
         build_message(
             bot,

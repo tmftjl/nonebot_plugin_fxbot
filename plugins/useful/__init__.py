@@ -13,7 +13,13 @@ from . import cos_upload as cos_upload
 from . import dps_chart as dps_chart
 from . import waves_analyze as waves_analyze
 
-P = Plugin("useful", display_name="实用工具", enabled=True, level=PermLevel.LOW, scene=PermScene.ALL)
+P = Plugin(
+    "useful",
+    display_name="实用工具",
+    enabled=True,
+    level=PermLevel.LOW,
+    scene=PermScene.ALL,
+)
 
 
 def _fmt_bytes(value: Any) -> str:
@@ -32,6 +38,7 @@ def _fmt_bytes(value: Any) -> str:
         unit_index += 1
     return f"{size:.2f} {units[unit_index]}"
 
+
 panel_refresh_cmd = P.on_regex(
     r"^ww(?:刷新|更新)?面板(?:刷新)?",
     name="refresh",
@@ -41,6 +48,7 @@ panel_refresh_cmd = P.on_regex(
     level=PermLevel.LOW,
     scene=PermScene.ALL,
 )
+
 
 @panel_refresh_cmd.handle()
 async def _handle_panel_refresh(matcher: Matcher) -> None:

@@ -24,6 +24,7 @@ from .exception import (
     TextOverLength,
 )
 
+
 def _base_url() -> str:
     """读取表情生成服务地址。"""
     return cfg_base_url()

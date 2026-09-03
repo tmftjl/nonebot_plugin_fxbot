@@ -48,7 +48,10 @@ class MemeManager:
         disabled_list = set(cfg_disabled_list())
         self.__meme_dict = {
             meme_key: await get_meme_info(meme_key)
-            for meme_key in filter(lambda meme_key: meme_key not in disabled_list, sorted(await get_meme_keys()))
+            for meme_key in filter(
+                lambda meme_key: meme_key not in disabled_list,
+                sorted(await get_meme_keys()),
+            )
         }
         self.__load()
         self.__dump()

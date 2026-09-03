@@ -10,9 +10,9 @@ from nonebot.matcher import Matcher
 from nonebot.params import RegexGroup
 from PIL import Image, ImageDraw
 
+from ...adapter import build_message, build_message_segment
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
-from ...adapter import build_message, build_message_segment
 from ...utils.fonts import get_shared_font_path, load_font
 from .config import HelpConfigRef, load_help_config, resolve_help_config
 
@@ -21,7 +21,9 @@ try:
 except Exception:  # pragma: no cover
     render_help_image = None
 
-P = Plugin("help", display_name="帮助", enabled=True, level=PermLevel.LOW, scene=PermScene.ALL)
+P = Plugin(
+    "help", display_name="帮助", enabled=True, level=PermLevel.LOW, scene=PermScene.ALL
+)
 
 help_cmd = P.on_regex(
     r"^(?:#|＃|/)(.*?)帮助$",
@@ -50,7 +52,9 @@ def _asset_path(config: dict[str, Any], field: str) -> Path | None:
     return path if path.is_file() else None
 
 
-def _fallback_image(title: str, sub_title: str, groups_data: list[dict[str, Any]]) -> bytes:
+def _fallback_image(
+    title: str, sub_title: str, groups_data: list[dict[str, Any]]
+) -> bytes:
     """帮助图兜底渲染。"""
     text = f"{title}\n{sub_title}\n\n" + "\n".join(
         f"【{group.get('group', '')}】 "
@@ -75,7 +79,9 @@ def _fallback_image(title: str, sub_title: str, groups_data: list[dict[str, Any]
 
 
 @help_cmd.handle()
-async def _handle_help(matcher: Matcher, bot: Bot, groups: tuple = RegexGroup()) -> None:
+async def _handle_help(
+    matcher: Matcher, bot: Bot, groups: tuple = RegexGroup()
+) -> None:
     """发送旧版排版帮助图。"""
     keyword = str(groups[0]).strip() if groups and groups[0] else None
     resolved_ref = _resolve_config_ref(keyword)
@@ -98,10 +104,20 @@ async def _handle_help(matcher: Matcher, bot: Bot, groups: tuple = RegexGroup())
     cfg_path = Path(str(config.get("_config_path") or ""))
 
     try:
-        code_files = [Path(__file__), Path(__file__).parent / "renderer.py", Path(__file__).parent / "config.py"]
+        code_files = [
+            Path(__file__),
+            Path(__file__).parent / "renderer.py",
+            Path(__file__).parent / "config.py",
+        ]
         asset_files = [path for path in [background, icon] if path is not None]
-        mtimes = [path.stat().st_mtime for path in [*code_files, cfg_path, *asset_files] if path.exists()]
-        cache_valid = cache_file.exists() and cache_file.stat().st_mtime >= max(mtimes, default=0)
+        mtimes = [
+            path.stat().st_mtime
+            for path in [*code_files, cfg_path, *asset_files]
+            if path.exists()
+        ]
+        cache_valid = cache_file.exists() and cache_file.stat().st_mtime >= max(
+            mtimes, default=0
+        )
     except Exception:
         cache_valid = False
 
@@ -121,4 +137,6 @@ async def _handle_help(matcher: Matcher, bot: Bot, groups: tuple = RegexGroup())
     if not image_bytes:
         image_bytes = _fallback_image(title, sub_title, groups_data)
 
-    await matcher.finish(build_message(bot, build_message_segment(bot, "image", image_bytes)))
+    await matcher.finish(
+        build_message(bot, build_message_segment(bot, "image", image_bytes))
+    )

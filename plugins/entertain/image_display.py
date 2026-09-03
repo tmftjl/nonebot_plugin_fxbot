@@ -5,17 +5,23 @@ from __future__ import annotations
 import random
 from typing import Any
 
-from nonebot.adapters import Event
 from nonebot import get_driver, logger
+from nonebot.adapters import Event
 from nonebot.matcher import Matcher
 
+from ...adapter import get_onebot_v11_message_segment_class
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
-from ...adapter import get_onebot_v11_message_segment_class
 from ...utils.http import get_shared_async_client
 from .config import cfg_image_display, get_config, save_config
 
-P = Plugin("entertain", display_name="娱乐", enabled=True, level=PermLevel.LOW, scene=PermScene.ALL)
+P = Plugin(
+    "entertain",
+    display_name="娱乐",
+    enabled=True,
+    level=PermLevel.LOW,
+    scene=PermScene.ALL,
+)
 
 _hitokoto_cache = "Ciallo~"
 _original_image: Any = None

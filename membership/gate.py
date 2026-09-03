@@ -13,10 +13,11 @@ from nonebot.message import event_preprocessor
 
 from ..config import get_manager as get_config_manager
 from ..message_policy import should_process_fxbot_message
-
 from .guard import membership_guard
 
-_RENEW_COMMAND_RE = re.compile(r"^(?:ww到期|ww(?:拉群|续费)|ww续费\d+(?:天|月|年)-[A-Za-z0-9_]+)$")
+_RENEW_COMMAND_RE = re.compile(
+    r"^(?:ww到期|ww(?:拉群|续费)|ww续费\d+(?:天|月|年)-[A-Za-z0-9_]+)$"
+)
 _PROMPTED_EVENT_IDS: set[int] = set()
 _PROMPTED_EVENT_ORDER: deque[int] = deque(maxlen=1024)
 
@@ -75,7 +76,11 @@ def _free_bot_ids() -> set[str]:
     membership_cfg = cfg["membership"]
     value = membership_cfg["free_bot_ids"]
     if isinstance(value, (list, tuple, set)):
-        return {str(item).strip() for item in value if item is not None and str(item).strip()}
+        return {
+            str(item).strip()
+            for item in value
+            if item is not None and str(item).strip()
+        }
     return set()
 
 
@@ -84,7 +89,11 @@ def _expire_prompt_text_prefixes() -> tuple[str, ...]:
     cfg = get_config_manager().get_system()
     value = cfg["membership"]["expire_prompt_text_prefixes"]
     if isinstance(value, (list, tuple, set)):
-        return tuple(str(item).strip() for item in value if item is not None and str(item).strip())
+        return tuple(
+            str(item).strip()
+            for item in value
+            if item is not None and str(item).strip()
+        )
     return ()
 
 
@@ -130,7 +139,9 @@ def _expiring_prompt(days: int, expires_at: datetime) -> str:
     if days <= 0:
         message = f"本群会员今天到期，到期时间：{expires_text}，请及时续费。"
     else:
-        message = f"本群会员将在 {days} 天后到期，到期时间：{expires_text}，请及时续费。"
+        message = (
+            f"本群会员将在 {days} 天后到期，到期时间：{expires_text}，请及时续费。"
+        )
     if contact:
         message += f"\n{contact}"
     return message

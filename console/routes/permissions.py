@@ -9,7 +9,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from ...permission import get_storage
 from ..auth import bearer_auth
 
-router = APIRouter(prefix="/permissions", tags=["fxbot-permissions"], dependencies=[Depends(bearer_auth)])
+router = APIRouter(
+    prefix="/permissions",
+    tags=["fxbot-permissions"],
+    dependencies=[Depends(bearer_auth)],
+)
 
 
 @router.get("")

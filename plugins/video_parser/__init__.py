@@ -19,7 +19,13 @@ __plugin_meta__ = PluginMetadata(
     type="application",
 )
 
-P = Plugin("video_parser", display_name="视频解析", enabled=True, level=PermLevel.LOW, scene=PermScene.ALL)
+P = Plugin(
+    "video_parser",
+    display_name="视频解析",
+    enabled=True,
+    level=PermLevel.LOW,
+    scene=PermScene.ALL,
+)
 
 from . import config as config
 from . import matcher as matcher

@@ -80,11 +80,17 @@ def _match_enabled_platform(url: str) -> str | None:
     platforms = cfg_platforms()
     lower = url.lower()
 
-    if platforms.get("douyin", True) and ("douyin.com" in lower or "iesdouyin.com" in lower):
+    if platforms.get("douyin", True) and (
+        "douyin.com" in lower or "iesdouyin.com" in lower
+    ):
         return "douyin"
-    if platforms.get("kuaishou", True) and ("kuaishou.com" in lower or "chenzhongtech.com" in lower):
+    if platforms.get("kuaishou", True) and (
+        "kuaishou.com" in lower or "chenzhongtech.com" in lower
+    ):
         return "kuaishou"
-    if platforms.get("xiaohongshu", True) and ("xiaohongshu.com" in lower or "xhslink.com" in lower):
+    if platforms.get("xiaohongshu", True) and (
+        "xiaohongshu.com" in lower or "xhslink.com" in lower
+    ):
         return "xiaohongshu"
     if platforms.get("weibo", True) and ("weibo.com" in lower or "weibo.cn" in lower):
         return "weibo"

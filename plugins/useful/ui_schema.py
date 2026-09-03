@@ -22,8 +22,20 @@ def get_ui_schema() -> dict[str, Any]:
                 "key": "useful.waves_analyze",
                 "title": "鸣潮评分",
                 "schemas": [
-                    {"field": "api_url", "label": "接口地址", "component": "Input", "default": DEFAULTS["waves_analyze"]["api_url"], "helpMessage": "鸣潮评分服务地址。"},
-                    {"field": "token", "label": "Token", "component": "InputPassword", "default": DEFAULTS["waves_analyze"]["token"], "helpMessage": "评分服务的鉴权令牌。"},
+                    {
+                        "field": "api_url",
+                        "label": "接口地址",
+                        "component": "Input",
+                        "default": DEFAULTS["waves_analyze"]["api_url"],
+                        "helpMessage": "鸣潮评分服务地址。",
+                    },
+                    {
+                        "field": "token",
+                        "label": "Token",
+                        "component": "InputPassword",
+                        "default": DEFAULTS["waves_analyze"]["token"],
+                        "helpMessage": "评分服务的鉴权令牌。",
+                    },
                 ],
             },
         ],

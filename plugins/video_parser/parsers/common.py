@@ -43,9 +43,16 @@ def proxy() -> str | None:
     return value or None
 
 
-async def get_text(url: str, *, headers: dict[str, str] | None = None, follow_redirects: bool = True) -> str:
+async def get_text(
+    url: str, *, headers: dict[str, str] | None = None, follow_redirects: bool = True
+) -> str:
     """请求文本内容。"""
-    async with httpx.AsyncClient(timeout=timeout(), proxy=proxy(), follow_redirects=follow_redirects, verify=False) as client:
+    async with httpx.AsyncClient(
+        timeout=timeout(),
+        proxy=proxy(),
+        follow_redirects=follow_redirects,
+        verify=False,
+    ) as client:
         response = await client.get(url, headers=headers or COMMON_HEADERS)
         response.raise_for_status()
         return response.text
@@ -53,7 +60,9 @@ async def get_text(url: str, *, headers: dict[str, str] | None = None, follow_re
 
 async def final_url(url: str, *, headers: dict[str, str] | None = None) -> str:
     """获取最终跳转地址。"""
-    async with httpx.AsyncClient(timeout=timeout(), proxy=proxy(), follow_redirects=True, verify=False) as client:
+    async with httpx.AsyncClient(
+        timeout=timeout(), proxy=proxy(), follow_redirects=True, verify=False
+    ) as client:
         response = await client.get(url, headers=headers or COMMON_HEADERS)
         response.raise_for_status()
         return str(response.url)
@@ -61,7 +70,9 @@ async def final_url(url: str, *, headers: dict[str, str] | None = None) -> str:
 
 async def redirect_url(url: str, *, headers: dict[str, str] | None = None) -> str:
     """获取单次跳转地址。"""
-    async with httpx.AsyncClient(timeout=timeout(), proxy=proxy(), follow_redirects=False, verify=False) as client:
+    async with httpx.AsyncClient(
+        timeout=timeout(), proxy=proxy(), follow_redirects=False, verify=False
+    ) as client:
         response = await client.get(url, headers=headers or COMMON_HEADERS)
         if response.status_code >= 400:
             response.raise_for_status()

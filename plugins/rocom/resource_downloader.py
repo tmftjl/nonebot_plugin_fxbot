@@ -66,7 +66,9 @@ async def ensure_rocom_resources(force: bool = False) -> None:
         logger.info(f"[rocom] 使用资源站 {tag} {base_url} 下载运行时资源")
         total = 0
         for endpoint, target in ENDPOINTS.items():
-            changed = await _download_endpoint(client, base_url, endpoint, target, int(cfg.get("concurrency") or 12))
+            changed = await _download_endpoint(
+                client, base_url, endpoint, target, int(cfg.get("concurrency") or 12)
+            )
             total += changed
             logger.info(f"[rocom] 资源 {endpoint} 检查完成，更新 {changed} 个文件")
         logger.info(f"[rocom] 运行时资源检查完成，更新 {total} 个文件")
@@ -76,7 +78,9 @@ async def _choose_base_url(configured: str) -> tuple[str, str]:
     """选择可用资源站。"""
     client = await get_shared_async_client()
     candidates = [("[Config]", configured)] if configured else DEFAULT_URLS
-    tasks = [asyncio.create_task(_probe(client, tag, url)) for tag, url in candidates if url]
+    tasks = [
+        asyncio.create_task(_probe(client, tag, url)) for tag, url in candidates if url
+    ]
     try:
         for task in asyncio.as_completed(tasks):
             result = await task
@@ -101,7 +105,9 @@ async def _probe(client, tag: str, base_url: str) -> tuple[str, str] | None:
     return None
 
 
-async def _download_endpoint(client, base_url: str, endpoint: str, target: Path, concurrency: int) -> int:
+async def _download_endpoint(
+    client, base_url: str, endpoint: str, target: Path, concurrency: int
+) -> int:
     """递归下载目录索引中的文件。"""
     url = f"{base_url.rstrip('/')}/RocomUID/{endpoint.strip('/')}/"
     target.mkdir(parents=True, exist_ok=True)
@@ -117,7 +123,13 @@ async def _download_endpoint(client, base_url: str, endpoint: str, target: Path,
         file_url = urljoin(url, href)
         name = unquote(file_url.rstrip("/").split("/")[-1])
         if href.endswith("/"):
-            changed += await _download_endpoint(client, base_url, f"{endpoint.rstrip('/')}/{href.strip('/')}", target / name, concurrency)
+            changed += await _download_endpoint(
+                client,
+                base_url,
+                f"{endpoint.rstrip('/')}/{href.strip('/')}",
+                target / name,
+                concurrency,
+            )
         else:
             tasks.append(_download_file(client, file_url, target / name, semaphore))
     if tasks:
@@ -127,10 +139,16 @@ async def _download_endpoint(client, base_url: str, endpoint: str, target: Path,
 
 def _parse_links(html: str) -> list[str]:
     """解析资源站目录页链接。"""
-    return [item for item in re.findall(r"""<a\s+href=["']([^"']+)["']""", html, flags=re.I) if item and not item.startswith("?")]
+    return [
+        item
+        for item in re.findall(r"""<a\s+href=["']([^"']+)["']""", html, flags=re.I)
+        if item and not item.startswith("?")
+    ]
 
 
-async def _download_file(client, url: str, path: Path, semaphore: asyncio.Semaphore) -> int:
+async def _download_file(
+    client, url: str, path: Path, semaphore: asyncio.Semaphore
+) -> int:
     async with semaphore:
         response = await client.get(url, timeout=120.0, follow_redirects=True)
         response.raise_for_status()

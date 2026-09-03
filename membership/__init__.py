@@ -2,7 +2,12 @@
 
 from .guard import MembershipDecision, MembershipGuard, membership_guard
 from .models import MembershipGroup, RenewCode, RenewRecord
-from .service import MembershipError, MembershipService, RedeemResult, membership_service
+from .service import (
+    MembershipError,
+    MembershipService,
+    RedeemResult,
+    membership_service,
+)
 
 __all__ = [
     "MembershipDecision",

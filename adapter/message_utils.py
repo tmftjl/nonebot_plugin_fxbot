@@ -2,115 +2,73 @@
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
+import base64
 from pathlib import Path
 from re import Match, Pattern
 from typing import Any
 
 from nonebot.adapters import Bot, Event
 
-from .support import adapter_name, extract_message_target, is_onebot_v11, is_qq_official
+from .bot import current_bot
+from .events import event_message_type, extract_message_target
+from .interfaces import PlatformAdapter
+from .registry import adapter_name, get_platform_adapter, register_adapter
 
-MENTION_SEGMENT_TYPES = {"at", "mention", "mention_user"}
-MENTION_TARGET_KEYS = ("qq", "user_id", "id", "target")
+MessageAdapter = PlatformAdapter
+register_message_adapter = register_adapter
+get_message_adapter = lambda bot: get_platform_adapter(bot)
+require_message_adapter = get_platform_adapter
 
 
-class MessageAdapter(ABC):
-    """平台消息适配器。"""
-
-    @abstractmethod
-    def match(self, bot: Bot) -> bool:
-        """判断当前适配器是否支持该 Bot。"""
-
-    @abstractmethod
-    def build_segment(self, bot: Bot, seg_type: str, data: Any = None) -> Any:
-        """构造平台消息段。"""
-
-    @abstractmethod
-    def build_message(self, bot: Bot, segments: list[Any]) -> Any:
-        """构造平台消息对象。"""
-
-    @abstractmethod
-    async def send_message_to_target(self, bot: Bot, target: dict[str, Any], message: Any) -> Any:
-        """向持久化目标发送消息。"""
-
-    async def send_text_to_target(self, bot: Bot, target: dict[str, Any], text: str) -> Any:
-        """向持久化目标发送文本消息。"""
-        message = self.build_message(bot, [self.build_segment(bot, "text", text)])
-        return await self.send_message_to_target(bot, target, message)
-
-    async def send_forward_messages(self, bot: Bot, event: Event, messages: list[Any], *, nickname: str = "FxBot") -> bool:
-        """发送一组转发消息。"""
-        return False
-
-    def extract_image_sources(self, message: Any) -> list[str]:
-        """从消息对象中提取图片来源。"""
+async def fetch_image_bytes(src: str | bytes) -> bytes | None:
+    if isinstance(src, bytes):
+        return src
+    value = str(src or "").strip()
+    if not value:
+        return None
+    if value.startswith("base64://"):
         try:
-            iterable = list(message)
+            return base64.b64decode(value[9:])
         except Exception:
-            iterable = []
-        sources: list[str] = []
-        for segment in iterable:
-            if getattr(segment, "type", "") != "image":
-                continue
-            data = getattr(segment, "data", {}) or {}
-            source = data.get("url") or data.get("file")
-            if isinstance(source, str) and source and not source.startswith("base64://"):
-                sources.append(source)
+            return None
+    if value.startswith(("http://", "https://")):
+        try:
+            from ..utils.http import get_shared_async_client
+
+            response = await (await get_shared_async_client()).get(
+                value, follow_redirects=True
+            )
+            response.raise_for_status()
+            return response.content
+        except Exception:
+            return None
+    try:
+        return Path(value).read_bytes()
+    except Exception:
+        return None
+
+
+async def image_sources_from_event_or_reply(
+    bot: Bot, event: Event
+) -> list[str | bytes]:
+    message = event_message(event)
+    sources = extract_raw_image_sources(message)
+    if sources:
         return sources
-
-    def extract_reply_message_id(self, message: Any) -> int | None:
-        """从消息对象中提取回复消息 ID。"""
-        try:
-            iterable = list(message)
-        except Exception:
-            iterable = []
-        for segment in iterable:
-            if getattr(segment, "type", "") != "reply":
-                continue
-            value = (getattr(segment, "data", {}) or {}).get("id")
-            if value is None:
-                continue
-            try:
-                return int(value)
-            except Exception:
-                return None
-        return None
-
-    async def get_replied_message(self, bot: Bot, message_id: int) -> Any:
-        """通过适配器 API 获取被回复消息。"""
-        if hasattr(bot, "get_msg"):
-            result = await bot.get_msg(message_id=message_id)
-        else:
-            result = await bot.call_api("get_msg", message_id=message_id)
-        if isinstance(result, dict):
-            return result.get("message")
-        return None
-
-
-_adapters: list[MessageAdapter] = []
-
-
-def register_message_adapter(adapter: MessageAdapter | type[MessageAdapter]) -> MessageAdapter | type[MessageAdapter]:
-    """注册消息适配器。"""
-    _adapters.append(adapter() if isinstance(adapter, type) else adapter)
-    return adapter
-
-
-def get_message_adapter(bot: Bot) -> MessageAdapter | None:
-    """获取当前 Bot 对应的消息适配器。"""
-    for adapter in _adapters:
-        if adapter.match(bot):
-            return adapter
-    return None
-
-
-def require_message_adapter(bot: Bot) -> MessageAdapter:
-    """获取消息适配器，不支持时抛出明确错误。"""
-    adapter = get_message_adapter(bot)
-    if adapter:
-        return adapter
-    raise ValueError(f"未支持的适配器：{adapter_name(bot)}")
+    reply = getattr(event, "reply", None)
+    sources = extract_raw_image_sources(
+        getattr(reply, "message", None) if reply else None
+    )
+    if sources:
+        return sources
+    reply_id = extract_reply_message_id(message)
+    if reply_id is None:
+        return []
+    try:
+        replied = await get_replied_message(bot, reply_id)
+    except Exception:
+        return []
+    return extract_raw_image_sources(replied)
 
 
 def get_onebot_v11_message_segment_class():
@@ -205,41 +163,6 @@ def is_text_segment(segment: Any) -> bool:
     return False
 
 
-def is_mention_segment(segment: Any) -> bool:
-    """判断消息段是否为用户 @。"""
-    return segment_type(segment) in MENTION_SEGMENT_TYPES
-
-
-def mention_target(segment: Any) -> str | None:
-    """提取 @ 消息段中的用户 ID。"""
-    if not is_mention_segment(segment):
-        return None
-    data = segment_data(segment)
-    for key in MENTION_TARGET_KEYS:
-        value = data.get(key)
-        text = str(value or "").strip()
-        if text and text != "all":
-            return text
-    return None
-
-
-def mention_targets(message: Any, *, ignored_targets: set[str] | None = None) -> list[str]:
-    """提取消息中的所有 @ 用户 ID。"""
-    ignored = {str(item) for item in ignored_targets or set()}
-    targets: list[str] = []
-    for segment in iter_message_segments(message):
-        target = mention_target(segment)
-        if target and target not in ignored:
-            targets.append(target)
-    return targets
-
-
-def first_mention_target(message: Any, *, ignored_targets: set[str] | None = None) -> str | None:
-    """提取消息中的第一个 @ 用户 ID。"""
-    targets = mention_targets(message, ignored_targets=ignored_targets)
-    return targets[0] if targets else None
-
-
 def _make_text_segments(message: Any, original_segment: Any, text: str) -> list[Any]:
     """用当前消息类型重新构造文本段。"""
     if isinstance(original_segment, str):
@@ -286,7 +209,11 @@ def _replace_message_segments(message: Any, segments: list[Any]) -> bool:
 
 def move_non_text_segments_to_end(value: Any) -> bool:
     """清理文本边界空白，并把所有非文本消息段后置。"""
-    message = event_message(value) if hasattr(value, "get_message") or hasattr(value, "message") else value
+    message = (
+        event_message(value)
+        if hasattr(value, "get_message") or hasattr(value, "message")
+        else value
+    )
     if message is None:
         return False
 
@@ -297,7 +224,10 @@ def move_non_text_segments_to_end(value: Any) -> bool:
     if not segments:
         return False
 
-    first_text_index = next((index for index, segment in enumerate(segments) if is_text_segment(segment)), None)
+    first_text_index = next(
+        (index for index, segment in enumerate(segments) if is_text_segment(segment)),
+        None,
+    )
     if first_text_index is None:
         return False
 
@@ -335,6 +265,7 @@ def move_non_text_segments_to_end(value: Any) -> bool:
         changed = True
     return _replace_message_segments(message, reordered) if changed else False
 
+
 def extract_first_text_match(
     message: Any,
     pattern: Pattern[str],
@@ -342,7 +273,7 @@ def extract_first_text_match(
     ignored_segment_types: set[str] | None = None,
 ) -> Match[str] | None:
     """从首个有效文本段中提取正则匹配结果。"""
-    ignored = ignored_segment_types or {"image", "reply", *MENTION_SEGMENT_TYPES}
+    ignored = ignored_segment_types or {"image", "reply"}
     for segment in iter_message_segments(message):
         if segment_type(segment) in ignored:
             continue
@@ -404,8 +335,6 @@ async def get_replied_message(bot: Bot, message_id: int) -> Any:
 
 async def send_ark_message(bot: Bot, event: Any, ark_data: dict[str, Any]) -> Any:
     """发送 QQ ARK 消息。"""
-    if not is_qq_official(bot):
-        raise RuntimeError("ARK 消息仅支持 QQ 官方适配器")
     return await bot.send(event, message={"type": "ark", "data": ark_data})
 
 
@@ -416,10 +345,14 @@ async def send_text_to_target(bot: Bot, target: dict[str, Any], text: str) -> An
 
 async def send_message_to_target(bot: Bot, target: dict[str, Any], message: Any) -> Any:
     """根据保存的目标信息发送消息。"""
-    return await require_message_adapter(bot).send_message_to_target(bot, target, message)
+    return await require_message_adapter(bot).send_message_to_target(
+        bot, target, message
+    )
 
 
-async def send_forward_messages(bot: Bot, event: Event, messages: list[Any], *, nickname: str = "FxBot") -> bool:
+async def send_forward_messages(
+    bot: Bot, event: Event, messages: list[Any], *, nickname: str = "FxBot"
+) -> bool:
     """通过当前适配器发送一组转发消息。"""
     adapter = get_message_adapter(bot)
     if adapter is None:
@@ -427,13 +360,12 @@ async def send_forward_messages(bot: Bot, event: Event, messages: list[Any], *, 
     return await adapter.send_forward_messages(bot, event, messages, nickname=nickname)
 
 
-async def send_forward_texts(bot: Bot, event: Event, texts: list[str], *, nickname: str = "FxBot") -> bool:
+async def send_forward_texts(
+    bot: Bot, event: Event, texts: list[str], *, nickname: str = "FxBot"
+) -> bool:
     """尝试把多段文本作为 OneBot V11 合并转发发送。"""
-    if not is_onebot_v11(bot):
-        return False
     messages = [
-        build_message(bot, build_message_segment(bot, "text", text))
-        for text in texts
+        build_message(bot, build_message_segment(bot, "text", text)) for text in texts
     ]
     return await send_forward_messages(bot, event, messages, nickname=nickname)
 
@@ -474,7 +406,9 @@ class _GenericMessageAdapter(MessageAdapter):
     def build_message(self, bot: Bot, segments: list[Any]) -> Any:
         return "".join(str(segment) for segment in segments)
 
-    async def send_message_to_target(self, bot: Bot, target: dict[str, Any], message: Any) -> Any:
+    async def send_message_to_target(
+        self, bot: Bot, target: dict[str, Any], message: Any
+    ) -> Any:
         raise RuntimeError("无法识别消息目标")
 
 
@@ -500,8 +434,6 @@ __all__ = [
     "get_onebot_v11_message_segment_class",
     "get_replied_message",
     "is_mention_segment",
-    "is_onebot_v11",
-    "is_qq_official",
     "is_text_segment",
     "mention_target",
     "mention_targets",

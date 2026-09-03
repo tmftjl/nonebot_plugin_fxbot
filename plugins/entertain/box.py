@@ -13,14 +13,20 @@ from nonebot.matcher import Matcher
 from nonebot.params import RegexGroup
 from PIL import Image
 
+from ...adapter import build_message, build_message_segment, selfBot
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
-from ...adapter import build_message, build_message_segment, first_mention_target
 from ...utils.http import get_shared_async_client
 from .box_draw import create_image
 from .config import cfg_box
 
-P = Plugin("entertain", display_name="娱乐", enabled=True, level=PermLevel.LOW, scene=PermScene.ALL)
+P = Plugin(
+    "entertain",
+    display_name="娱乐",
+    enabled=True,
+    level=PermLevel.LOW,
+    scene=PermScene.ALL,
+)
 
 
 def _cfg_get(key: str) -> Any:
@@ -52,7 +58,7 @@ def _gid(event: Event) -> str | None:
 
 def _extract_target_id(event: Event, fallback: str = "", self_id: str = "") -> str:
     """提取开盒目标。"""
-    target = first_mention_target(event.get_message(), ignored_targets={self_id})
+    target = selfBot.first_mention_target(event.get_message(), {self_id})
     if target:
         return target
     import re
@@ -66,7 +72,9 @@ def _extract_target_id(event: Event, fallback: str = "", self_id: str = "") -> s
 async def _is_admin(bot: Bot, group_id: str, user_id: str) -> bool:
     """判断用户是否为群管理员。"""
     try:
-        info = await bot.get_group_member_info(group_id=int(group_id), user_id=int(user_id))
+        info = await bot.get_group_member_info(
+            group_id=int(group_id), user_id=int(user_id)
+        )
         return str(info.get("role")) in {"owner", "admin"}
     except Exception:
         return False
@@ -92,9 +100,15 @@ async def _handle_box(
 ) -> None:
     """处理开盒命令。"""
     group_id = _gid(event)
-    target_id = _extract_target_id(event, str(groups[0] if groups else ""), str(getattr(bot, "self_id", "")))
+    target_id = _extract_target_id(
+        event, str(groups[0] if groups else ""), str(getattr(bot, "self_id", ""))
+    )
 
-    if _cfg_get("only_admin") and group_id and not await _is_admin(bot, group_id, _uid(event)):
+    if (
+        _cfg_get("only_admin")
+        and group_id
+        and not await _is_admin(bot, group_id, _uid(event))
+    ):
         await matcher.finish("仅限管理员可用")
     blacklist = {str(item) for item in (_cfg_get("box_blacklist") or [])}
     if str(target_id) in blacklist:
@@ -106,13 +120,17 @@ async def _handle_box(
 async def _do_box(bot: Bot, *, target_id: str, group_id: str | None):
     """执行开盒信息查询并生成消息。"""
     try:
-        stranger_info = await bot.get_stranger_info(user_id=int(target_id), no_cache=True)
+        stranger_info = await bot.get_stranger_info(
+            user_id=int(target_id), no_cache=True
+        )
     except Exception:
         return build_message(bot, build_message_segment(bot, "text", "无效 QQ 号"))
     member_info: dict[str, Any] = {}
     if group_id:
         try:
-            member_info = await bot.get_group_member_info(user_id=int(target_id), group_id=int(group_id))
+            member_info = await bot.get_group_member_info(
+                user_id=int(target_id), group_id=int(group_id)
+            )
         except Exception:
             member_info = {}
 
@@ -129,9 +147,7 @@ async def _do_box(bot: Bot, *, target_id: str, group_id: str | None):
 
 async def _get_avatar_bytes(user_id: str) -> bytes | None:
     """下载 QQ 头像。"""
-    url = str(_cfg_get("avatar_api_url")).format(
-        user_id=user_id
-    )
+    url = str(_cfg_get("avatar_api_url")).format(user_id=user_id)
     try:
         client = await get_shared_async_client()
         response = await client.get(url)
@@ -158,7 +174,11 @@ def _transform_info(info: dict[str, Any], member_info: dict[str, Any]) -> list[s
         lines.append("性别：男")
     elif sex == "female":
         lines.append("性别：女")
-    by, bm, bd = info.get("birthday_year"), info.get("birthday_month"), info.get("birthday_day")
+    by, bm, bd = (
+        info.get("birthday_year"),
+        info.get("birthday_month"),
+        info.get("birthday_day"),
+    )
     if by and bm and bd:
         lines.append(f"诞辰：{by}-{bm}-{bd}")
         lines.append(f"星座：{_get_constellation(int(bm), int(bd))}")
@@ -176,7 +196,11 @@ def _transform_info(info: dict[str, Any], member_info: dict[str, Any]) -> list[s
         value = info.get(key)
         if value and value != "-":
             lines.append(f"{label}：{value}")
-    country, province, city = info.get("country"), info.get("province"), info.get("city")
+    country, province, city = (
+        info.get("country"),
+        info.get("province"),
+        info.get("city"),
+    )
     if country == "中国" and (province or city):
         lines.append(f"现居：{province or ''}-{city or ''}")
     elif country:
@@ -200,11 +224,15 @@ def _transform_info(info: dict[str, Any], member_info: dict[str, Any]) -> list[s
     if level := member_info.get("level"):
         lines.append(f"群等级：{int(level)}级")
     if join_time := member_info.get("join_time"):
-        lines.append(f"加群时间：{datetime.fromtimestamp(int(join_time)).strftime('%Y-%m-%d')}")
+        lines.append(
+            f"加群时间：{datetime.fromtimestamp(int(join_time)).strftime('%Y-%m-%d')}"
+        )
     if qq_level := info.get("qqLevel"):
         lines.append(f"QQ等级：{_qq_level_to_icon(int(qq_level))}")
     if reg_time := info.get("reg_time"):
-        lines.append(f"注册时间：{datetime.fromtimestamp(int(reg_time)).strftime('%Y-%m-%d')}")
+        lines.append(
+            f"注册时间：{datetime.fromtimestamp(int(reg_time)).strftime('%Y-%m-%d')}"
+        )
     if long_nick := info.get("long_nick"):
         for line in textwrap.wrap(text=f"签名：{long_nick}", width=15):
             lines.append(line)
@@ -240,9 +268,14 @@ def _get_constellation(month: int, day: int) -> str:
         "双鱼座": ((2, 19), (3, 20)),
     }
     for name, ((start_month, start_day), (end_month, end_day)) in items.items():
-        if (month == start_month and day >= start_day) or (month == end_month and day <= end_day):
+        if (month == start_month and day >= start_day) or (
+            month == end_month and day <= end_day
+        ):
             return name
-        if start_month > end_month and ((month == start_month and day >= start_day) or (month == end_month and day <= end_day)):
+        if start_month > end_month and (
+            (month == start_month and day >= start_day)
+            or (month == end_month and day <= end_day)
+        ):
             return name
     return f"星座{month}-{day}"
 
@@ -277,7 +310,9 @@ def _get_career(num: int) -> str:
 
 def _get_blood_type(num: int) -> str:
     """转换血型编码。"""
-    return {1: "A型", 2: "B型", 3: "O型", 4: "AB型", 5: "其他血型"}.get(num, f"血型{num}")
+    return {1: "A型", 2: "B型", 3: "O型", 4: "AB型", 5: "其他血型"}.get(
+        num, f"血型{num}"
+    )
 
 
 def _parse_home_town(code: str) -> str:
@@ -314,7 +349,10 @@ async def _handle_increase_box(bot: Bot, event: Event) -> None:
     if not _cfg_get("increase_box"):
         return
     notice_type = str(getattr(event, "notice_type", "") or "")
-    if notice_type != "group_increase" and "increase" not in type(event).__name__.lower():
+    if (
+        notice_type != "group_increase"
+        and "increase" not in type(event).__name__.lower()
+    ):
         return
     group_id = _gid(event)
     if not group_id:

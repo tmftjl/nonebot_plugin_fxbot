@@ -14,7 +14,17 @@ import httpx
 from ..config import cfg_douyin
 from ..types import VideoResult
 from .base import ParseError
-from .common import ANDROID_HEADERS, COMMON_HEADERS, IOS_HEADERS, extract_json, final_url, first, get_text, proxy, timeout
+from .common import (
+    ANDROID_HEADERS,
+    COMMON_HEADERS,
+    IOS_HEADERS,
+    extract_json,
+    final_url,
+    first,
+    get_text,
+    proxy,
+    timeout,
+)
 
 DOUYIN_API_HEADERS = {
     "User-Agent": (
@@ -28,7 +38,11 @@ DOUYIN_API_HEADERS = {
 
 async def parse(url: str) -> VideoResult:
     """解析抖音视频。"""
-    resolved = await final_url(url, headers=await _douyin_request_headers(COMMON_HEADERS)) if "v.douyin.com" in url or "jx.douyin.com" in url else url
+    resolved = (
+        await final_url(url, headers=await _douyin_request_headers(COMMON_HEADERS))
+        if "v.douyin.com" in url or "jx.douyin.com" in url
+        else url
+    )
     matched = re.search(r"(?P<ty>video|note|slides)/(?P<vid>\d+)", resolved)
     if not matched:
         raise ParseError("无法识别抖音视频 ID")
@@ -36,7 +50,10 @@ async def parse(url: str) -> VideoResult:
     ty, vid = matched.group("ty"), matched.group("vid")
     if ty == "slides":
         return await _parse_slides(vid, source_url=resolved)
-    for page_url in (f"https://m.douyin.com/share/{ty}/{vid}", f"https://www.iesdouyin.com/share/{ty}/{vid}"):
+    for page_url in (
+        f"https://m.douyin.com/share/{ty}/{vid}",
+        f"https://www.iesdouyin.com/share/{ty}/{vid}",
+    ):
         try:
             return await _parse_page(page_url, source_url=resolved)
         except (ParseError, httpx.HTTPError):
@@ -47,7 +64,9 @@ async def parse(url: str) -> VideoResult:
 
 async def _parse_page(url: str, *, source_url: str) -> VideoResult:
     """解析抖音分享页。"""
-    html = await get_text(url, headers=await _douyin_request_headers(IOS_HEADERS), follow_redirects=False)
+    html = await get_text(
+        url, headers=await _douyin_request_headers(IOS_HEADERS), follow_redirects=False
+    )
     router = extract_json(html, r"window\._ROUTER_DATA\s*=\s*(.*?)</script>")
     # 新版页面可能把作品数据直接放在 loaderData 或其它字段中。
     if item := _find_item(router):
@@ -69,7 +88,9 @@ def _find_item(data: Any) -> dict[str, Any] | None:
             value = data.get(key)
             if isinstance(value, dict) and (value.get("video") or value.get("images")):
                 return value
-        items = data.get("item_list") or data.get("aweme_list") or data.get("aweme_details")
+        items = (
+            data.get("item_list") or data.get("aweme_list") or data.get("aweme_details")
+        )
         if isinstance(items, list):
             item = first(items)
             if isinstance(item, dict):
@@ -113,7 +134,9 @@ def _build_result(item: dict[str, Any], *, source_url: str) -> VideoResult:
         title=title,
         video_url=video_url,
         cover_url=first(cover.get("url_list")),
-        duration=(float(video.get("duration")) / 1000) if video.get("duration") else None,
+        duration=(float(video.get("duration")) / 1000)
+        if video.get("duration")
+        else None,
         source_url=source_url,
         text=str(author.get("nickname") or ""),
         headers=IOS_HEADERS.copy(),
@@ -151,7 +174,9 @@ async def _parse_detail_api(video_id: str, *, source_url: str) -> VideoResult:
     query = urlencode(params)
     signature = await _generate_a_bogus(query, headers["User-Agent"])
     params["a_bogus"] = signature
-    async with httpx.AsyncClient(timeout=timeout(), proxy=proxy(), verify=False) as client:
+    async with httpx.AsyncClient(
+        timeout=timeout(), proxy=proxy(), verify=False
+    ) as client:
         response = await client.get(api_url, params=params, headers=headers)
         response.raise_for_status()
         if not response.content:
@@ -177,7 +202,9 @@ async def _douyin_request_headers(base: dict[str, str]) -> dict[str, str]:
         headers["Cookie"] = cookie
         return headers
 
-    async with httpx.AsyncClient(timeout=timeout(), proxy=proxy(), verify=False) as client:
+    async with httpx.AsyncClient(
+        timeout=timeout(), proxy=proxy(), verify=False
+    ) as client:
         response = await client.post(
             "https://ttwid.bytedance.com/ttwid/union/register/",
             json={
@@ -189,7 +216,9 @@ async def _douyin_request_headers(base: dict[str, str]) -> dict[str, str]:
                 "service": "www.ixigua.com",
                 "migrate_info": {"ticket": "", "source": "node"},
             },
-            headers={"User-Agent": headers.get("User-Agent", COMMON_HEADERS["User-Agent"])},
+            headers={
+                "User-Agent": headers.get("User-Agent", COMMON_HEADERS["User-Agent"])
+            },
         )
         response.raise_for_status()
         ttwid = response.cookies.get("ttwid")
@@ -205,7 +234,14 @@ async def _generate_a_bogus(query: str, user_agent: str) -> str:
 
     def run() -> str:
         result = subprocess.run(
-            ["node", "-e", "const a=require(process.argv[1]); process.stdout.write(a.generate_a_bogus(process.argv[2], process.argv[3]));", str(script), query, user_agent],
+            [
+                "node",
+                "-e",
+                "const a=require(process.argv[1]); process.stdout.write(a.generate_a_bogus(process.argv[2], process.argv[3]));",
+                str(script),
+                query,
+                user_agent,
+            ],
             capture_output=True,
             text=True,
             check=False,
@@ -229,7 +265,9 @@ async def _parse_slides(video_id: str, *, source_url: str) -> VideoResult:
         "aweme_ids": f"[{video_id}]",
         "request_source": "200",
     }
-    async with httpx.AsyncClient(timeout=timeout(), proxy=proxy(), verify=False) as client:
+    async with httpx.AsyncClient(
+        timeout=timeout(), proxy=proxy(), verify=False
+    ) as client:
         response = await client.get(url, params=params, headers=ANDROID_HEADERS)
         response.raise_for_status()
         data = response.json()

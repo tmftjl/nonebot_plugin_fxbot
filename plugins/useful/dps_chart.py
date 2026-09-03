@@ -13,7 +13,6 @@ from ...adapter import (
     build_message_segment,
     fetch_image_bytes,
     image_sources_from_event_or_reply,
-    is_qq_official,
 )
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
@@ -21,7 +20,13 @@ from ...utils.paths import data_dir
 
 DPS_IMAGE_PATH = data_dir("useful") / "wwdps.png"
 
-P = Plugin("useful", display_name="实用工具", enabled=True, level=PermLevel.LOW, scene=PermScene.ALL)
+P = Plugin(
+    "useful",
+    display_name="实用工具",
+    enabled=True,
+    level=PermLevel.LOW,
+    scene=PermScene.ALL,
+)
 
 
 wwdps_cmd = P.on_regex(
@@ -60,7 +65,11 @@ async def _handle_wwdps(matcher: Matcher, bot: Bot) -> None:
     """发送当前鸣潮 DPS 榜图片。"""
     if not DPS_IMAGE_PATH.is_file():
         await matcher.finish("DPS榜图片尚未设置，请发送图片并使用 ww更新dps 更新。")
-    await matcher.finish(build_message(bot, build_message_segment(bot, "image", DPS_IMAGE_PATH.read_bytes())))
+    await matcher.finish(
+        build_message(
+            bot, build_message_segment(bot, "image", DPS_IMAGE_PATH.read_bytes())
+        )
+    )
 
 
 @update_wwdps_cmd.handle()
@@ -68,9 +77,9 @@ async def _handle_update_wwdps(matcher: Matcher, bot: Bot, event: Event) -> None
     """更新鸣潮 DPS 榜图片。"""
     sources = await image_sources_from_event_or_reply(bot, event)
     if not sources:
-        if is_qq_official(bot):
-            await matcher.finish("未找到图片，QQ官方 Bot 请随命令一起发送图片后使用 ww更新dps")
-        await matcher.finish("未找到图片，请发送带图消息或回复/引用带图消息后使用 ww更新dps")
+        await matcher.finish(
+            "未找到图片，请发送带图消息或回复/引用带图消息后使用 ww更新dps"
+        )
 
     image_bytes = await fetch_image_bytes(sources[0])
     if not image_bytes or not _is_valid_image(image_bytes):

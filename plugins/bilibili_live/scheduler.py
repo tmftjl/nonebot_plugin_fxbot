@@ -30,7 +30,9 @@ def _room_id(record: dict[str, Any]) -> int:
         return 0
 
 
-async def _fetch_record(record: dict[str, Any], semaphore: asyncio.Semaphore) -> LiveRoomSnapshot | None:
+async def _fetch_record(
+    record: dict[str, Any], semaphore: asyncio.Semaphore
+) -> LiveRoomSnapshot | None:
     """查询单个订阅记录，失败时保留原状态。"""
     room_id = _room_id(record)
     if room_id <= 0:
@@ -49,7 +51,9 @@ async def _fetch_all_rooms() -> list[LiveRoomSnapshot]:
     if not records:
         return []
     semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
-    results = await asyncio.gather(*(_fetch_record(record, semaphore) for record in records))
+    results = await asyncio.gather(
+        *(_fetch_record(record, semaphore) for record in records)
+    )
     return [result for result in results if result is not None]
 
 
@@ -66,7 +70,9 @@ def _push_text(room: LiveRoomSnapshot) -> str:
     return "\n".join(lines)
 
 
-async def _send_to_subscription(subscription: dict[str, Any], room: LiveRoomSnapshot) -> bool:
+async def _send_to_subscription(
+    subscription: dict[str, Any], room: LiveRoomSnapshot
+) -> bool:
     """使用可用 Bot 向一个持久化目标发送通知。"""
     target = subscription.get("target")
     if not isinstance(target, dict):
@@ -148,7 +154,9 @@ async def _startup_task() -> None:
     await _startup_calibrate()
     if _background_task is None or _background_task.done():
         _background_task = asyncio.create_task(_background_loop())
-        logger.info(f"[bilibili_live] 后台检查任务已启动：每 {CHECK_INTERVAL_SECONDS} 秒检查一次")
+        logger.info(
+            f"[bilibili_live] 后台检查任务已启动：每 {CHECK_INTERVAL_SECONDS} 秒检查一次"
+        )
 
 
 async def _shutdown_task() -> None:

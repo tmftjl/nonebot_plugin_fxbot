@@ -34,7 +34,9 @@ def load_state() -> dict[str, Any]:
 def save_state(data: dict[str, Any]) -> None:
     """保存订阅状态。"""
     DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
-    DATA_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    DATA_FILE.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
 
 def get_subscriptions() -> list[dict[str, Any]]:
@@ -43,7 +45,9 @@ def get_subscriptions() -> list[dict[str, Any]]:
     return subs if isinstance(subs, list) else []
 
 
-def upsert_subscription(sub_type: str, sub_key: str, target: dict[str, Any], operator_id: str) -> None:
+def upsert_subscription(
+    sub_type: str, sub_key: str, target: dict[str, Any], operator_id: str
+) -> None:
     """新增或更新订阅（群或私聊）。"""
     state = load_state()
     key_field = "group_key" if sub_type == "group" else "user_key"

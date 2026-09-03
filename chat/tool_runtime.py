@@ -10,7 +10,9 @@ from .tools import ToolRuntime
 class ToolRuntimeFactory:
     """创建工具运行时。"""
 
-    def create(self, *, bot: Any = None, event: Any = None, matcher: Any = None) -> ToolRuntime:
+    def create(
+        self, *, bot: Any = None, event: Any = None, matcher: Any = None
+    ) -> ToolRuntime:
         """从 NoneBot 对象创建 ToolRuntime。"""
         return ToolRuntime(bot=bot, event=event, matcher=matcher)
 

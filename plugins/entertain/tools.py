@@ -6,10 +6,20 @@ from typing import Literal
 
 from nonebot import logger
 
+from ...adapter import build_message_segment, selfBot
 from ...chat.tools import ToolContext, ToolError, ToolRuntime, tool
-from ...adapter import build_message_segment
-from .fortune import _generate_fortune_canvas, _get_background_image, _get_or_create_today_fortune
-from .musicshare import MusicLoginRequired, Platform, _get_song_url_with_pool, _login_hint, _search_songs_with_pool
+from .fortune import (
+    _generate_fortune_canvas,
+    _get_background_image,
+    _get_or_create_today_fortune,
+)
+from .musicshare import (
+    MusicLoginRequired,
+    Platform,
+    _get_song_url_with_pool,
+    _login_hint,
+    _search_songs_with_pool,
+)
 
 
 @tool(
@@ -27,7 +37,9 @@ from .musicshare import MusicLoginRequired, Platform, _get_song_url_with_pool, _
         "required": [],
     },
 )
-async def get_fortune_tool(ctx: ToolContext, rt: ToolRuntime, nickname: str = "您") -> str:
+async def get_fortune_tool(
+    ctx: ToolContext, rt: ToolRuntime, nickname: str = "您"
+) -> str:
     """AI 工具：发送今日运势图片。"""
     try:
         if not ctx.user_id:
@@ -38,9 +50,9 @@ async def get_fortune_tool(ctx: ToolContext, rt: ToolRuntime, nickname: str = "�
         bot = rt.require_bot()
         segment = build_message_segment(bot, "image", image)
         if ctx.group_id:
-            await bot.send_group_msg(group_id=int(ctx.group_id), message=segment)
+            await selfBot.send_group_message(ctx.group_id, segment)
         else:
-            await bot.send_private_msg(user_id=int(ctx.user_id), message=segment)
+            await selfBot.send_private_message(ctx.user_id, segment)
 
         fortune = data.get("fortune", {})
         parts = [
@@ -88,14 +100,16 @@ async def play_music_tool(
         song = songs[0]
         audio_url = await _get_song_url_with_pool(ctx.user_id, platform, song)
         if not audio_url:
-            raise ToolError(f"无法获取歌曲播放链接：{song.song}", code="url_unavailable")
+            raise ToolError(
+                f"无法获取歌曲播放链接：{song.song}", code="url_unavailable"
+            )
 
         bot = rt.require_bot()
         segment = build_message_segment(bot, "record", audio_url)
         if ctx.group_id:
-            await bot.send_group_msg(group_id=int(ctx.group_id), message=segment)
+            await selfBot.send_group_message(ctx.group_id, segment)
         else:
-            await bot.send_private_msg(user_id=int(ctx.user_id), message=segment)
+            await selfBot.send_private_message(ctx.user_id, segment)
         suffix = f" - {song.singer}" if song.singer else ""
         return f"正在播放：{song.song}{suffix}"
     except ToolError:

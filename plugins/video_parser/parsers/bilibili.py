@@ -6,8 +6,8 @@ import asyncio
 import inspect
 import json
 import re
-from pathlib import Path
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
 
 from ....utils.paths import data_dir
@@ -41,15 +41,25 @@ async def parse(url: str) -> VideoResult:
         page = re.search(r"[?&]p=(\d{1,3})", url)
         if page:
             page_num = max(1, int(page.group(1)))
-        return await _parse_video(bvid=bvid, page_num=page_num, source=_clean_video_source(bvid, page_num))
+        return await _parse_video(
+            bvid=bvid, page_num=page_num, source=_clean_video_source(bvid, page_num)
+        )
 
-    av = re.search(r"(?:bilibili\.com(?:/video)?/)?av(?P<avid>\d{6,})(?:.*?[?&]p=(?P<page>\d{1,3}))?", url, re.I)
+    av = re.search(
+        r"(?:bilibili\.com(?:/video)?/)?av(?P<avid>\d{6,})(?:.*?[?&]p=(?P<page>\d{1,3}))?",
+        url,
+        re.I,
+    )
     if av:
         page_num = max(1, int(av.group("page") or 1))
         avid = int(av.group("avid"))
-        return await _parse_video(avid=avid, page_num=page_num, source=_clean_av_source(avid, page_num))
+        return await _parse_video(
+            avid=avid, page_num=page_num, source=_clean_av_source(avid, page_num)
+        )
 
-    dynamic = re.search(r"(?:bilibili\.com/(?:opus|dynamic)/|t\.bilibili\.com/)(?P<id>\d+)", url)
+    dynamic = re.search(
+        r"(?:bilibili\.com/(?:opus|dynamic)/|t\.bilibili\.com/)(?P<id>\d+)", url
+    )
     if dynamic:
         return await _parse_dynamic_or_opus(int(dynamic.group("id")), source=url)
 
@@ -70,20 +80,33 @@ def _setup_client() -> None:
 
 def _clean_video_source(bvid: str, page_num: int) -> str:
     """构造干净的视频源地址。"""
-    return f"https://www.bilibili.com/video/{bvid}" + (f"?p={page_num}" if page_num > 1 else "")
+    return f"https://www.bilibili.com/video/{bvid}" + (
+        f"?p={page_num}" if page_num > 1 else ""
+    )
 
 
 def _clean_av_source(avid: int, page_num: int) -> str:
     """构造干净的 av 源地址。"""
-    return f"https://www.bilibili.com/video/av{avid}" + (f"?p={page_num}" if page_num > 1 else "")
+    return f"https://www.bilibili.com/video/av{avid}" + (
+        f"?p={page_num}" if page_num > 1 else ""
+    )
 
 
-async def _parse_video(*, bvid: str | None = None, avid: int | None = None, page_num: int, source: str) -> VideoResult:
+async def _parse_video(
+    *, bvid: str | None = None, avid: int | None = None, page_num: int, source: str
+) -> VideoResult:
     """解析 B 站视频信息和下载流。"""
     try:
-        from bilibili_api.video import Video, VideoStreamDownloadURL, AudioStreamDownloadURL, VideoDownloadURLDataDetecter
+        from bilibili_api.video import (
+            AudioStreamDownloadURL,
+            Video,
+            VideoDownloadURLDataDetecter,
+            VideoStreamDownloadURL,
+        )
     except Exception as exc:
-        raise ParseError("缺少 bilibili-api-python 依赖，请先安装 requirements.txt") from exc
+        raise ParseError(
+            "缺少 bilibili-api-python 依赖，请先安装 requirements.txt"
+        ) from exc
 
     _setup_client()
     credential = await load_credential()
@@ -104,7 +127,9 @@ async def _parse_video(*, bvid: str | None = None, avid: int | None = None, page
     download_data = await video.get_download_url(page_index=page_index)
     try:
         detector = VideoDownloadURLDataDetecter(download_data)
-        video_url, audio_url = _select_download_urls(detector, VideoStreamDownloadURL, AudioStreamDownloadURL)
+        video_url, audio_url = _select_download_urls(
+            detector, VideoStreamDownloadURL, AudioStreamDownloadURL
+        )
     except ParseError:
         raise
     except Exception as exc:
@@ -123,23 +148,41 @@ async def _parse_video(*, bvid: str | None = None, avid: int | None = None, page
     )
 
 
-def _select_download_urls(detector: Any, video_stream_type: type[Any], audio_stream_type: type[Any]) -> tuple[str, str | None]:
+def _select_download_urls(
+    detector: Any, video_stream_type: type[Any], audio_stream_type: type[Any]
+) -> tuple[str, str | None]:
     """从 bilibili_api 解析结果中选择可下载流。"""
     streams = detector.detect(no_dolby_video=True, no_hdr=True)
-    video_streams = [stream for stream in streams if isinstance(stream, video_stream_type) and _stream_url(stream)]
+    video_streams = [
+        stream
+        for stream in streams
+        if isinstance(stream, video_stream_type) and _stream_url(stream)
+    ]
     if video_streams:
         preferred_video_streams = [
             stream
             for stream in video_streams
-            if 0 < _enum_int(getattr(stream, "video_quality", None)) <= BILI_MAX_VIDEO_QUALITY
+            if 0
+            < _enum_int(getattr(stream, "video_quality", None))
+            <= BILI_MAX_VIDEO_QUALITY
         ]
-        video_stream = max(preferred_video_streams or video_streams, key=_video_stream_rank)
+        video_stream = max(
+            preferred_video_streams or video_streams, key=_video_stream_rank
+        )
         video_url = _stream_url(video_stream)
         if not video_url:
             raise ParseError("B 站没有可下载的视频流")
-        audio_streams = [stream for stream in streams if isinstance(stream, audio_stream_type) and _stream_url(stream)]
-        audio_stream = max(audio_streams, key=_audio_stream_rank) if audio_streams else None
-        return video_url, _stream_url(audio_stream) if audio_stream is not None else None
+        audio_streams = [
+            stream
+            for stream in streams
+            if isinstance(stream, audio_stream_type) and _stream_url(stream)
+        ]
+        audio_stream = (
+            max(audio_streams, key=_audio_stream_rank) if audio_streams else None
+        )
+        return video_url, _stream_url(
+            audio_stream
+        ) if audio_stream is not None else None
 
     merged_streams = [stream for stream in streams if _stream_url(stream)]
     if merged_streams:
@@ -170,7 +213,9 @@ def _audio_stream_rank(stream: Any) -> tuple[int, int]:
     """给音频流排序。"""
     quality = getattr(stream, "audio_quality", None)
     quality_name = str(getattr(quality, "name", "") or "")
-    special_rank = 2 if quality_name == "DOLBY" else 1 if quality_name == "HI_RES" else 0
+    special_rank = (
+        2 if quality_name == "DOLBY" else 1 if quality_name == "HI_RES" else 0
+    )
     return special_rank, _enum_int(quality)
 
 
@@ -193,13 +238,17 @@ async def _parse_dynamic_or_opus(dynamic_id: int, *, source: str) -> VideoResult
     try:
         from bilibili_api.dynamic import Dynamic
     except Exception as exc:
-        raise ParseError("缺少 bilibili-api-python 依赖，请先安装 requirements.txt") from exc
+        raise ParseError(
+            "缺少 bilibili-api-python 依赖，请先安装 requirements.txt"
+        ) from exc
 
     _setup_client()
     dynamic = Dynamic(dynamic_id, await load_credential())
     try:
         if await dynamic.is_article():
-            return await _parse_bili_opus(await _maybe_await(dynamic.turn_to_opus()), source=source)
+            return await _parse_bili_opus(
+                await _maybe_await(dynamic.turn_to_opus()), source=source
+            )
         info = await dynamic.get_info()
     except Exception as exc:
         raise ParseError("B站动态解析失败") from exc
@@ -211,11 +260,15 @@ async def _parse_article(read_id: int, *, source: str) -> VideoResult:
     try:
         from bilibili_api.article import Article
     except Exception as exc:
-        raise ParseError("缺少 bilibili-api-python 依赖，请先安装 requirements.txt") from exc
+        raise ParseError(
+            "缺少 bilibili-api-python 依赖，请先安装 requirements.txt"
+        ) from exc
 
     _setup_client()
     article = Article(read_id)
-    return await _parse_bili_opus(await _maybe_await(article.turn_to_opus()), source=source)
+    return await _parse_bili_opus(
+        await _maybe_await(article.turn_to_opus()), source=source
+    )
 
 
 async def _maybe_await(value: Any) -> Any:
@@ -244,7 +297,9 @@ async def _parse_bili_opus(opus: Any, *, source: str) -> VideoResult:
         for paragraph in content.get("paragraphs") or []:
             text = paragraph.get("text") or {}
             nodes = text.get("nodes") or []
-            words = "".join(str(((node.get("word") or {}).get("words")) or "") for node in nodes)
+            words = "".join(
+                str(((node.get("word") or {}).get("words")) or "") for node in nodes
+            )
             if words.strip():
                 text_parts.append(words.strip())
             pic = paragraph.get("pic") or {}
@@ -275,8 +330,15 @@ async def _result_from_dynamic(item: dict[str, Any], *, source: str) -> VideoRes
         return await _parse_video(bvid=str(archive["bvid"]), page_num=1, source=source)
     opus = major.get("opus") or {}
     pics = opus.get("pics") or []
-    image_urls = [str(pic["url"]) for pic in pics if isinstance(pic, dict) and pic.get("url")]
-    title = opus.get("title") or ((opus.get("summary") or {}).get("text")) or ((dynamic.get("desc") or {}).get("text")) or "B站动态"
+    image_urls = [
+        str(pic["url"]) for pic in pics if isinstance(pic, dict) and pic.get("url")
+    ]
+    title = (
+        opus.get("title")
+        or ((opus.get("summary") or {}).get("text"))
+        or ((dynamic.get("desc") or {}).get("text"))
+        or "B站动态"
+    )
     if not image_urls:
         raise ParseError("B站动态没有可发送的媒体")
     return VideoResult(
@@ -312,7 +374,9 @@ async def create_qrcode() -> bytes:
     try:
         from bilibili_api.login_v2 import QrCodeLogin
     except Exception as exc:
-        raise ParseError("缺少 bilibili-api-python 依赖，请先安装 requirements.txt") from exc
+        raise ParseError(
+            "缺少 bilibili-api-python 依赖，请先安装 requirements.txt"
+        ) from exc
 
     _qr_login = QrCodeLogin()
     await _qr_login.generate_qrcode()
@@ -320,7 +384,9 @@ async def create_qrcode() -> bytes:
     return bytes(picture.content)
 
 
-async def poll_qrcode(on_scanned: Callable[[str], Awaitable[None]] | None = None) -> str:
+async def poll_qrcode(
+    on_scanned: Callable[[str], Awaitable[None]] | None = None,
+) -> str:
     """轮询 B 站二维码登录状态并保存凭据。"""
     if _qr_login is None:
         raise ParseError("请先生成 B 站登录二维码")
@@ -332,7 +398,10 @@ async def poll_qrcode(on_scanned: Callable[[str], Awaitable[None]] | None = None
         if "DONE" in name:
             credential = _qr_login.get_credential()
             COOKIE_PATH.parent.mkdir(parents=True, exist_ok=True)
-            COOKIE_PATH.write_text(json.dumps(credential.get_cookies(), ensure_ascii=False, indent=2), encoding="utf-8")
+            COOKIE_PATH.write_text(
+                json.dumps(credential.get_cookies(), ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
             return "B站登录成功，凭据已保存"
         if any(key in name for key in ("CONF", "SCAN")) and not confirmed:
             confirmed = True

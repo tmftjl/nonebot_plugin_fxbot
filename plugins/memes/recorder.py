@@ -7,11 +7,12 @@ from sqlalchemy import ColumnElement
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from ...adapter.uninfo import Session, SupportScope
 from ...adapter.uninfo import (
     BotModel,
     SceneModel,
+    Session,
     SessionModel,
+    SupportScope,
     UserModel,
     get_session_persist_id,
 )
@@ -37,8 +38,12 @@ class _MemeRecordStore:
     """表情调用记录存储。"""
 
     @with_session
-    async def add_record(self, db_session: AsyncSession, session: Session, meme_key: str) -> None:
-        session_persist_id = await get_session_persist_id(session, db_session=db_session)
+    async def add_record(
+        self, db_session: AsyncSession, session: Session, meme_key: str
+    ) -> None:
+        session_persist_id = await get_session_persist_id(
+            session, db_session=db_session
+        )
         db_session.add(
             MemeGenerationRecord(
                 session_persist_id=session_persist_id,
@@ -48,7 +53,9 @@ class _MemeRecordStore:
         )
 
     @with_session
-    async def list_records(self, db_session: AsyncSession, statement: Any) -> list[MemeRecord]:
+    async def list_records(
+        self, db_session: AsyncSession, statement: Any
+    ) -> list[MemeRecord]:
         results = (await db_session.execute(statement)).all()
         return [MemeRecord(result[0], result[1]) for result in results]
 

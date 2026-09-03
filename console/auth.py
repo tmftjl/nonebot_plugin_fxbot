@@ -7,7 +7,8 @@ from typing import Any
 
 from fastapi import HTTPException, Request, status
 
-from ..config import SYSTEM_DEFAULTS, get_manager as get_config_manager
+from ..config import SYSTEM_DEFAULTS
+from ..config import get_manager as get_config_manager
 
 _TOKEN_BYTES = 32
 _MIN_TOKEN_LENGTH = 6
@@ -46,10 +47,14 @@ def verify_bearer_token(request: Request) -> None:
     auth_header = request.headers.get("authorization", "")
     prefix = "Bearer "
     if not auth_header.startswith(prefix):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="缺少认证 token")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="缺少认证 token"
+        )
     token = auth_header[len(prefix) :].strip()
     if not secrets.compare_digest(token, get_console_token()):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="认证 token 无效")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="认证 token 无效"
+        )
 
 
 async def bearer_auth(request: Request) -> None:

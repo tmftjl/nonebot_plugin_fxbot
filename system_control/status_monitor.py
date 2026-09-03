@@ -7,6 +7,7 @@
 3. 记录历史数据用于绘制趋势图
 4. 计算瞬时速度（通过差值）
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -26,6 +27,7 @@ from nonebot import get_driver, logger
 @dataclass
 class NetworkSnapshot:
     """网络快照"""
+
     timestamp: float
     bytes_sent: int
     bytes_recv: int
@@ -34,6 +36,7 @@ class NetworkSnapshot:
 @dataclass
 class DiskIOSnapshot:
     """磁盘IO快照"""
+
     timestamp: float
     read_bytes: int
     write_bytes: int
@@ -42,6 +45,7 @@ class DiskIOSnapshot:
 @dataclass
 class MonitorData:
     """监控数据"""
+
     # 当前网速（字节/秒）
     upload_speed: float
     download_speed: float
@@ -55,7 +59,9 @@ class MonitorData:
     disk_write_speed: float
 
     # 历史数据用于绘制图表（最近60个采样点）
-    network_history: list[tuple[float, float, float]]  # [(timestamp, upload, download), ...]
+    network_history: list[
+        tuple[float, float, float]
+    ]  # [(timestamp, upload, download), ...]
     disk_io_history: list[tuple[float, float, float]]  # [(timestamp, read, write), ...]
     cpu_history: list[tuple[float, float]]  # [(timestamp, usage), ...]
     memory_history: list[tuple[float, float]]  # [(timestamp, percent), ...]
@@ -82,10 +88,16 @@ class StatusMonitor:
         self._current_data: Optional[MonitorData] = None
 
         # 历史数据队列
-        self._network_history: Deque[tuple[float, float, float]] = deque(maxlen=self.max_history)
-        self._disk_io_history: Deque[tuple[float, float, float]] = deque(maxlen=self.max_history)
+        self._network_history: Deque[tuple[float, float, float]] = deque(
+            maxlen=self.max_history
+        )
+        self._disk_io_history: Deque[tuple[float, float, float]] = deque(
+            maxlen=self.max_history
+        )
         self._cpu_history: Deque[tuple[float, float]] = deque(maxlen=self.max_history)
-        self._memory_history: Deque[tuple[float, float]] = deque(maxlen=self.max_history)
+        self._memory_history: Deque[tuple[float, float]] = deque(
+            maxlen=self.max_history
+        )
 
         # 进程监控配置
         self.top_process_count = 30  # 监控TOP30进程
@@ -199,8 +211,12 @@ class StatusMonitor:
             time_delta = now - self._last_network_snapshot.timestamp
             if time_delta > 0:
                 # 计算差值，避免计数器回退
-                sent_diff = max(net_io.bytes_sent - self._last_network_snapshot.bytes_sent, 0)
-                recv_diff = max(net_io.bytes_recv - self._last_network_snapshot.bytes_recv, 0)
+                sent_diff = max(
+                    net_io.bytes_sent - self._last_network_snapshot.bytes_sent, 0
+                )
+                recv_diff = max(
+                    net_io.bytes_recv - self._last_network_snapshot.bytes_recv, 0
+                )
 
                 upload_speed = sent_diff / time_delta
                 download_speed = recv_diff / time_delta
@@ -222,8 +238,12 @@ class StatusMonitor:
                 time_delta = now - self._last_disk_snapshot.timestamp
                 if time_delta > 0:
                     # 计算差值，避免计数器回退
-                    read_diff = max(disk_io.read_bytes - self._last_disk_snapshot.read_bytes, 0)
-                    write_diff = max(disk_io.write_bytes - self._last_disk_snapshot.write_bytes, 0)
+                    read_diff = max(
+                        disk_io.read_bytes - self._last_disk_snapshot.read_bytes, 0
+                    )
+                    write_diff = max(
+                        disk_io.write_bytes - self._last_disk_snapshot.write_bytes, 0
+                    )
 
                     disk_read_speed = read_diff / time_delta
                     disk_write_speed = write_diff / time_delta
@@ -271,31 +291,35 @@ class StatusMonitor:
         try:
             # 收集所有进程的基本信息
             all_processes = []
-            for proc in psutil.process_iter(['pid', 'name', 'status', 'memory_info']):
+            for proc in psutil.process_iter(["pid", "name", "status", "memory_info"]):
                 try:
                     pinfo = proc.info
                     # 第一次调用 cpu_percent() 建立baseline
                     proc.cpu_percent(interval=None)
 
-                    mem_bytes = pinfo['memory_info'].rss if pinfo['memory_info'] else 0
-                    all_processes.append({
-                        'proc': proc,
-                        'pid': pinfo['pid'],
-                        'mem_bytes': mem_bytes,
-                    })
+                    mem_bytes = pinfo["memory_info"].rss if pinfo["memory_info"] else 0
+                    all_processes.append(
+                        {
+                            "proc": proc,
+                            "pid": pinfo["pid"],
+                            "mem_bytes": mem_bytes,
+                        }
+                    )
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     continue
 
             # 按内存排序，选出TOP进程
-            all_processes.sort(key=lambda x: x['mem_bytes'], reverse=True)
-            top_processes = all_processes[:self.top_process_count]
+            all_processes.sort(key=lambda x: x["mem_bytes"], reverse=True)
+            top_processes = all_processes[: self.top_process_count]
 
             # 更新缓存
             self._process_cache.clear()
             for p in top_processes:
-                self._process_cache[p['pid']] = p['proc']
+                self._process_cache[p["pid"]] = p["proc"]
 
-            logger.debug(f"[status_monitor] 刷新进程缓存: {len(self._process_cache)} 个进程")
+            logger.debug(
+                f"[status_monitor] 刷新进程缓存: {len(self._process_cache)} 个进程"
+            )
         except Exception as e:
             logger.exception(f"[status_monitor] 刷新进程缓存失败: {e}")
 
@@ -321,19 +345,21 @@ class StatusMonitor:
             for pid, proc in self._process_cache.items():
                 try:
                     # 获取进程信息
-                    pinfo = proc.as_dict(attrs=['name', 'status', 'memory_info'])
+                    pinfo = proc.as_dict(attrs=["name", "status", "memory_info"])
                     cpu_percent = proc.cpu_percent(interval=None)
-                    mem_bytes = pinfo['memory_info'].rss if pinfo['memory_info'] else 0
+                    mem_bytes = pinfo["memory_info"].rss if pinfo["memory_info"] else 0
 
-                    all_processes.append({
-                        'name': pinfo['name'],
-                        'cpu_percent': cpu_percent,
-                        'mem_bytes': mem_bytes,
-                        'mem_str': self._format_bytes(mem_bytes),
-                    })
+                    all_processes.append(
+                        {
+                            "name": pinfo["name"],
+                            "cpu_percent": cpu_percent,
+                            "mem_bytes": mem_bytes,
+                            "mem_str": self._format_bytes(mem_bytes),
+                        }
+                    )
 
                     # 统计状态
-                    status = pinfo['status']
+                    status = pinfo["status"]
                     status_counts[status] = status_counts.get(status, 0) + 1
 
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
@@ -345,32 +371,38 @@ class StatusMonitor:
                 self._process_cache.pop(pid, None)
 
             # 排序获取TOP5
-            top_cpu = sorted(all_processes, key=lambda x: x['cpu_percent'], reverse=True)[:5]
-            top_mem = sorted(all_processes, key=lambda x: x['mem_bytes'], reverse=True)[:5]
+            top_cpu = sorted(
+                all_processes, key=lambda x: x["cpu_percent"], reverse=True
+            )[:5]
+            top_mem = sorted(all_processes, key=lambda x: x["mem_bytes"], reverse=True)[
+                :5
+            ]
 
             # 状态中文映射
             status_map = {
-                'running': '运行中',
-                'sleeping': '休眠',
-                'disk-sleep': '磁盘休眠',
-                'stopped': '已停止',
-                'zombie': '僵尸进程',
-                'dead': '已终止',
-                'idle': '空闲',
-                'locked': '已锁定',
-                'waiting': '等待中',
-                'suspended': '已暂停'
+                "running": "运行中",
+                "sleeping": "休眠",
+                "disk-sleep": "磁盘休眠",
+                "stopped": "已停止",
+                "zombie": "僵尸进程",
+                "dead": "已终止",
+                "idle": "空闲",
+                "locked": "已锁定",
+                "waiting": "等待中",
+                "suspended": "已暂停",
             }
-            status_counts_cn = {status_map.get(k, k): v for k, v in status_counts.items()}
+            status_counts_cn = {
+                status_map.get(k, k): v for k, v in status_counts.items()
+            }
 
             # 获取总进程数
             total_count = len(list(psutil.process_iter()))
 
             self._process_data = {
-                'top_cpu': top_cpu,
-                'top_mem': top_mem,
-                'status_counts': status_counts_cn,
-                'total_count': total_count,
+                "top_cpu": top_cpu,
+                "top_mem": top_mem,
+                "status_counts": status_counts_cn,
+                "total_count": total_count,
             }
 
         except Exception as e:

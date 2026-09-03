@@ -14,13 +14,19 @@ from nonebot import on_notice
 from nonebot.adapters import Bot, Event
 from nonebot.matcher import Matcher
 
+from ...adapter import build_message, build_message_segment
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
-from ...adapter import build_message, build_message_segment
 from ...utils.http import get_shared_async_client
 from ...utils.paths import data_dir
 
-P = Plugin("entertain", display_name="娱乐", enabled=True, level=PermLevel.LOW, scene=PermScene.ALL)
+P = Plugin(
+    "entertain",
+    display_name="娱乐",
+    enabled=True,
+    level=PermLevel.LOW,
+    scene=PermScene.ALL,
+)
 
 WELCOME_DIR = data_dir("entertain")
 WELCOME_FILE = WELCOME_DIR / "welcome.json"
@@ -45,7 +51,9 @@ def _load_store() -> dict[str, dict[str, Any]]:
 def _save_store(data: dict[str, dict[str, Any]]) -> None:
     """保存欢迎语存储。"""
     WELCOME_FILE.parent.mkdir(parents=True, exist_ok=True)
-    WELCOME_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    WELCOME_FILE.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
 
 def _group_key(event: Event) -> str | None:
@@ -147,7 +155,11 @@ def _strip_command_prefix(message: Any) -> list[Any]:
 def _has_valid_content(segments: list[Any]) -> bool:
     """判断欢迎语是否包含有效文本或图片。"""
     for segment in segments:
-        if isinstance(segment, tuple) and segment[0] == "text" and str(segment[1]).strip():
+        if (
+            isinstance(segment, tuple)
+            and segment[0] == "text"
+            and str(segment[1]).strip()
+        ):
             return True
         if getattr(segment, "type", None) == "image":
             return True
@@ -157,7 +169,9 @@ def _has_valid_content(segments: list[Any]) -> bool:
     return False
 
 
-async def _serialize_text_and_images(bot: Bot, segments: list[Any], group_key: str) -> tuple[str, dict[str, int]]:
+async def _serialize_text_and_images(
+    bot: Bot, segments: list[Any], group_key: str
+) -> tuple[str, dict[str, int]]:
     """序列化文本和图片到欢迎语存储。"""
     _reset_group_img_dir(group_key)
     directory = _group_img_dir(group_key)
@@ -329,7 +343,10 @@ async def _handle_group_increase(bot: Bot, event: Event) -> None:
     """新成员入群时发送欢迎语。"""
     notice_type = str(getattr(event, "notice_type", "") or "")
     sub_type = str(getattr(event, "sub_type", "") or "")
-    if notice_type != "group_increase" and "increase" not in type(event).__name__.lower():
+    if (
+        notice_type != "group_increase"
+        and "increase" not in type(event).__name__.lower()
+    ):
         return
     if sub_type == "invite" and getattr(event, "user_id", None) is None:
         return

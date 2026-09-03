@@ -10,7 +10,6 @@ from fastapi.staticfiles import StaticFiles
 from nonebot import get_app, logger
 
 from ..config import get_manager
-
 from .routes import bots, config, membership, meta, permissions
 
 _mounted = False
@@ -63,6 +62,10 @@ def mount_console() -> None:
 
     app.include_router(router)
     if has_frontend:
-        app.mount(prefix, StaticFiles(directory=str(dist_dir), html=True), name="fxbot_console")
+        app.mount(
+            prefix,
+            StaticFiles(directory=str(dist_dir), html=True),
+            name="fxbot_console",
+        )
     _mounted = True
     logger.info(f"[FxBot] 控制台已挂载: {prefix}")

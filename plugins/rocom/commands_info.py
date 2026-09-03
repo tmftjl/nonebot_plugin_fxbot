@@ -11,11 +11,20 @@ from nonebot.params import RegexGroup
 from ...adapter import build_message, build_message_segment
 from ...permission import PermLevel, PermScene
 from . import P
-from .data import can_breed, find_pet, find_skill, parse_search_criteria, search_eggs, search_pets
+from .data import (
+    can_breed,
+    find_pet,
+    find_skill,
+    parse_search_criteria,
+    search_eggs,
+    search_pets,
+)
 from .renderer_pokedex import render_pokedex_image
 from .resource_downloader import ensure_rocom_resources
 
-ATTRIBUTE_EFFECTIVENESS_IMAGE = Path(__file__).parent / "resources" / "pokedex" / "attribute_effectiveness.png"
+ATTRIBUTE_EFFECTIVENESS_IMAGE = (
+    Path(__file__).parent / "resources" / "pokedex" / "attribute_effectiveness.png"
+)
 
 pokedex_query = P.on_regex(
     r"^[#＃]图鉴\s+(.+?)\s*$",
@@ -89,7 +98,9 @@ resource_download = P.on_regex(
 
 
 @pokedex_query.handle()
-async def _handle_pokedex(matcher: Matcher, bot: Bot, groups: tuple = RegexGroup()) -> None:
+async def _handle_pokedex(
+    matcher: Matcher, bot: Bot, groups: tuple = RegexGroup()
+) -> None:
     """查询精灵图鉴。"""
     name = str(groups[0]).strip()
     result = find_pet(name)
@@ -132,7 +143,9 @@ async def _handle_breed(matcher: Matcher, groups: tuple = RegexGroup()) -> None:
     _, father_pet = father
     ok, shared = can_breed(mother_pet, father_pet)
     if ok:
-        await matcher.finish(f"{mother_pet['name']} 与 {father_pet['name']} 可以配种\n共同蛋组：{'、'.join(shared)}")
+        await matcher.finish(
+            f"{mother_pet['name']} 与 {father_pet['name']} 可以配种\n共同蛋组：{'、'.join(shared)}"
+        )
     await matcher.finish(f"{mother_pet['name']} 与 {father_pet['name']} 不能配种")
 
 
@@ -161,9 +174,16 @@ async def _handle_pet_search(matcher: Matcher, groups: tuple = RegexGroup()) -> 
     results = search_pets(criteria)
     if not results:
         await matcher.finish("没有找到符合条件的精灵")
-    names = [str(pet.get("name") or pet_id) + (str(pet.get("form") or "")) for pet_id, pet in results]
+    names = [
+        str(pet.get("name") or pet_id) + (str(pet.get("form") or ""))
+        for pet_id, pet in results
+    ]
     shown = "、".join(names[:60])
-    suffix = f"\n仅展示前 60 个，共匹配 {len(results)} 个" if len(results) > 60 else f"\n共匹配 {len(results)} 个"
+    suffix = (
+        f"\n仅展示前 60 个，共匹配 {len(results)} 个"
+        if len(results) > 60
+        else f"\n共匹配 {len(results)} 个"
+    )
     await matcher.finish(f"查找结果：\n{shown}{suffix}")
 
 

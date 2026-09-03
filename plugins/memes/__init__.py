@@ -1,7 +1,7 @@
 from nonebot.plugin import PluginMetadata
 
-from .config import cfg_command_prefixes
 from . import native_matchers as native_matchers
+from .config import cfg_command_prefixes
 
 memes_prefixes = cfg_command_prefixes()
 memes_prefix = memes_prefixes[0] if memes_prefixes else ""

@@ -11,16 +11,26 @@ from nonebot import logger
 from nonebot.adapters import Bot, Event
 from nonebot.matcher import Matcher
 
+from ...adapter import (
+    extract_image_sources,
+    extract_reply_message_id,
+    get_replied_message,
+)
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
-from ...adapter import extract_image_sources, extract_reply_message_id, get_replied_message
 from ...utils.http import get_shared_async_client
 from ...utils.paths import data_dir
 
 DATA_DIR = data_dir("useful") / "cos_images"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-P = Plugin("useful", display_name="实用工具", enabled=True, level=PermLevel.LOW, scene=PermScene.ALL)
+P = Plugin(
+    "useful",
+    display_name="实用工具",
+    enabled=True,
+    level=PermLevel.LOW,
+    scene=PermScene.ALL,
+)
 
 
 def _message(event: Event) -> Any:
@@ -118,7 +128,9 @@ async def _handle_cos_list(matcher: Matcher) -> None:
     """查看 COS 图片库统计。"""
     if not DATA_DIR.exists():
         await matcher.finish("暂无COS图片")
-    date_dirs = sorted([path for path in DATA_DIR.iterdir() if path.is_dir()], reverse=True)
+    date_dirs = sorted(
+        [path for path in DATA_DIR.iterdir() if path.is_dir()], reverse=True
+    )
     if not date_dirs:
         await matcher.finish("暂无COS图片")
 

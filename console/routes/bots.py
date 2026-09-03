@@ -7,7 +7,9 @@ from nonebot import get_bots
 
 from ..auth import bearer_auth
 
-router = APIRouter(prefix="/bots", tags=["fxbot-bots"], dependencies=[Depends(bearer_auth)])
+router = APIRouter(
+    prefix="/bots", tags=["fxbot-bots"], dependencies=[Depends(bearer_auth)]
+)
 
 
 @router.get("")

@@ -9,13 +9,13 @@ import httpx
 from nonebot.adapters import Bot, Event
 from nonebot.exception import MatcherException
 from nonebot.matcher import Matcher
+from nonebot.params import RegexGroup
 from nonebot.permission import SUPERUSER
 from nonebot.rule import Rule
 from nonebot.typing import T_State
-from nonebot.params import RegexGroup
 
 from ...adapter import build_message, build_message_segment
-from ...adapter.support import event_group_id
+from ...adapter.events import event_group_id
 from ...permission import PermLevel, PermScene
 from . import P
 from .config import is_global_enabled, set_global_enabled
@@ -59,7 +59,11 @@ def _find_card_url(event: Event) -> str | None:
         meta = payload.get("meta")
         if not isinstance(meta, dict):
             continue
-        for key, field in (("detail_1", "qqdocurl"), ("news", "jumpUrl"), ("music", "jumpUrl")):
+        for key, field in (
+            ("detail_1", "qqdocurl"),
+            ("news", "jumpUrl"),
+            ("music", "jumpUrl"),
+        ):
             item = meta.get(key)
             if isinstance(item, dict) and isinstance(item.get(field), str):
                 return item[field]
@@ -125,7 +129,9 @@ bili_login_cmd = P.on_regex(
 
 
 @video_matcher.handle()
-async def _handle_video(matcher: Matcher, bot: Bot, event: Event, state: T_State) -> None:
+async def _handle_video(
+    matcher: Matcher, bot: Bot, event: Event, state: T_State
+) -> None:
     """处理视频解析。"""
     url = str(state.get(STATE_URL_KEY) or "")
     if not can_parse_url(url):
@@ -156,7 +162,9 @@ async def _handle_video(matcher: Matcher, bot: Bot, event: Event, state: T_State
 
 
 @group_toggle_cmd.handle()
-async def _handle_group_toggle(matcher: Matcher, event: Event, groups: tuple = RegexGroup()) -> None:
+async def _handle_group_toggle(
+    matcher: Matcher, event: Event, groups: tuple = RegexGroup()
+) -> None:
     """处理本群解析开关。"""
     group_id = event_group_id(event)
     if not group_id:

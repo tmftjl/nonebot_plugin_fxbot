@@ -6,7 +6,7 @@ from nonebot.adapters import Bot, Event
 from nonebot.matcher import Matcher
 
 from ...adapter import build_message, build_message_segment, extract_message_target
-from ...adapter.support import event_group_id, event_user_id
+from ...adapter.events import event_group_id, event_user_id
 from ...permission import PermLevel, PermScene
 from . import P
 from .client import fetch_merchant_snapshot
@@ -84,9 +84,13 @@ async def _handle_subscribe(matcher: Matcher, bot: Bot, event: Event) -> None:  
     sub_type, sub_key = _event_context(event)
     if not sub_key:
         await matcher.finish("无法识别当前会话，订阅失败")
-    upsert_subscription(sub_type, sub_key, extract_message_target(event), event_user_id(event))
+    upsert_subscription(
+        sub_type, sub_key, extract_message_target(event), event_user_id(event)
+    )
     location = "本群" if sub_type == "group" else "私聊"
-    await matcher.finish(f"已开启远行商人推送（{location}），将在远行商人数据更新时推送")
+    await matcher.finish(
+        f"已开启远行商人推送（{location}），将在远行商人数据更新时推送"
+    )
 
 
 @merchant_unsubscribe.handle()

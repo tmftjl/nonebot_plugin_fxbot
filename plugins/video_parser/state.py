@@ -21,13 +21,19 @@ def _load() -> dict[str, list[str]]:
     if not isinstance(data, dict):
         return {"disabled_groups": []}
     groups = data.get("disabled_groups")
-    return {"disabled_groups": [str(item) for item in groups]} if isinstance(groups, list) else {"disabled_groups": []}
+    return (
+        {"disabled_groups": [str(item) for item in groups]}
+        if isinstance(groups, list)
+        else {"disabled_groups": []}
+    )
 
 
 def _save(data: dict[str, list[str]]) -> None:
     """保存群解析开关状态。"""
     STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    STATE_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    STATE_PATH.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
 
 def is_group_enabled(group_id: str | None) -> bool:

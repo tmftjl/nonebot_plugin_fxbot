@@ -7,7 +7,6 @@ from typing import Any
 from nonebot import logger
 
 from ..utils.paths import config_dir
-
 from .proxy import ConfigProxy
 from .system_defaults import SYSTEM_DEFAULTS
 

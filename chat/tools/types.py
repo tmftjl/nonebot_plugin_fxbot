@@ -33,7 +33,9 @@ class ToolContext:
 class ToolError(Exception):
     """可安全返回给模型的工具错误。"""
 
-    def __init__(self, message: str, *, code: str = "tool_error", data: Any = None) -> None:
+    def __init__(
+        self, message: str, *, code: str = "tool_error", data: Any = None
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.data = data

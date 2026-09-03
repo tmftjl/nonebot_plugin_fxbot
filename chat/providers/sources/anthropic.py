@@ -46,7 +46,9 @@ class AnthropicProvider(ChatProvider):
                     blocks: list[dict[str, Any]] = []
                     for item in content:
                         if item.get("type") == "text":
-                            blocks.append({"type": "text", "text": item.get("text", "")})
+                            blocks.append(
+                                {"type": "text", "text": item.get("text", "")}
+                            )
                         elif item.get("type") == "image_url":
                             url = item["image_url"]["url"]
                             if url.startswith("data:"):
@@ -57,7 +59,9 @@ class AnthropicProvider(ChatProvider):
                                             "type": "image",
                                             "source": {
                                                 "type": "base64",
-                                                "media_type": parts[0].replace("data:", ""),
+                                                "media_type": parts[0].replace(
+                                                    "data:", ""
+                                                ),
                                                 "data": parts[1],
                                             },
                                         }
@@ -75,7 +79,9 @@ class AnthropicProvider(ChatProvider):
                         try:
                             args = json.loads(args)
                         except json.JSONDecodeError:
-                            logger.warning(f"[AnthropicProvider] 工具参数 JSON 解析失败: {args}")
+                            logger.warning(
+                                f"[AnthropicProvider] 工具参数 JSON 解析失败: {args}"
+                            )
                             args = {}
                     blocks.append(
                         {
@@ -179,7 +185,9 @@ class AnthropicProvider(ChatProvider):
             full_content = ""
             async with self.client.messages.stream(**params) as stream:
                 async for event in stream:
-                    if getattr(event, "type", None) == "content_block_delta" and hasattr(
+                    if getattr(
+                        event, "type", None
+                    ) == "content_block_delta" and hasattr(
                         event.delta,
                         "text",
                     ):

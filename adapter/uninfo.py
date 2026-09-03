@@ -12,12 +12,14 @@ from typing import Annotated, Any
 from nonebot import get_bots
 from nonebot.adapters import Bot, Event
 from nonebot.params import Depends
+from sqlalchemy import JSON, Column, UniqueConstraint, exc
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import Column, JSON, UniqueConstraint, exc
 from sqlmodel import Field, SQLModel, select
 
 from ..db import with_session
-from .support import adapter_name, event_group_id, event_user_id, event_user_name, official_qq_avatar, qq_avatar
+from .bot import PlatformBot
+from .events import event_group_id, event_user_id, event_user_name
+from .registry import adapter_name
 
 
 class SupportScope(str, Enum):
@@ -114,7 +116,9 @@ class Role:
 
     @classmethod
     def load(cls, data: dict[str, Any]) -> "Role":
-        return cls(id=str(data["id"]), level=int(data.get("level") or 0), name=data.get("name"))
+        return cls(
+            id=str(data["id"]), level=int(data.get("level") or 0), name=data.get("name")
+        )
 
 
 @dataclass
@@ -188,14 +192,26 @@ class Session:
     @property
     def scene_path(self) -> str:
         if self.scene.is_private:
-            return f"{self.scene.parent.id}_{self.user.id}" if self.scene.parent else self.user.id
+            return (
+                f"{self.scene.parent.id}_{self.user.id}"
+                if self.scene.parent
+                else self.user.id
+            )
         if self.scene.is_group:
             return self.scene.id
-        return f"{self.scene.parent.id}_{self.scene.id}" if self.scene.parent else self.scene.id
+        return (
+            f"{self.scene.parent.id}_{self.scene.id}"
+            if self.scene.parent
+            else self.scene.id
+        )
 
     @property
     def basic(self) -> dict[str, str]:
-        scope = self.scope.value if isinstance(self.scope, SupportScope) else str(self.scope)
+        scope = (
+            self.scope.value
+            if isinstance(self.scope, SupportScope)
+            else str(self.scope)
+        )
         return {"self_id": self.self_id, "adapter": self.adapter, "scope": scope}
 
 
@@ -230,10 +246,6 @@ def _role_from_text(role: Any) -> Role:
 
 
 def _scope_for_adapter(adapter: str) -> str:
-    if adapter == "QQ":
-        return SupportScope.qq_api.value
-    if adapter == "OneBot V11":
-        return SupportScope.qq_client.value
     return SupportScope.unknown.value
 
 
@@ -250,35 +262,40 @@ async def _build_session(bot: Bot, event: Event) -> Session:
         or user_id
     )
     nick = event_user_name(event, name)
-    avatar = official_qq_avatar(bot, user_id) if adapter == "QQ" else qq_avatar(user_id)
-    user = User(id=user_id, name=name, nick=nick, avatar=avatar, gender=str(getattr(sender, "sex", "unknown") or "unknown"))
+    client = PlatformBot(bot)
+    avatar = client.user_avatar(user_id)
+    user = User(
+        id=user_id,
+        name=name,
+        nick=nick,
+        avatar=avatar,
+        gender=str(getattr(sender, "sex", "unknown") or "unknown"),
+    )
 
     if group_id:
         group_name = None
-        if adapter == "OneBot V11" and hasattr(bot, "get_group_info"):
-            try:
-                group = await bot.get_group_info(group_id=int(group_id))
-                group_name = str(group.get("group_name") or "")
-            except Exception:
-                group_name = None
+        try:
+            group = await client.get_group_info(group_id)
+            group_name = str(group.get("group_name") or group.get("name") or "")
+        except Exception:
+            group_name = None
         scene = Scene(
             id=group_id,
             type=SceneType.GROUP,
             name=group_name,
-            avatar=f"https://p.qlogo.cn/gh/{group_id}/{group_id}/",
+            avatar=client.group_avatar(group_id),
         )
         role = _role_from_text(getattr(sender, "role", None))
         join_time = None
         card = nick
-        if adapter == "OneBot V11" and hasattr(bot, "get_group_member_info"):
-            try:
-                member_info = await bot.get_group_member_info(group_id=int(group_id), user_id=int(user_id), no_cache=True)
-                card = str(member_info.get("card") or member_info.get("nickname") or nick)
-                role = _role_from_text(member_info.get("role"))
-                join_raw = member_info.get("join_time")
-                join_time = datetime.fromtimestamp(join_raw) if join_raw else None
-            except Exception:
-                pass
+        try:
+            member_info = await client.get_group_member(group_id, user_id)
+            card = str(member_info.get("card") or member_info.get("nickname") or nick)
+            role = _role_from_text(member_info.get("role"))
+            join_raw = member_info.get("join_time")
+            join_time = datetime.fromtimestamp(join_raw) if join_raw else None
+        except Exception:
+            pass
         member = Member(user=user, nick=card, joined_at=join_time, roles=[role])
     else:
         scene = Scene(id=user_id, type=SceneType.PRIVATE, name=name, avatar=avatar)
@@ -313,15 +330,24 @@ class Interface:
         self.bot = bot
 
     async def get_user(self, user_id: str) -> User | None:
-        adapter = adapter_name(self.bot)
-        if adapter == "OneBot V11" and hasattr(self.bot, "get_stranger_info"):
-            try:
-                info = await self.bot.get_stranger_info(user_id=int(user_id))
-                name = str(info.get("nickname") or user_id)
-                return User(id=str(info.get("user_id") or user_id), name=name, nick=name, avatar=qq_avatar(user_id), gender=str(info.get("sex") or "unknown"))
-            except Exception:
-                pass
-        return User(id=str(user_id), name=str(user_id), nick=str(user_id), avatar=official_qq_avatar(self.bot, user_id) if adapter == "QQ" else qq_avatar(user_id))
+        client = PlatformBot(self.bot)
+        try:
+            info = await client.get_user(user_id)
+            name = str(info.get("nickname") or info.get("username") or user_id)
+            return User(
+                id=str(info.get("user_id") or info.get("id") or user_id),
+                name=name,
+                nick=name,
+                avatar=client.user_avatar(user_id),
+                gender=str(info.get("sex") or "unknown"),
+            )
+        except Exception:
+            return User(
+                id=str(user_id),
+                name=str(user_id),
+                nick=str(user_id),
+                avatar=client.user_avatar(user_id),
+            )
 
 
 def get_interface(bot: Bot) -> Interface:
@@ -340,7 +366,9 @@ class BotModel(SQLModel, table=True):
     """持久化 Bot。"""
 
     __tablename__ = "nonebot_plugin_uninfo_botmodel"
-    __table_args__ = (UniqueConstraint("self_id", "adapter", name="nonebot_plugin_uninfo_unique_bot"),)
+    __table_args__ = (
+        UniqueConstraint("self_id", "adapter", name="nonebot_plugin_uninfo_unique_bot"),
+    )
 
     id: int | None = Field(default=None, primary_key=True)
     self_id: str = Field(max_length=64, nullable=False)
@@ -358,7 +386,14 @@ class SceneModel(SQLModel, table=True):
     """持久化场景。"""
 
     __tablename__ = "nonebot_plugin_uninfo_scenemodel"
-    __table_args__ = (UniqueConstraint("bot_persist_id", "scene_id", "scene_type", name="nonebot_plugin_uninfo_unique_scene"),)
+    __table_args__ = (
+        UniqueConstraint(
+            "bot_persist_id",
+            "scene_id",
+            "scene_type",
+            name="nonebot_plugin_uninfo_unique_scene",
+        ),
+    )
 
     id: int | None = Field(default=None, primary_key=True)
     bot_persist_id: int = Field(nullable=False)
@@ -372,7 +407,11 @@ class UserModel(SQLModel, table=True):
     """持久化用户。"""
 
     __tablename__ = "nonebot_plugin_uninfo_usermodel"
-    __table_args__ = (UniqueConstraint("bot_persist_id", "user_id", name="nonebot_plugin_uninfo_unique_user"),)
+    __table_args__ = (
+        UniqueConstraint(
+            "bot_persist_id", "user_id", name="nonebot_plugin_uninfo_unique_user"
+        ),
+    )
 
     id: int | None = Field(default=None, primary_key=True)
     bot_persist_id: int = Field(nullable=False)
@@ -384,13 +423,22 @@ class SessionModel(SQLModel, table=True):
     """持久化会话。"""
 
     __tablename__ = "nonebot_plugin_uninfo_sessionmodel"
-    __table_args__ = (UniqueConstraint("bot_persist_id", "scene_persist_id", "user_persist_id", name="nonebot_plugin_uninfo_unique_session"),)
+    __table_args__ = (
+        UniqueConstraint(
+            "bot_persist_id",
+            "scene_persist_id",
+            "user_persist_id",
+            name="nonebot_plugin_uninfo_unique_session",
+        ),
+    )
 
     id: int | None = Field(default=None, primary_key=True)
     bot_persist_id: int = Field(nullable=False)
     scene_persist_id: int = Field(nullable=False)
     user_persist_id: int = Field(nullable=False)
-    member_data: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))
+    member_data: dict | None = Field(
+        default=None, sa_column=Column(JSON, nullable=True)
+    )
 
 
 _insert_mutex: asyncio.Lock | None = None
@@ -407,15 +455,25 @@ class _UninfoStore:
     """会话信息持久化存储。"""
 
     @with_session
-    async def get_bot_persist_id(self, db_session: AsyncSession, basic_info: dict[str, str]) -> int:
-        statement = select(BotModel).where(BotModel.self_id == basic_info["self_id"]).where(BotModel.adapter == basic_info["adapter"])
+    async def get_bot_persist_id(
+        self, db_session: AsyncSession, basic_info: dict[str, str]
+    ) -> int:
+        statement = (
+            select(BotModel)
+            .where(BotModel.self_id == basic_info["self_id"])
+            .where(BotModel.adapter == basic_info["adapter"])
+        )
         if row := (await db_session.execute(statement)).scalar_one_or_none():
             row.scope = basic_info["scope"]
             await db_session.flush()
             assert row.id is not None
             return row.id
 
-        row = BotModel(self_id=basic_info["self_id"], adapter=basic_info["adapter"], scope=basic_info["scope"])
+        row = BotModel(
+            self_id=basic_info["self_id"],
+            adapter=basic_info["adapter"],
+            scope=basic_info["scope"],
+        )
         async with _get_insert_mutex():
             try:
                 db_session.add(row)
@@ -429,9 +487,17 @@ class _UninfoStore:
                 return persisted_id
 
     @with_session
-    async def get_scene_persist_id(self, db_session: AsyncSession, basic_info: dict[str, str], scene: Scene) -> int:
+    async def get_scene_persist_id(
+        self, db_session: AsyncSession, basic_info: dict[str, str], scene: Scene
+    ) -> int:
         bot_persist_id = await self.get_bot_persist_id(basic_info, session=db_session)
-        parent_id = await self.get_scene_persist_id(basic_info, scene.parent, session=db_session) if scene.parent else None
+        parent_id = (
+            await self.get_scene_persist_id(
+                basic_info, scene.parent, session=db_session
+            )
+            if scene.parent
+            else None
+        )
         scene_data = json.loads(scene.dump_json())
         statement = (
             select(SceneModel)
@@ -446,7 +512,13 @@ class _UninfoStore:
             assert row.id is not None
             return row.id
 
-        row = SceneModel(bot_persist_id=bot_persist_id, parent_scene_persist_id=parent_id, scene_id=scene.id, scene_type=scene.type.value, scene_data=scene_data)
+        row = SceneModel(
+            bot_persist_id=bot_persist_id,
+            parent_scene_persist_id=parent_id,
+            scene_id=scene.id,
+            scene_type=scene.type.value,
+            scene_data=scene_data,
+        )
         async with _get_insert_mutex():
             try:
                 db_session.add(row)
@@ -460,17 +532,25 @@ class _UninfoStore:
                 return persisted_id
 
     @with_session
-    async def get_user_persist_id(self, db_session: AsyncSession, basic_info: dict[str, str], user: User) -> int:
+    async def get_user_persist_id(
+        self, db_session: AsyncSession, basic_info: dict[str, str], user: User
+    ) -> int:
         bot_persist_id = await self.get_bot_persist_id(basic_info, session=db_session)
         user_data = json.loads(user.dump_json())
-        statement = select(UserModel).where(UserModel.bot_persist_id == bot_persist_id).where(UserModel.user_id == user.id)
+        statement = (
+            select(UserModel)
+            .where(UserModel.bot_persist_id == bot_persist_id)
+            .where(UserModel.user_id == user.id)
+        )
         if row := (await db_session.execute(statement)).scalar_one_or_none():
             row.user_data = user_data
             await db_session.flush()
             assert row.id is not None
             return row.id
 
-        row = UserModel(bot_persist_id=bot_persist_id, user_id=user.id, user_data=user_data)
+        row = UserModel(
+            bot_persist_id=bot_persist_id, user_id=user.id, user_data=user_data
+        )
         async with _get_insert_mutex():
             try:
                 db_session.add(row)
@@ -484,11 +564,21 @@ class _UninfoStore:
                 return persisted_id
 
     @with_session
-    async def get_session_persist_id(self, db_session: AsyncSession, info_session: Session) -> int:
-        bot_persist_id = await self.get_bot_persist_id(info_session.basic, session=db_session)
-        scene_persist_id = await self.get_scene_persist_id(info_session.basic, info_session.scene, session=db_session)
-        user_persist_id = await self.get_user_persist_id(info_session.basic, info_session.user, session=db_session)
-        member_data = json.loads(info_session.member.dump_json()) if info_session.member else None
+    async def get_session_persist_id(
+        self, db_session: AsyncSession, info_session: Session
+    ) -> int:
+        bot_persist_id = await self.get_bot_persist_id(
+            info_session.basic, session=db_session
+        )
+        scene_persist_id = await self.get_scene_persist_id(
+            info_session.basic, info_session.scene, session=db_session
+        )
+        user_persist_id = await self.get_user_persist_id(
+            info_session.basic, info_session.user, session=db_session
+        )
+        member_data = (
+            json.loads(info_session.member.dump_json()) if info_session.member else None
+        )
         statement = (
             select(SessionModel)
             .where(SessionModel.bot_persist_id == bot_persist_id)
@@ -501,7 +591,12 @@ class _UninfoStore:
             assert row.id is not None
             return row.id
 
-        row = SessionModel(bot_persist_id=bot_persist_id, scene_persist_id=scene_persist_id, user_persist_id=user_persist_id, member_data=member_data)
+        row = SessionModel(
+            bot_persist_id=bot_persist_id,
+            scene_persist_id=scene_persist_id,
+            user_persist_id=user_persist_id,
+            member_data=member_data,
+        )
         async with _get_insert_mutex():
             try:
                 db_session.add(row)
@@ -530,7 +625,9 @@ async def get_user_persist_id(basic_info: dict[str, str], user: User) -> int:
     return await _store.get_user_persist_id(basic_info, user)
 
 
-async def get_session_persist_id(info_session: Session, *, db_session: AsyncSession | None = None) -> int:
+async def get_session_persist_id(
+    info_session: Session, *, db_session: AsyncSession | None = None
+) -> int:
     if db_session is not None:
         return await _store.get_session_persist_id(info_session, session=db_session)
     return await _store.get_session_persist_id(info_session)

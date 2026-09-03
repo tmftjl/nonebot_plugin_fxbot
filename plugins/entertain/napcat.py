@@ -7,11 +7,18 @@ from typing import Any
 from nonebot.adapters import Bot, Event
 from nonebot.matcher import Matcher
 
+from ...adapter import selfBot
 from ...chat.tools import ToolContext, ToolRuntime, tool
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
 
-P = Plugin("entertain", display_name="娱乐", enabled=True, level=PermLevel.LOW, scene=PermScene.ALL)
+P = Plugin(
+    "entertain",
+    display_name="娱乐",
+    enabled=True,
+    level=PermLevel.LOW,
+    scene=PermScene.ALL,
+)
 
 MAX_LIKE_TIMES = 10
 
@@ -40,7 +47,7 @@ async def _send_like(bot: Bot, user_id: str, times: int = MAX_LIKE_TIMES) -> boo
     """调用 OneBot 点赞接口。"""
     if not hasattr(bot, "send_like"):
         return False
-    await bot.send_like(user_id=int(user_id), times=max(1, min(times, MAX_LIKE_TIMES)))
+    await selfBot.like(user_id, max(1, min(times, MAX_LIKE_TIMES)))
     return True
 
 
@@ -54,7 +61,11 @@ async def _handle_like(matcher: Matcher, bot: Bot, event: Event) -> None:
         ok = await _send_like(bot, user_id)
     except Exception:
         ok = False
-    await matcher.finish(f"已为你点赞 {MAX_LIKE_TIMES} 次" if ok else "当前适配器不支持点赞或今日已达上限")
+    await matcher.finish(
+        f"已为你点赞 {MAX_LIKE_TIMES} 次"
+        if ok
+        else "当前适配器不支持点赞或今日已达上限"
+    )
 
 
 @tool(
@@ -69,7 +80,9 @@ async def _handle_like(matcher: Matcher, bot: Bot, event: Event) -> None:
         "required": ["user_id"],
     },
 )
-async def like_tool(ctx: ToolContext, rt: ToolRuntime, user_id: str, times: int = MAX_LIKE_TIMES) -> dict[str, Any]:
+async def like_tool(
+    ctx: ToolContext, rt: ToolRuntime, user_id: str, times: int = MAX_LIKE_TIMES
+) -> dict[str, Any]:
     """AI 工具：点赞。"""
     try:
         ok = await _send_like(rt.require_bot(), user_id, times)

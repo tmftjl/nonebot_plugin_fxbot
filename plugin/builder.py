@@ -12,7 +12,7 @@ from nonebot.message import event_preprocessor
 from nonebot.permission import SUPERUSER, Permission
 from nonebot.rule import Rule
 
-from ..adapter.message import move_non_text_segments_to_end
+from ..adapter.message_utils import move_non_text_segments_to_end
 from ..message_policy import should_process_fxbot_message
 from ..permission import PermLevel, PermScene, permission_for_cmd, permission_for_plugin
 from ..permission.helpers import upsert_command_defaults, upsert_plugin_defaults
@@ -106,7 +106,9 @@ def set_command_display_name(plugin: str, command: str, display_name: str) -> No
 
 def get_command_display_names() -> dict[str, dict[str, str]]:
     """获取命令展示名映射。"""
-    return {plugin: dict(commands) for plugin, commands in _COMMAND_DISPLAY_NAMES.items()}
+    return {
+        plugin: dict(commands) for plugin, commands in _COMMAND_DISPLAY_NAMES.items()
+    }
 
 
 class Plugin:
@@ -223,7 +225,9 @@ class Plugin:
         matcher = factory(*factory_args, **kwargs)
 
         if not (isinstance(matcher, type) and issubclass(matcher, Matcher)):
-            raise TypeError(f"NoneBot matcher 工厂返回了无效类型: {type(matcher).__name__}")
+            raise TypeError(
+                f"NoneBot matcher 工厂返回了无效类型: {type(matcher).__name__}"
+            )
 
         if log:
             plugin_display = _PLUGIN_DISPLAY_NAMES.get(self.name, self.name)

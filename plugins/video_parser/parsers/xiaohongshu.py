@@ -7,7 +7,16 @@ from typing import Any
 
 from ..types import VideoResult
 from .base import ParseError
-from .common import COMMON_HEADERS, IOS_HEADERS as SHARED_IOS_HEADERS, extract_json, first, get_text, redirect_url
+from .common import (
+    COMMON_HEADERS,
+    extract_json,
+    first,
+    get_text,
+    redirect_url,
+)
+from .common import (
+    IOS_HEADERS as SHARED_IOS_HEADERS,
+)
 
 HEADERS = {
     **COMMON_HEADERS,
@@ -31,8 +40,13 @@ IOS_HEADERS = {
 
 async def parse(url: str) -> VideoResult:
     """解析小红书视频或图文。"""
-    resolved = await redirect_url(url, headers=IOS_HEADERS) if "xhslink.com" in url else url
-    matched = re.search(r"(?:explore|discovery/item)/(?P<query>(?P<id>[0-9a-zA-Z]+)(?:\?[^#\s]+)?)", resolved)
+    resolved = (
+        await redirect_url(url, headers=IOS_HEADERS) if "xhslink.com" in url else url
+    )
+    matched = re.search(
+        r"(?:explore|discovery/item)/(?P<query>(?P<id>[0-9a-zA-Z]+)(?:\?[^#\s]+)?)",
+        resolved,
+    )
     if not matched:
         raise ParseError("无法识别小红书笔记 ID")
 
@@ -49,8 +63,10 @@ async def parse(url: str) -> VideoResult:
 async def _parse_explore(url: str, note_id: str) -> VideoResult:
     """解析 explore 页面。"""
     html = await get_text(url, headers=HEADERS)
-    state = extract_json(html, r"window\.__INITIAL_STATE__=(.*?)</script>", undefined_to_null=True)
-    detail_map = (((state.get("note") or {}).get("noteDetailMap")) or {})
+    state = extract_json(
+        html, r"window\.__INITIAL_STATE__=(.*?)</script>", undefined_to_null=True
+    )
+    detail_map = ((state.get("note") or {}).get("noteDetailMap")) or {}
     note = ((detail_map.get(note_id) or {}).get("note")) or {}
     if not note:
         raise ParseError("小红书页面没有笔记信息")
@@ -60,9 +76,11 @@ async def _parse_explore(url: str, note_id: str) -> VideoResult:
 async def _parse_discovery(url: str) -> VideoResult:
     """解析 discovery 页面。"""
     html = await get_text(url, headers=IOS_HEADERS)
-    state = extract_json(html, r"window\.__INITIAL_STATE__=(.*?)</script>", undefined_to_null=True)
+    state = extract_json(
+        html, r"window\.__INITIAL_STATE__=(.*?)</script>", undefined_to_null=True
+    )
     container = state.get("noteData") or {}
-    note = (((container.get("data") or {}).get("noteData")) or {})
+    note = ((container.get("data") or {}).get("noteData")) or {}
     preload = container.get("normalNotePreloadData") or {}
     result = _result_from_note(note, source_url=url, discovery=True)
     images = preload.get("imagesList") or []
@@ -75,7 +93,9 @@ async def _parse_discovery(url: str) -> VideoResult:
     return result
 
 
-def _result_from_note(note: dict[str, Any], *, source_url: str, discovery: bool) -> VideoResult:
+def _result_from_note(
+    note: dict[str, Any], *, source_url: str, discovery: bool
+) -> VideoResult:
     """从笔记结构构造结果。"""
     user = note.get("user") or {}
     images = note.get("imageList") or []
@@ -119,13 +139,15 @@ def _result_from_note(note: dict[str, Any], *, source_url: str, discovery: bool)
 
 def _video_url_and_duration(video: dict[str, Any]) -> tuple[str | None, float | None]:
     """按原插件顺序提取小红书视频流。"""
-    stream = (((video.get("media") or {}).get("stream")) or {})
+    stream = ((video.get("media") or {}).get("stream")) or {}
     for key in ("h265", "h264", "av1", "h266"):
         items = stream.get(key)
         item = first(items)
         if isinstance(item, dict) and item.get("masterUrl"):
             duration = item.get("duration")
-            return str(item["masterUrl"]), (float(duration) / 1000) if duration else None
+            return str(item["masterUrl"]), (
+                float(duration) / 1000
+            ) if duration else None
     return None, None
 
 

@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 from importlib import import_module
 from importlib.util import module_from_spec, spec_from_file_location
+from pathlib import Path
 
 from nonebot import load_plugins, logger
 
@@ -49,7 +49,9 @@ def _import_plugin_model_modules() -> None:
         model_path = plugin_dir / "models.py"
         if not model_path.is_file():
             continue
-        _import_model_file(f"{__package__}.plugins.{plugin_dir.name}.models", model_path)
+        _import_model_file(
+            f"{__package__}.plugins.{plugin_dir.name}.models", model_path
+        )
 
 
 async def init() -> None:
@@ -63,9 +65,11 @@ async def init() -> None:
     get_config_manager().bootstrap()
 
     _import_startup_module("plugin.builder")
-    _import_startup_module("message_filter")
+    _import_startup_module("permission.message_policy")
     _import_startup_module("membership.models")
     _import_startup_module("adapter.uninfo")
+    _import_startup_module("adapter")
+    _import_startup_module("adapter.context")
     _import_plugin_model_modules()
 
     try:
@@ -73,7 +77,9 @@ async def init() -> None:
         _database_ready = True
     except Exception:
         _database_ready = False
-        logger.opt(exception=True).error("[FxBot] 数据库初始化失败，会员门禁后续必须按 fail-closed 处理")
+        logger.opt(exception=True).error(
+            "[FxBot] 数据库初始化失败，会员门禁后续必须按 fail-closed 处理"
+        )
 
     _import_startup_module("membership.gate")
     _import_startup_module("membership.commands")
@@ -85,7 +91,9 @@ async def init() -> None:
 
         setup_membership_tasks()
     except Exception:
-        logger.opt(exception=True).warning("[FxBot] 会员定时任务注册失败，核心功能继续启动")
+        logger.opt(exception=True).warning(
+            "[FxBot] 会员定时任务注册失败，核心功能继续启动"
+        )
 
     try:
         from .console.server import mount_console
@@ -96,7 +104,9 @@ async def init() -> None:
         try:
             mount_console()
         except Exception:
-            logger.opt(exception=True).warning("[FxBot] 控制台挂载失败，核心功能继续启动")
+            logger.opt(exception=True).warning(
+                "[FxBot] 控制台挂载失败，核心功能继续启动"
+            )
 
     load_plugins(str(built_in_plugins_dir()))
     _initialized = True

@@ -8,10 +8,16 @@ from nonebot.adapters import Bot, Event
 from nonebot.matcher import Matcher
 
 from ...adapter import build_message, build_message_segment, extract_message_target
-from ...adapter.support import event_group_id, event_user_id
+from ...adapter.events import event_group_id, event_user_id
 from ...permission import PermLevel, PermScene
 from . import P
-from .client import BilibiliLiveError, LiveRoomSnapshot, fetch_room, fetch_room_by_uid, parse_room_id
+from .client import (
+    BilibiliLiveError,
+    LiveRoomSnapshot,
+    fetch_room,
+    fetch_room_by_uid,
+    parse_room_id,
+)
 from .store import add_room, get_subscription, remove_room, set_room_state
 
 ROOM_ARGUMENT_PATTERN = r"(?:\d+|(?:https?://)?live\.bilibili\.com/\S+)"
@@ -126,7 +132,9 @@ def _uid_argument(event: Event) -> int:
     return int(match.group(1))
 
 
-async def _save_subscription(matcher: Matcher, event: Event, room: LiveRoomSnapshot) -> None:
+async def _save_subscription(
+    matcher: Matcher, event: Event, room: LiveRoomSnapshot
+) -> None:
     """保存当前会话订阅并返回操作结果。"""
     sub_type, sub_key = _event_context(event)
     if not sub_key:
@@ -186,7 +194,9 @@ async def _handle_unsubscribe(matcher: Matcher, event: Event) -> None:
         await matcher.finish("无法识别当前会话，取消订阅失败")
     location = "本群" if sub_type == "group" else "当前私聊"
     if remove_room(sub_type, sub_key, room.room_id):
-        await matcher.finish(f"已取消{location}对 {room.name} 直播间 {room.room_id} 的订阅")
+        await matcher.finish(
+            f"已取消{location}对 {room.name} 直播间 {room.room_id} 的订阅"
+        )
     await matcher.finish(f"{location}没有订阅直播间 {room.room_id}")
 
 

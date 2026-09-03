@@ -11,14 +11,20 @@ from nonebot.adapters import Bot, Event
 from nonebot.matcher import Matcher
 from nonebot.params import RegexGroup
 
-from ...adapter.message import mention_targets
+from ...adapter import selfBot
 from ...chat.tools import ToolContext, ToolRuntime, tool
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
 from . import banwords as banwords
 from .identity import is_superuser_id
 
-P = Plugin("group_admin", display_name="群管", enabled=True, level=PermLevel.ADMIN, scene=PermScene.GROUP)
+P = Plugin(
+    "group_admin",
+    display_name="群管",
+    enabled=True,
+    level=PermLevel.ADMIN,
+    scene=PermScene.GROUP,
+)
 
 
 @dataclass
@@ -64,7 +70,7 @@ def _plain_text(event: Any) -> str:
 def _extract_target_id(event: Any, fallback: str = "") -> int | None:
     """从消息中提取 @ 目标或 QQ 号。"""
     try:
-        targets = mention_targets(event.get_message())
+        targets = selfBot.mention_targets(event.get_message())
         if targets:
             return int(targets[0])
     except Exception:
@@ -76,7 +82,7 @@ def _extract_target_id(event: Any, fallback: str = "") -> int | None:
 def _extract_target_ids(event: Any, fallback: str = "") -> list[int]:
     """从消息中提取所有 @ 目标或文本 QQ 号。"""
     try:
-        targets = [int(item) for item in mention_targets(event.get_message())]
+        targets = [int(item) for item in selfBot.mention_targets(event.get_message())]
         if targets:
             return targets
     except Exception:
@@ -124,8 +130,9 @@ async def _guard(
     op_name: str = "操作",
 ) -> ServiceResult:
     """统一群管权限守卫。"""
+    client = selfBot
     try:
-        bot_info = await bot.get_group_member_info(group_id=int(group_id), user_id=int(bot.self_id))
+        bot_info = await client.get_group_member(group_id, str(bot.self_id))
         bot_role = bot_info.get("role", "member")
         if bot_role == "member":
             return ServiceResult(False, f"Bot 无管理权限，无法{op_name}")
@@ -136,7 +143,7 @@ async def _guard(
     operator_role = "owner" if operator_is_superuser else "member"
     if not operator_is_superuser:
         try:
-            operator_info = await bot.get_group_member_info(group_id=int(group_id), user_id=int(operator_id))
+            operator_info = await client.get_group_member(group_id, operator_id)
             operator_role = operator_info.get("role", "member")
             if operator_role not in {"owner", "admin"}:
                 return ServiceResult(False, "权限不足")
@@ -147,7 +154,7 @@ async def _guard(
         if is_superuser_id(target_id):
             return ServiceResult(False, "目标受主人保护")
         try:
-            target_info = await bot.get_group_member_info(group_id=int(group_id), user_id=target_id)
+            target_info = await client.get_group_member(group_id, str(target_id))
             target_role = target_info.get("role", "member")
             if target_role == "owner":
                 return ServiceResult(False, "无法操作群主")
@@ -158,10 +165,13 @@ async def _guard(
     return ServiceResult(True, "允许操作")
 
 
-async def _bot_guard(bot: Bot, group_id: str, *, op_name: str = "操作") -> ServiceResult:
+async def _bot_guard(
+    bot: Bot, group_id: str, *, op_name: str = "操作"
+) -> ServiceResult:
     """只检查 Bot 自身是否具备群管理能力。"""
+    client = selfBot
     try:
-        bot_info = await bot.get_group_member_info(group_id=int(group_id), user_id=int(bot.self_id))
+        bot_info = await client.get_group_member(group_id, str(bot.self_id))
         bot_role = bot_info.get("role", "member")
         if bot_role == "member":
             return ServiceResult(False, f"Bot 无管理权限，无法{op_name}")
@@ -182,11 +192,13 @@ async def _mute_member(
     if str(user_id) == str(operator_id):
         guard = await _bot_guard(bot, group_id, op_name="禁言")
     else:
-        guard = await _guard(bot, group_id, operator_id, target_id=user_id, op_name="禁言")
+        guard = await _guard(
+            bot, group_id, operator_id, target_id=user_id, op_name="禁言"
+        )
     if not guard.success:
         return guard
     try:
-        await bot.set_group_ban(group_id=int(group_id), user_id=user_id, duration=max(0, min(duration, 2592000)))
+        await selfBot.ban(group_id, str(user_id), max(0, min(duration, 2592000)))
         return ServiceResult(True, "操作成功")
     except Exception as exc:
         return ServiceResult(False, f"操作失败: {exc}")
@@ -205,72 +217,72 @@ async def _kick_member(
     if not guard.success:
         return guard
     try:
-        await bot.set_group_kick(
-            group_id=int(group_id),
-            user_id=user_id,
-            reject_add_request=reject_add,
-        )
+        await selfBot.kick(group_id, str(user_id), reject_add)
         return ServiceResult(True, "已移出群聊")
     except Exception as exc:
         return ServiceResult(False, f"操作失败: {exc}")
 
 
-async def _mute_all(bot: Bot, group_id: str, *, operator_id: str, enable: bool) -> ServiceResult:
+async def _mute_all(
+    bot: Bot, group_id: str, *, operator_id: str, enable: bool
+) -> ServiceResult:
     """设置全体禁言状态。"""
     guard = await _guard(bot, group_id, operator_id, op_name="全体禁言")
     if not guard.success:
         return guard
     try:
-        await bot.set_group_whole_ban(group_id=int(group_id), enable=enable)
+        await selfBot.whole_ban(group_id, enable)
         return ServiceResult(True, "已开启全体禁言" if enable else "已关闭全体禁言")
     except Exception as exc:
         return ServiceResult(False, f"操作失败: {exc}")
 
 
-async def _set_admin(bot: Bot, group_id: str, user_id: int, *, operator_id: str, enable: bool) -> ServiceResult:
+async def _set_admin(
+    bot: Bot, group_id: str, user_id: int, *, operator_id: str, enable: bool
+) -> ServiceResult:
     """设置或取消管理员。"""
-    guard = await _guard(bot, group_id, operator_id, target_id=user_id, op_name="设置管理员")
+    guard = await _guard(
+        bot, group_id, operator_id, target_id=user_id, op_name="设置管理员"
+    )
     if not guard.success:
         return guard
     try:
         if not is_superuser_id(operator_id):
-            operator_info = await bot.get_group_member_info(group_id=int(group_id), user_id=int(operator_id))
+            operator_info = await selfBot.get_group_member(group_id, operator_id)
             if operator_info.get("role") != "owner":
                 return ServiceResult(False, "仅群主可操作")
     except Exception:
         return ServiceResult(False, "操作者权限获取失败")
     try:
-        await bot.set_group_admin(group_id=int(group_id), user_id=user_id, enable=enable)
+        await selfBot.set_admin(group_id, str(user_id), enable)
         return ServiceResult(True, "操作成功")
     except Exception as exc:
         return ServiceResult(False, f"操作失败: {exc}")
 
 
-async def _recall_message(bot: Bot, group_id: str, message_id: int, *, operator_id: str) -> ServiceResult:
+async def _recall_message(
+    bot: Bot, group_id: str, message_id: int, *, operator_id: str
+) -> ServiceResult:
     """撤回消息。"""
     guard = await _guard(bot, group_id, operator_id, op_name="撤回")
     if not guard.success:
         return guard
     try:
-        await bot.delete_msg(message_id=message_id)
+        await selfBot.delete_message(message_id)
         return ServiceResult(True, "已撤回")
     except Exception as exc:
         return ServiceResult(False, f"操作失败: {exc}")
 
 
-async def _set_essence(bot: Bot, group_id: str, message_id: int, *, operator_id: str, enable: bool) -> ServiceResult:
+async def _set_essence(
+    bot: Bot, group_id: str, message_id: int, *, operator_id: str, enable: bool
+) -> ServiceResult:
     """设置或取消精华消息。"""
     guard = await _guard(bot, group_id, operator_id, op_name="设置精华")
     if not guard.success:
         return guard
     try:
-        api_name = "set_essence_msg" if enable else "delete_essence_msg"
-        if hasattr(bot, api_name):
-            await getattr(bot, api_name)(message_id=message_id)
-        elif hasattr(bot, "call_api"):
-            await bot.call_api(api_name, message_id=message_id)
-        else:
-            return ServiceResult(False, "当前适配器不支持精华消息")
+        await selfBot.set_essence(message_id, enable)
         return ServiceResult(True, "操作成功")
     except Exception as exc:
         return ServiceResult(False, f"操作失败: {exc}")
@@ -301,11 +313,13 @@ async def _set_title(
     if str(user_id) == str(operator_id):
         guard = await _bot_guard(bot, group_id, op_name="设置头衔")
     else:
-        guard = await _guard(bot, group_id, operator_id, target_id=user_id, op_name="设置头衔")
+        guard = await _guard(
+            bot, group_id, operator_id, target_id=user_id, op_name="设置头衔"
+        )
     if not guard.success:
         return guard
     try:
-        await bot.set_group_special_title(group_id=int(group_id), user_id=user_id, special_title=title)
+        await selfBot.set_special_title(group_id, str(user_id), title)
         return ServiceResult(True, "头衔已更新")
     except Exception as exc:
         return ServiceResult(False, f"操作失败: {exc}")
@@ -314,10 +328,7 @@ async def _set_title(
 async def _get_mute_members(bot: Bot, group_id: str) -> list[dict[str, Any]]:
     """获取当前群禁言成员列表。"""
     try:
-        if hasattr(bot, "get_group_member_list"):
-            members = await bot.get_group_member_list(group_id=int(group_id))
-        else:
-            members = await bot.call_api("get_group_member_list", group_id=int(group_id))
+        members = await selfBot.get_group_members(group_id)
     except Exception:
         return []
     now = int(time.time())
@@ -325,13 +336,17 @@ async def _get_mute_members(bot: Bot, group_id: str) -> list[dict[str, Any]]:
     for member in members or []:
         if not isinstance(member, dict):
             continue
-        until = int(member.get("shut_up_timestamp", 0) or member.get("mute_until", 0) or 0)
+        until = int(
+            member.get("shut_up_timestamp", 0) or member.get("mute_until", 0) or 0
+        )
         if until <= now:
             continue
         muted.append(
             {
                 "user_id": member.get("user_id"),
-                "nickname": member.get("nickname") or member.get("card") or member.get("user_id"),
+                "nickname": member.get("nickname")
+                or member.get("card")
+                or member.get("user_id"),
                 "role": member.get("role", "member"),
                 "remaining": until - now,
                 "mute_until": until,
@@ -352,7 +367,9 @@ mute_cmd = P.on_regex(
 
 
 @mute_cmd.handle()
-async def _handle_mute(matcher: Matcher, bot: Bot, event: Event, groups: tuple = RegexGroup()) -> None:
+async def _handle_mute(
+    matcher: Matcher, bot: Bot, event: Event, groups: tuple = RegexGroup()
+) -> None:
     """处理禁言命令。"""
     group_id = _gid(event)
     if not group_id:
@@ -366,14 +383,18 @@ async def _handle_mute(matcher: Matcher, bot: Bot, event: Event, groups: tuple =
     success_list: list[int] = []
     fail_list: list[int] = []
     for target_id in target_ids:
-        result = await _mute_member(bot, group_id, target_id, duration, operator_id=_uid(event))
+        result = await _mute_member(
+            bot, group_id, target_id, duration, operator_id=_uid(event)
+        )
         if result.success:
             success_list.append(target_id)
         else:
             fail_list.append(target_id)
     lines: list[str] = []
     if success_list:
-        lines.append(f"✅ 已禁言 {len(success_list)} 人，时长: {_format_duration(duration)}")
+        lines.append(
+            f"✅ 已禁言 {len(success_list)} 人，时长: {_format_duration(duration)}"
+        )
         if len(success_list) <= 5:
             lines.append(f"成功: {', '.join(map(str, success_list))}")
     if fail_list:
@@ -395,18 +416,24 @@ unmute_cmd = P.on_regex(
 
 
 @unmute_cmd.handle()
-async def _handle_unmute(matcher: Matcher, bot: Bot, event: Event, groups: tuple = RegexGroup()) -> None:
+async def _handle_unmute(
+    matcher: Matcher, bot: Bot, event: Event, groups: tuple = RegexGroup()
+) -> None:
     """处理解禁命令。"""
     group_id = _gid(event)
     if not group_id:
         await matcher.finish("请在群聊中使用")
-    target_ids = _extract_target_ids(event, str(groups[0] or "").strip() if groups else "")
+    target_ids = _extract_target_ids(
+        event, str(groups[0] or "").strip() if groups else ""
+    )
     if not target_ids:
         await matcher.finish("请 @ 目标成员或提供 QQ 号")
     success_list: list[int] = []
     fail_list: list[int] = []
     for target_id in target_ids:
-        result = await _mute_member(bot, group_id, target_id, 0, operator_id=_uid(event))
+        result = await _mute_member(
+            bot, group_id, target_id, 0, operator_id=_uid(event)
+        )
         if result.success:
             success_list.append(target_id)
         else:
@@ -495,7 +522,9 @@ async def _handle_ban_kick(matcher: Matcher, bot: Bot, event: Event) -> None:
     target_id = _extract_target_id(event)
     if target_id is None:
         await matcher.finish("请 @ 目标成员或提供 QQ 号")
-    result = await _kick_member(bot, group_id, target_id, operator_id=_uid(event), reject_add=True)
+    result = await _kick_member(
+        bot, group_id, target_id, operator_id=_uid(event), reject_add=True
+    )
     await matcher.finish(("✅ " if result.success else "❌ ") + result.message)
 
 
@@ -574,7 +603,9 @@ async def _handle_mute_list(matcher: Matcher, bot: Bot, event: Event) -> None:
     lines = [f"📋 禁言列表（共 {len(members)} 人）", "━━━━━━━━━━━━━━━━"]
     for index, member in enumerate(members[:20], 1):
         role = role_map.get(str(member["role"]), "成员")
-        expire_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(int(member["mute_until"])))
+        expire_time = time.strftime(
+            "%Y-%m-%d %H:%M:%S", time.localtime(int(member["mute_until"]))
+        )
         lines.append(
             f"{index}. {member['nickname']} ({member['user_id']})\n"
             f"   身份: {role}\n"
@@ -602,7 +633,9 @@ async def _handle_unmute_all(matcher: Matcher, bot: Bot, event: Event) -> None:
     fail = 0
     for member in members:
         try:
-            await bot.set_group_ban(group_id=int(group_id), user_id=int(member["user_id"]), duration=0)
+            await bot.set_group_ban(
+                group_id=int(group_id), user_id=int(member["user_id"]), duration=0
+            )
             success += 1
         except Exception:
             fail += 1
@@ -621,18 +654,26 @@ self_mute_cmd = P.on_regex(
 
 
 @self_mute_cmd.handle()
-async def _handle_self_mute(matcher: Matcher, bot: Bot, event: Event, groups: tuple = RegexGroup()) -> None:
+async def _handle_self_mute(
+    matcher: Matcher, bot: Bot, event: Event, groups: tuple = RegexGroup()
+) -> None:
     """处理自禁言命令。"""
     group_id = _gid(event)
     user_id = _uid(event)
     if not group_id:
         await matcher.finish("请在群聊中使用")
-    duration = _parse_duration(str(groups[1] if groups and len(groups) > 1 else ""), 600)
-    result = await _mute_member(bot, group_id, int(user_id), duration, operator_id=user_id)
+    duration = _parse_duration(
+        str(groups[1] if groups and len(groups) > 1 else ""), 600
+    )
+    result = await _mute_member(
+        bot, group_id, int(user_id), duration, operator_id=user_id
+    )
     if not result.success:
         await matcher.finish("❌ " + result.message)
     mode = str(groups[0] if groups else "自闭")
-    await matcher.finish(f"✅ 开始{mode}模式\n时长: {_format_duration(duration)}\n好好反思吧~")
+    await matcher.finish(
+        f"✅ 开始{mode}模式\n时长: {_format_duration(duration)}\n好好反思吧~"
+    )
 
 
 apply_title_cmd = P.on_regex(
@@ -666,8 +707,12 @@ async def _handle_apply_title(matcher: Matcher, bot: Bot, event: Event) -> None:
     if not title:
         await matcher.finish("请提供头衔内容")
     if _title_width(title) > 12:
-        await matcher.finish(f"❌ 头衔过长（当前等效 {_title_width(title)} 字符），最多 6 个中文字或 12 个英文字母")
-    result = await _set_title(bot, group_id, int(_uid(event)), title, operator_id=_uid(event))
+        await matcher.finish(
+            f"❌ 头衔过长（当前等效 {_title_width(title)} 字符），最多 6 个中文字或 12 个英文字母"
+        )
+    result = await _set_title(
+        bot, group_id, int(_uid(event)), title, operator_id=_uid(event)
+    )
     if not result.success:
         await matcher.finish("❌ " + result.message)
     await matcher.finish("✅ " + result.message)
@@ -754,7 +799,9 @@ async def _handle_set_admin(matcher: Matcher, bot: Bot, event: Event) -> None:
     target_id = _extract_target_id(event)
     if target_id is None:
         await matcher.finish("请 @ 目标成员或提供 QQ 号")
-    result = await _set_admin(bot, group_id, target_id, operator_id=_uid(event), enable=True)
+    result = await _set_admin(
+        bot, group_id, target_id, operator_id=_uid(event), enable=True
+    )
     await matcher.finish(("✅ " if result.success else "❌ ") + result.message)
 
 
@@ -767,7 +814,9 @@ async def _handle_unset_admin(matcher: Matcher, bot: Bot, event: Event) -> None:
     target_id = _extract_target_id(event)
     if target_id is None:
         await matcher.finish("请 @ 目标成员或提供 QQ 号")
-    result = await _set_admin(bot, group_id, target_id, operator_id=_uid(event), enable=False)
+    result = await _set_admin(
+        bot, group_id, target_id, operator_id=_uid(event), enable=False
+    )
     await matcher.finish(("✅ " if result.success else "❌ ") + result.message)
 
 
@@ -793,7 +842,9 @@ async def _handle_set_essence(matcher: Matcher, bot: Bot, event: Event) -> None:
     message_id = _reply_message_id(event)
     if message_id is None:
         await matcher.finish("请回复目标消息后再使用")
-    result = await _set_essence(bot, group_id, message_id, operator_id=_uid(event), enable=True)
+    result = await _set_essence(
+        bot, group_id, message_id, operator_id=_uid(event), enable=True
+    )
     await matcher.finish(("✅ " if result.success else "❌ ") + result.message)
 
 
@@ -806,7 +857,9 @@ async def _handle_unset_essence(matcher: Matcher, bot: Bot, event: Event) -> Non
     message_id = _reply_message_id(event)
     if message_id is None:
         await matcher.finish("请回复目标消息后再使用")
-    result = await _set_essence(bot, group_id, message_id, operator_id=_uid(event), enable=False)
+    result = await _set_essence(
+        bot, group_id, message_id, operator_id=_uid(event), enable=False
+    )
     await matcher.finish(("✅ " if result.success else "❌ ") + result.message)
 
 
@@ -822,11 +875,15 @@ async def _handle_unset_essence(matcher: Matcher, bot: Bot, event: Event) -> Non
         "required": ["user_id", "duration"],
     },
 )
-async def mute_member_tool(ctx: ToolContext, rt: ToolRuntime, user_id: int, duration: int) -> dict[str, Any]:
+async def mute_member_tool(
+    ctx: ToolContext, rt: ToolRuntime, user_id: int, duration: int
+) -> dict[str, Any]:
     """AI 工具：禁言群成员。"""
     if not ctx.group_id:
         return {"success": False, "message": "只能在群聊中使用"}
-    result = await _mute_member(rt.require_bot(), ctx.group_id, user_id, duration, operator_id=ctx.user_id)
+    result = await _mute_member(
+        rt.require_bot(), ctx.group_id, user_id, duration, operator_id=ctx.user_id
+    )
     return {"success": result.success, "message": result.message}
 
 
@@ -839,11 +896,15 @@ async def mute_member_tool(ctx: ToolContext, rt: ToolRuntime, user_id: int, dura
         "required": ["user_id"],
     },
 )
-async def kick_member_tool(ctx: ToolContext, rt: ToolRuntime, user_id: int) -> dict[str, Any]:
+async def kick_member_tool(
+    ctx: ToolContext, rt: ToolRuntime, user_id: int
+) -> dict[str, Any]:
     """AI 工具：踢出群成员。"""
     if not ctx.group_id:
         return {"success": False, "message": "只能在群聊中使用"}
-    result = await _kick_member(rt.require_bot(), ctx.group_id, user_id, operator_id=ctx.user_id)
+    result = await _kick_member(
+        rt.require_bot(), ctx.group_id, user_id, operator_id=ctx.user_id
+    )
     return {"success": result.success, "message": result.message}
 
 
@@ -856,11 +917,15 @@ async def kick_member_tool(ctx: ToolContext, rt: ToolRuntime, user_id: int) -> d
         "required": ["user_id"],
     },
 )
-async def unmute_member_tool(ctx: ToolContext, rt: ToolRuntime, user_id: int) -> dict[str, Any]:
+async def unmute_member_tool(
+    ctx: ToolContext, rt: ToolRuntime, user_id: int
+) -> dict[str, Any]:
     """AI 工具：解除群成员禁言。"""
     if not ctx.group_id:
         return {"success": False, "message": "只能在群聊中使用"}
-    result = await _mute_member(rt.require_bot(), ctx.group_id, user_id, 0, operator_id=ctx.user_id)
+    result = await _mute_member(
+        rt.require_bot(), ctx.group_id, user_id, 0, operator_id=ctx.user_id
+    )
     return {"success": result.success, "message": result.message}
 
 
@@ -869,11 +934,15 @@ async def unmute_member_tool(ctx: ToolContext, rt: ToolRuntime, user_id: int) ->
     description="禁言自己指定时长。仅可在群聊上下文中使用。",
     parameters={
         "type": "object",
-        "properties": {"duration_seconds": {"type": "integer", "description": "禁言秒数"}},
+        "properties": {
+            "duration_seconds": {"type": "integer", "description": "禁言秒数"}
+        },
         "required": [],
     },
 )
-async def self_mute_tool(ctx: ToolContext, rt: ToolRuntime, duration_seconds: int = 600) -> dict[str, Any]:
+async def self_mute_tool(
+    ctx: ToolContext, rt: ToolRuntime, duration_seconds: int = 600
+) -> dict[str, Any]:
     """AI 工具：禁言自己。"""
     if not ctx.group_id:
         return {"success": False, "message": "只能在群聊中使用"}
@@ -892,13 +961,22 @@ async def self_mute_tool(ctx: ToolContext, rt: ToolRuntime, duration_seconds: in
     description="为自己申请群头衔。仅可在群聊上下文中使用。",
     parameters={
         "type": "object",
-        "properties": {"title": {"type": "string", "description": "头衔内容，最多 6 个中文字或 12 个英文字母"}},
+        "properties": {
+            "title": {
+                "type": "string",
+                "description": "头衔内容，最多 6 个中文字或 12 个英文字母",
+            }
+        },
         "required": ["title"],
     },
 )
-async def apply_title_tool(ctx: ToolContext, rt: ToolRuntime, title: str) -> dict[str, Any]:
+async def apply_title_tool(
+    ctx: ToolContext, rt: ToolRuntime, title: str
+) -> dict[str, Any]:
     """AI 工具：申请头衔。"""
     if not ctx.group_id:
         return {"success": False, "message": "只能在群聊中使用"}
-    result = await _set_title(rt.require_bot(), ctx.group_id, int(ctx.user_id), title, operator_id=ctx.user_id)
+    result = await _set_title(
+        rt.require_bot(), ctx.group_id, int(ctx.user_id), title, operator_id=ctx.user_id
+    )
     return {"success": result.success, "message": result.message}

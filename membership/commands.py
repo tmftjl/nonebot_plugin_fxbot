@@ -12,12 +12,12 @@ from nonebot.matcher import Matcher
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
+from ..adapter import selfBot
 from ..config import get_manager as get_config_manager
 from ..console.auth import rotate_console_token
 from ..db import with_session
 from ..permission import PermLevel, PermScene
 from ..plugin import Plugin
-
 from .guard import membership_guard
 from .models import MembershipGroup
 from .service import MembershipError, membership_service
@@ -25,14 +25,26 @@ from .service import MembershipError, membership_service
 P = Plugin("membership", category="system", display_name="会员系统")
 
 _UNIT_TO_SERVICE = {"天": "day", "月": "month", "年": "year"}
-_SERVICE_TO_UNIT = {"day": "天", "days": "天", "d": "天", "month": "月", "months": "月", "m": "月", "year": "年", "years": "年", "y": "年"}
+_SERVICE_TO_UNIT = {
+    "day": "天",
+    "days": "天",
+    "d": "天",
+    "month": "月",
+    "months": "月",
+    "m": "月",
+    "year": "年",
+    "years": "年",
+    "y": "年",
+}
 
 
 class _MembershipCommandStore:
     """会员命令数据库操作。"""
 
     @with_session
-    async def adjust_managed_bots(self, session: AsyncSession, groups_by_bot: dict[str, list[Any]]) -> tuple[int, int]:
+    async def adjust_managed_bots(
+        self, session: AsyncSession, groups_by_bot: dict[str, list[Any]]
+    ) -> tuple[int, int]:
         result = await session.execute(select(MembershipGroup))
         rows = {row.group_id: row for row in result.scalars().all()}
         updated_count = 0
@@ -41,7 +53,9 @@ class _MembershipCommandStore:
         for bot_id, groups in groups_by_bot.items():
             for item in groups:
                 group_id = _normalize_id(
-                    item.get("group_id") if isinstance(item, dict) else getattr(item, "group_id", None)
+                    item.get("group_id")
+                    if isinstance(item, dict)
+                    else getattr(item, "group_id", None)
                 )
                 if not group_id or group_id not in rows:
                     continue
@@ -299,7 +313,9 @@ async def _handle_renew(matcher: Matcher, bot: Bot, event: Event) -> None:
     except MembershipError:
         await matcher.finish("该续费码无效或已被使用")
 
-    await matcher.finish(f"本群会员已成功续费{length}{unit}，到期时间：{_format_cn(result.after_expires_at)}")
+    await matcher.finish(
+        f"本群会员已成功续费{length}{unit}，到期时间：{_format_cn(result.after_expires_at)}"
+    )
 
 
 @expiry_cmd.handle()
@@ -339,7 +355,9 @@ async def _handle_expiry(matcher: Matcher, event: Event) -> None:
 @prompt_cmd.handle()
 async def _handle_prompt(matcher: Matcher) -> None:
     """处理续费提示命令。"""
-    await matcher.finish("如需首次开通或续费,请联系管理员购买续费码（会员开通码），在群内直接发送即可生效")
+    await matcher.finish(
+        "如需首次开通或续费,请联系管理员购买续费码（会员开通码），在群内直接发送即可生效"
+    )
 
 
 @adjust_bot_cmd.handle()
@@ -357,15 +375,19 @@ async def _handle_adjust_bot(matcher: Matcher, event: Event) -> None:
 
     for bot_id, bot in bots.items():
         try:
-            groups_by_bot[str(bot_id)] = list(await bot.get_group_list())  # type: ignore[attr-defined]
+            groups_by_bot[str(bot_id)] = list(await selfBot.get_group_list())
         except Exception:
             failed_bots.append(str(bot_id))
             continue
 
-    updated_count, unchanged_count = await _command_store.adjust_managed_bots(groups_by_bot)
+    updated_count, unchanged_count = await _command_store.adjust_managed_bots(
+        groups_by_bot
+    )
 
     await membership_guard.reload_all_cache()
-    result_msg = f"续费调整完成\n更新: {updated_count} 个群\n未变: {unchanged_count} 个群"
+    result_msg = (
+        f"续费调整完成\n更新: {updated_count} 个群\n未变: {unchanged_count} 个群"
+    )
     if failed_bots:
         result_msg += f"\n失败bot: {', '.join(failed_bots)}"
     await matcher.finish(result_msg)

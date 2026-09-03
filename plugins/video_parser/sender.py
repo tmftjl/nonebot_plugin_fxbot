@@ -21,10 +21,16 @@ def _summary(result: VideoResult) -> str:
     return "\n".join(lines)
 
 
-async def send_video_result(matcher: Matcher, bot: Bot, event: Event, result: VideoResult, video_path: Path) -> None:
+async def send_video_result(
+    matcher: Matcher, bot: Bot, event: Event, result: VideoResult, video_path: Path
+) -> None:
     """发送标题、封面和视频。"""
     text_seg = build_message_segment(bot, "text", _summary(result) + "\n")
-    image_seg = build_message_segment(bot, "image", result.cover_url) if result.cover_url else None
+    image_seg = (
+        build_message_segment(bot, "image", result.cover_url)
+        if result.cover_url
+        else None
+    )
     video_seg = build_message_segment(bot, "video", _video_payload(video_path))
 
     forward_messages = [build_message(bot, text_seg)]
@@ -36,16 +42,23 @@ async def send_video_result(matcher: Matcher, bot: Bot, event: Event, result: Vi
         await matcher.finish("当前适配器不支持发送转发消息")
 
 
-async def send_image_result(matcher: Matcher, bot: Bot, event: Event, result: VideoResult, image_paths: list[Path]) -> None:
+async def send_image_result(
+    matcher: Matcher,
+    bot: Bot,
+    event: Event,
+    result: VideoResult,
+    image_paths: list[Path],
+) -> None:
     """发送标题和图片。"""
     text_seg = build_message_segment(bot, "text", _summary(result) + "\n")
     image_segments = [
-        build_message_segment(bot, "image", image_path)
-        for image_path in image_paths
+        build_message_segment(bot, "image", image_path) for image_path in image_paths
     ]
 
     forward_messages = [build_message(bot, text_seg)]
-    forward_messages.extend(build_message(bot, image_seg) for image_seg in image_segments)
+    forward_messages.extend(
+        build_message(bot, image_seg) for image_seg in image_segments
+    )
 
     if not await send_forward_messages(bot, event, forward_messages):
         await matcher.finish("当前适配器不支持发送转发消息")

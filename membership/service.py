@@ -11,7 +11,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from ..db import with_session
-
 from .models import MembershipGroup, RenewCode, RenewRecord, utc_now
 
 
@@ -53,7 +52,9 @@ class MembershipService:
     """会员业务服务。"""
 
     @with_session
-    async def get_group(self, session: AsyncSession, group_id: str) -> MembershipGroup | None:
+    async def get_group(
+        self, session: AsyncSession, group_id: str
+    ) -> MembershipGroup | None:
         """按群号获取会员群。"""
         result = await session.execute(
             select(MembershipGroup).where(MembershipGroup.group_id == str(group_id))
@@ -141,7 +142,9 @@ class MembershipService:
             after_expires_at=after,
         )
         session.add(record)
-        return RedeemResult(group=group, record=record, before_expires_at=before, after_expires_at=after)
+        return RedeemResult(
+            group=group, record=record, before_expires_at=before, after_expires_at=after
+        )
 
     @with_session
     async def generate_code(
@@ -161,7 +164,9 @@ class MembershipService:
 
         for _ in range(20):
             code = _generate_code(code_length)
-            exists = await session.execute(select(RenewCode).where(RenewCode.code == code))
+            exists = await session.execute(
+                select(RenewCode).where(RenewCode.code == code)
+            )
             if exists.scalar_one_or_none() is None:
                 row = RenewCode(
                     code=code,
@@ -186,7 +191,9 @@ class MembershipService:
         managed_by_bot: str | None = None,
     ) -> RedeemResult:
         """兑换续费码。"""
-        result = await session.execute(select(RenewCode).where(RenewCode.code == str(code).strip()))
+        result = await session.execute(
+            select(RenewCode).where(RenewCode.code == str(code).strip())
+        )
         renew_code = result.scalar_one_or_none()
         if renew_code is None:
             raise MembershipError("续费码不存在")

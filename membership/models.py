@@ -9,10 +9,7 @@ from sqlmodel import Field
 
 from ..db import BaseIDModel, exec_list
 
-
-exec_list.extend(
-    []
-)
+exec_list.extend([])
 
 
 def utc_now() -> datetime:

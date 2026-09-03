@@ -9,10 +9,9 @@ from nonebot.adapters import Bot, Event
 from nonebot.matcher import Matcher
 from nonebot.rule import Rule
 
-from ..adapter.support import event_group_id, event_is_tome
+from ..adapter.events import event_group_id, event_is_tome
 from ..config import get_manager as get_config_manager
 from ..message_policy import should_process_fxbot_message
-
 from .message_adapter import adapt_message_event
 from .service import chat_service
 from .tool_runtime import default_runtime_factory

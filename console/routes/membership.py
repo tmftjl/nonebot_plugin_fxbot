@@ -8,11 +8,14 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from nonebot import get_bots
 
+from ...adapter import selfBot
 from ...membership.guard import membership_guard
 from ...membership.service import MembershipError, membership_service
 from ..auth import bearer_auth
 
-router = APIRouter(prefix="/membership", tags=["fxbot-membership"], dependencies=[Depends(bearer_auth)])
+router = APIRouter(
+    prefix="/membership", tags=["fxbot-membership"], dependencies=[Depends(bearer_auth)]
+)
 
 
 def _duration_unit(unit: str) -> str:
@@ -32,7 +35,9 @@ def _code_to_console(row: Any) -> dict[str, Any]:
     return {
         "code": row.code,
         "length": row.duration_value,
-        "unit": {"day": "天", "month": "月", "year": "年"}.get(row.duration_unit, row.duration_unit),
+        "unit": {"day": "天", "month": "月", "year": "年"}.get(
+            row.duration_unit, row.duration_unit
+        ),
         "max_use": row.max_use,
         "used_count": row.used_count,
         "generated_time": row.created_at.isoformat(),
@@ -94,7 +99,11 @@ async def generate_code_for_console(payload: dict[str, Any]) -> dict[str, Any]:
     """按控制台参数生成续费码。"""
     try:
         expire_days = int(payload.get("expire_days") or 0)
-        expires_at = datetime.now(timezone.utc) + timedelta(days=expire_days) if expire_days > 0 else None
+        expires_at = (
+            datetime.now(timezone.utc) + timedelta(days=expire_days)
+            if expire_days > 0
+            else None
+        )
         row = await membership_service.generate_code(
             duration_value=int(payload.get("length")),
             duration_unit=_duration_unit(str(payload.get("unit"))),
@@ -128,14 +137,21 @@ async def extend_from_console(payload: dict[str, Any]) -> dict[str, Any]:
                 group_id,
                 duration_value=int(payload.get("length")),
                 duration_unit=_duration_unit(str(payload.get("unit"))),
-                operator_user_id=str(payload.get("renewer") or payload.get("renewed_by") or "") or None,
+                operator_user_id=str(
+                    payload.get("renewer") or payload.get("renewed_by") or ""
+                )
+                or None,
                 code="console",
             )
             row = result.group
         await membership_guard.invalidate(group_id)
     except (ValueError, TypeError, MembershipError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"group_id": row.group_id, "expiry": row.expires_at.isoformat() if row.expires_at else "", "id": row.id}
+    return {
+        "group_id": row.group_id,
+        "expiry": row.expires_at.isoformat() if row.expires_at else "",
+        "id": row.id,
+    }
 
 
 @router.post("/remind")
@@ -149,14 +165,18 @@ async def remind_group(payload: dict[str, Any]) -> dict[str, int]:
     if bot is None:
         raise HTTPException(status_code=503, detail="托管 Bot 不在线")
     expires = row.expires_at.isoformat() if row.expires_at else "-"
-    await bot.send_group_msg(group_id=int(group_id), message=f"本群会员到期时间：{expires}")
+    await selfBot.send_group_message(group_id, f"本群会员到期时间：{expires}")
     return {"sent": 1}
 
 
 @router.post("/notify")
 async def notify_groups(payload: dict[str, Any]) -> dict[str, int]:
     """批量发送群通知。"""
-    group_ids = [str(item).strip() for item in payload.get("group_ids") or [] if str(item).strip()]
+    group_ids = [
+        str(item).strip()
+        for item in payload.get("group_ids") or []
+        if str(item).strip()
+    ]
     text = str(payload.get("text") or "").strip()
     if not group_ids:
         raise HTTPException(status_code=400, detail="群列表不能为空")
@@ -172,7 +192,7 @@ async def notify_groups(payload: dict[str, Any]) -> dict[str, int]:
         bot = bots.get(str(row.managed_by_bot or ""))
         if bot is None:
             continue
-        await bot.send_group_msg(group_id=int(group_id), message=text)
+        await selfBot.send_group_message(group_id, text)
         sent += 1
     return {"sent": sent}
 
@@ -187,7 +207,7 @@ async def leave_group(payload: dict[str, Any]) -> dict[str, int]:
     bot = get_bots().get(str(row.managed_by_bot or ""))
     if bot is None:
         raise HTTPException(status_code=503, detail="托管 Bot 不在线")
-    await bot.set_group_leave(group_id=int(group_id))
+    await selfBot.leave_group(group_id)
     await membership_service.delete_group(group_id)
     await membership_guard.invalidate(group_id)
     return {"left": 1}

@@ -20,10 +20,10 @@ from nonebot.rule import Rule
 from nonebot.typing import T_State
 from pypinyin import Style, pinyin
 
+from ...adapter import selfBot
+from ...adapter.uninfo import QryItrface, Uninfo
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
-from ...adapter.message import MENTION_SEGMENT_TYPES, first_mention_target
-from ...adapter.uninfo import QryItrface, Uninfo
 from ...utils.paths import cache_dir
 from .config import (
     cfg_command_prefixes,
@@ -34,8 +34,13 @@ from .exception import MemeGeneratorException
 from .manager import MemeMode, meme_manager
 from .plot import plot_duration_counts, plot_meme_and_duration_counts
 from .protection import protection_manager
-from .recorder import SessionIdType, get_meme_generation_keys, record_meme_generation
-from .recorder import get_meme_generation_records, get_meme_generation_times
+from .recorder import (
+    SessionIdType,
+    get_meme_generation_keys,
+    get_meme_generation_records,
+    get_meme_generation_times,
+    record_meme_generation,
+)
 from .request import (
     MemeInfo,
     MemeKeyWithProperties,
@@ -194,7 +199,8 @@ async def find_meme(matcher: Matcher, meme_name: str) -> MemeInfo:
             await matcher.finish(
                 f"表情 {meme_name} 不存在，你可能在找：\n"
                 + "\n".join(
-                    f"* {meme.key} ({'/'.join(meme.keywords)})" for meme in searched_memes
+                    f"* {meme.key} ({'/'.join(meme.keywords)})"
+                    for meme in searched_memes
                 )
             )
         await matcher.finish(f"表情 {meme_name} 不存在！")
@@ -205,7 +211,9 @@ async def find_meme(matcher: Matcher, meme_name: str) -> MemeInfo:
     target_name = meme_name.strip().lower()
     for meme in found_memes:
         if meme.key.lower() == target_name:
-            logger.warning(f"[memes] 表情别名重复，已优先选择完全同名项: {meme_name} -> {meme.key}")
+            logger.warning(
+                f"[memes] 表情别名重复，已优先选择完全同名项: {meme_name} -> {meme.key}"
+            )
             return meme
 
     chosen = found_memes[0]
@@ -283,9 +291,9 @@ def _reprioritize_protected_mentions(
             item for i, item in enumerate(indexed) if i not in protected_indices
         ] + [item for i, item in enumerate(indexed) if i in protected_indices]
     else:
-        ordered = [
-            item for i, item in enumerate(indexed) if i in protected_indices
-        ] + [item for i, item in enumerate(indexed) if i not in protected_indices]
+        ordered = [item for i, item in enumerate(indexed) if i in protected_indices] + [
+            item for i, item in enumerate(indexed) if i not in protected_indices
+        ]
 
     ordered = ordered[: meme.params_type.max_images]
     images, image_user_ids, image_from_mentions = map(list, zip(*ordered))
@@ -338,7 +346,7 @@ async def extract_inputs(
     for seg in msg:
         seg_type = getattr(seg, "type", None)
 
-        if seg_type in MENTION_SEGMENT_TYPES:
+        if selfBot._client().adapter.is_mention_segment(segment):
             if has_actual_image:
                 continue
             target = (
@@ -419,9 +427,10 @@ def _num_desc(min_num: int, max_num: int) -> str:
 
 def _can_fill_default_texts(meme: MemeInfo, texts: list[str]) -> bool:
     """判断默认文案是否足够补齐缺失文本。"""
-    return len(texts) < meme.params_type.min_texts and len(
-        meme.params_type.default_texts
-    ) >= meme.params_type.min_texts
+    return (
+        len(texts) < meme.params_type.min_texts
+        and len(meme.params_type.default_texts) >= meme.params_type.min_texts
+    )
 
 
 async def normalize_meme_params(
@@ -459,11 +468,13 @@ async def _send_image(matcher: Matcher, bot: Bot, event: Event, img: bytes, text
     if V11Bot is not None and isinstance(bot, V11Bot):
         assert V11Message is not None and V11MessageSegment is not None
         b64 = base64.b64encode(img).decode()
-        await matcher.finish(V11Message(text) + V11MessageSegment.image(f"base64://{b64}"))
+        await matcher.finish(
+            V11Message(text) + V11MessageSegment.image(f"base64://{b64}")
+        )
 
     if V12Bot is not None and isinstance(bot, V12Bot):
         assert V12Message is not None and V12MessageSegment is not None
-        resp = await bot.upload_file(type="data", name="memes", data=img)
+        resp = await selfBot.upload_file(type="data", name="memes", data=img)
         file_id = resp["file_id"]
         await matcher.finish(V12Message(text) + V12MessageSegment.image(file_id))
 
@@ -481,7 +492,7 @@ async def _send_image(matcher: Matcher, bot: Bot, event: Event, img: bytes, text
 
 
 def _first_mention_id(arg: Message) -> Optional[str]:
-    return first_mention_target(arg)
+    return selfBot.first_mention_target(arg)
 
 
 help_cmd = P.on_command(
@@ -648,7 +659,9 @@ async def _help(bot: Bot, event: Event, matcher: Matcher, session: Uninfo):
     user_key = get_user_id(session)
     memes = sorted(
         meme_manager.get_memes(),
-        key=lambda m: "".join(chain.from_iterable(pinyin(m.keywords[0], style=Style.TONE3))),
+        key=lambda m: "".join(
+            chain.from_iterable(pinyin(m.keywords[0], style=Style.TONE3))
+        ),
     )
     meme_generation_keys = await get_meme_generation_keys(
         session,
@@ -914,7 +927,9 @@ async def _do_statistics(
         )
         meme_keys = [meme.key] * len(meme_times)
     else:
-        meme_records = await get_meme_generation_records(session, id_type, time_start=start)
+        meme_records = await get_meme_generation_records(
+            session, id_type, time_start=start
+        )
         meme_records = [
             record for record in meme_records if meme_manager.get_meme(record.meme_key)
         ]
@@ -966,7 +981,9 @@ async def _do_statistics(
         for key, count in key_counts.items():
             if m := meme_manager.get_meme(key):
                 meme_counts["/".join(m.keywords)] = count
-        output = await plot_meme_and_duration_counts(meme_counts, duration_counts, title)
+        output = await plot_meme_and_duration_counts(
+            meme_counts, duration_counts, title
+        )
 
     await _send_image(matcher, bot, event, output, "")
 
@@ -991,7 +1008,9 @@ async def _global_statistics(
     session: Uninfo,
     arg: Message = CommandArg(),
 ):
-    await _do_statistics(bot, event, matcher, session, id_type=SessionIdType.GLOBAL, arg=arg)
+    await _do_statistics(
+        bot, event, matcher, session, id_type=SessionIdType.GLOBAL, arg=arg
+    )
 
 
 @block_cmd.handle()
@@ -1084,11 +1103,7 @@ async def _random(
             continue
         images_num = len(base_images)
         texts_num = len(base_texts)
-        if (
-            session.user.avatar
-            and images_num == 0
-            and meme.params_type.min_images == 1
-        ):
+        if session.user.avatar and images_num == 0 and meme.params_type.min_images == 1:
             images_num = 1
         if session.user.avatar and meme.params_type.min_images == 2 and images_num == 1:
             images_num = 2
@@ -1104,7 +1119,9 @@ async def _random(
         await matcher.finish("没有找到符合条件的表情")
 
     meme = random.choice(candidates)
-    texts, images, _ = await extract_inputs(bot, event, matcher, session, interface, meme, arg)
+    texts, images, _ = await extract_inputs(
+        bot, event, matcher, session, interface, meme, arg
+    )
     texts = await normalize_meme_params(matcher, meme, texts, images)
 
     try:

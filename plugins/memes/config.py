@@ -69,7 +69,9 @@ def cfg_protected_memes() -> list[str]:
     return [str(meme_key) for meme_key in (get_config().get("protected_memes") or [])]
 
 
-def save_protection_config(whitelist_ids: list[str], protected_memes: list[str]) -> None:
+def save_protection_config(
+    whitelist_ids: list[str], protected_memes: list[str]
+) -> None:
     """保存表情保护配置。"""
     config = get_config()
     config["whitelist_ids"] = list(whitelist_ids)

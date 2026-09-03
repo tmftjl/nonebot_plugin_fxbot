@@ -8,7 +8,6 @@ from typing import Any, Callable
 
 from .storage import ConfigStorage
 
-
 Validator = Callable[[dict[str, Any]], None]
 
 

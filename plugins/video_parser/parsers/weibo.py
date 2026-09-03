@@ -34,7 +34,9 @@ async def parse(url: str) -> VideoResult:
             raise ParseError("微博短链无法跳转")
         return await parse(resolved)
 
-    article = re.search(r"ttarticle/.+?id=(?P<id>\d+)", url) or re.search(r"article/.+?/id/(?P<id>\d+)", url)
+    article = re.search(r"ttarticle/.+?id=(?P<id>\d+)", url) or re.search(
+        r"article/.+?/id/(?P<id>\d+)", url
+    )
     if article:
         return await _parse_article(article.group("id"), source=url)
 
@@ -46,7 +48,10 @@ async def parse(url: str) -> VideoResult:
     if fid:
         return await _parse_fid(fid.group("fid"), source=url)
 
-    status = re.search(r"(?:weibo\.cn/(?:status|detail|\d+)/|weibo\.com/\d+/)(?P<wid>[0-9A-Za-z]+)", url)
+    status = re.search(
+        r"(?:weibo\.cn/(?:status|detail|\d+)/|weibo\.com/\d+/)(?P<wid>[0-9A-Za-z]+)",
+        url,
+    )
     if status:
         return await _parse_status(status.group("wid"), source=url)
 
@@ -60,8 +65,12 @@ async def _parse_article(article_id: str, *, source: str) -> VideoResult:
         "id": article_id,
         "_t": int(time() * 1000),
     }
-    async with httpx.AsyncClient(timeout=timeout(), proxy=proxy(), verify=False) as client:
-        response = await client.get("https://card.weibo.com/article/m/aj/detail", params=params, headers=HEADERS)
+    async with httpx.AsyncClient(
+        timeout=timeout(), proxy=proxy(), verify=False
+    ) as client:
+        response = await client.get(
+            "https://card.weibo.com/article/m/aj/detail", params=params, headers=HEADERS
+        )
         response.raise_for_status()
         payload = response.json()
 
@@ -76,7 +85,9 @@ async def _parse_article(article_id: str, *, source: str) -> VideoResult:
     user = data.get("userinfo") or {}
     return VideoResult(
         platform="微博",
-        title=str(data.get("title") or (parsed.text[:40] if parsed.text else "微博文章")),
+        title=str(
+            data.get("title") or (parsed.text[:40] if parsed.text else "微博文章")
+        ),
         image_urls=image_urls,
         cover_url=image_urls[0],
         source_url=str(data.get("url") or source),
@@ -94,12 +105,16 @@ async def _parse_fid(fid: str, *, source: str) -> VideoResult:
         "Content-Type": "application/x-www-form-urlencoded",
     }
     content = 'data={"Component_Play_Playinfo":{"oid":"' + fid + '"}}'
-    async with httpx.AsyncClient(timeout=timeout(), proxy=proxy(), verify=False) as client:
+    async with httpx.AsyncClient(
+        timeout=timeout(), proxy=proxy(), verify=False
+    ) as client:
         response = await client.post(req_url, headers=headers, content=content)
         response.raise_for_status()
         data = response.json()
     play = ((data.get("data") or {}).get("Component_Play_Playinfo")) or {}
-    video_url = _normalize_scheme(next(iter((play.get("urls") or {}).values()), None) or play.get("stream_url"))
+    video_url = _normalize_scheme(
+        next(iter((play.get("urls") or {}).values()), None) or play.get("stream_url")
+    )
     if not video_url:
         raise ParseError("微博视频页没有视频直链")
     return VideoResult(
@@ -107,7 +122,9 @@ async def _parse_fid(fid: str, *, source: str) -> VideoResult:
         title=str(play.get("title") or "微博视频"),
         video_url=video_url,
         cover_url=_normalize_scheme(play.get("cover_image")),
-        duration=float(play.get("duration_time")) if play.get("duration_time") else None,
+        duration=float(play.get("duration_time"))
+        if play.get("duration_time")
+        else None,
         source_url=source,
         text=_strip_html(str(play.get("text") or "")),
         headers=HEADERS.copy(),
@@ -125,7 +142,13 @@ async def _parse_status(wid: str, *, source: str) -> VideoResult:
         "mweibo-pwa": "1",
     }
     url = f"https://m.weibo.cn/statuses/show?id={wid}&_={int(time() * 1000)}"
-    async with httpx.AsyncClient(timeout=timeout(), proxy=proxy(), follow_redirects=False, cookies={}, verify=False) as client:
+    async with httpx.AsyncClient(
+        timeout=timeout(),
+        proxy=proxy(),
+        follow_redirects=False,
+        cookies={},
+        verify=False,
+    ) as client:
         response = await client.get(url, headers=headers)
         if response.status_code != 200:
             raise ParseError(f"微博接口返回 {response.status_code}")
@@ -138,10 +161,14 @@ def _collect_status(data: dict[str, Any], *, source: str) -> VideoResult:
     page = data.get("page_info") or {}
     media = page.get("media_info") or {}
     urls = page.get("urls") or {}
-    video_url = urls.get("mp4_720p_mp4") or urls.get("mp4_hd_mp4") or urls.get("mp4_ld_mp4")
+    video_url = (
+        urls.get("mp4_720p_mp4") or urls.get("mp4_hd_mp4") or urls.get("mp4_ld_mp4")
+    )
     video_url = video_url or media.get("stream_url") or media.get("stream_urls_hd")
     user = data.get("user") or {}
-    title = page.get("title") or _strip_html(str(data.get("text") or ""))[:40] or "微博视频"
+    title = (
+        page.get("title") or _strip_html(str(data.get("text") or ""))[:40] or "微博视频"
+    )
     cover = (page.get("page_pic") or {}).get("url")
 
     if not video_url:

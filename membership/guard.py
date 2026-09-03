@@ -9,7 +9,6 @@ from typing import Any
 from nonebot import get_driver, logger
 
 from ..config import get_manager as get_config_manager
-
 from .models import MembershipGroup
 from .service import membership_service
 

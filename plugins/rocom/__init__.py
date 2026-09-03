@@ -26,7 +26,13 @@ __plugin_meta__ = PluginMetadata(
     type="application",
 )
 
-P = Plugin("rocom", display_name="洛克王国", enabled=True, level=PermLevel.LOW, scene=PermScene.ALL)
+P = Plugin(
+    "rocom",
+    display_name="洛克王国",
+    enabled=True,
+    level=PermLevel.LOW,
+    scene=PermScene.ALL,
+)
 
 from . import commands_info as commands_info
 from . import commands_merchant as commands_merchant

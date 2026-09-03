@@ -32,7 +32,9 @@ class VertexAIProvider(ChatProvider):
             limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
         )
 
-    def _convert_to_vertex_format(self, messages: list[dict[str, Any]]) -> dict[str, Any]:
+    def _convert_to_vertex_format(
+        self, messages: list[dict[str, Any]]
+    ) -> dict[str, Any]:
         """将 OpenAI 风格消息转换为 Vertex AI 格式。"""
         system_instruction = None
         contents: list[dict[str, Any]] = []
@@ -63,7 +65,9 @@ class VertexAIProvider(ChatProvider):
                                 )
                     contents.append({"role": "user", "parts": parts})
                 else:
-                    contents.append({"role": "user", "parts": [{"text": content or " "}]})
+                    contents.append(
+                        {"role": "user", "parts": [{"text": content or " "}]}
+                    )
             elif role == "assistant":
                 vertex_parts = msg.get("_vertex_parts")
                 if vertex_parts:
@@ -79,7 +83,9 @@ class VertexAIProvider(ChatProvider):
                         args = json.loads(func.get("arguments", "{}"))
                     except Exception:
                         args = {}
-                    parts.append({"functionCall": {"name": func.get("name"), "args": args}})
+                    parts.append(
+                        {"functionCall": {"name": func.get("name"), "args": args}}
+                    )
                 if parts:
                     contents.append({"role": "model", "parts": parts})
             elif role == "tool":
@@ -216,7 +222,11 @@ class VertexAIProvider(ChatProvider):
                     except json.JSONDecodeError:
                         logger.warning(f"[{self.provider_id}] 无法解析流式响应: {line}")
                         continue
-                    for part in data.get("candidates", [{}])[0].get("content", {}).get("parts", []):
+                    for part in (
+                        data.get("candidates", [{}])[0]
+                        .get("content", {})
+                        .get("parts", [])
+                    ):
                         if "text" in part:
                             full_content += part["text"]
                             yield LLMResponse(
@@ -226,7 +236,9 @@ class VertexAIProvider(ChatProvider):
                             )
                 yield LLMResponse(role="assistant", content=full_content)
         except httpx.HTTPStatusError as exc:
-            logger.error(f"[{self.provider_id}] Stream HTTP 错误: {exc.response.status_code}")
+            logger.error(
+                f"[{self.provider_id}] Stream HTTP 错误: {exc.response.status_code}"
+            )
             raise
         except Exception as exc:
             logger.error(f"[{self.provider_id}] Stream 请求失败: {exc}")

@@ -16,10 +16,10 @@ from nonebot.adapters import Bot, Event
 from nonebot.matcher import Matcher
 from PIL import Image, ImageDraw, ImageOps
 
+from ...adapter import build_message, build_message_segment
+from ...adapter.events import event_user_name
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
-from ...adapter import build_message, build_message_segment
-from ...adapter.support import event_user_name
 from ...utils.fonts import get_shared_font_path, load_font
 from ...utils.http import get_shared_async_client
 from ...utils.paths import data_dir
@@ -40,7 +40,13 @@ FONT_MEDIUM = load_font(_SHARED_FONT, 32)
 FONT_SMALL = load_font(_SHARED_FONT, 26)
 FONT_TINY = load_font(_SHARED_FONT, 22)
 
-P = Plugin("entertain", display_name="娱乐", enabled=True, level=PermLevel.LOW, scene=PermScene.ALL)
+P = Plugin(
+    "entertain",
+    display_name="娱乐",
+    enabled=True,
+    level=PermLevel.LOW,
+    scene=PermScene.ALL,
+)
 
 
 def _load_fortune_defs() -> None:
@@ -72,7 +78,9 @@ def _load_user_fortunes() -> None:
 def _save_user_fortunes() -> None:
     """保存用户运势缓存。"""
     USER_DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
-    USER_DATA_FILE.write_text(json.dumps(_USER_FORTUNES, ensure_ascii=False, indent=2), encoding="utf-8")
+    USER_DATA_FILE.write_text(
+        json.dumps(_USER_FORTUNES, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
 
 @get_driver().on_startup
@@ -156,7 +164,9 @@ def _draw_star_rating(
         for i in range(10):
             angle = math.pi / 5 * i - math.pi / 2
             radius = star_size / 2 if i % 2 == 0 else star_size / 4
-            vertices.append((cx + radius * math.cos(angle), y + radius * math.sin(angle)))
+            vertices.append(
+                (cx + radius * math.cos(angle), y + radius * math.sin(angle))
+            )
         if ch == "★":
             draw.polygon(vertices, fill=(0, 0, 0, 220))
         else:
@@ -186,7 +196,13 @@ def _generate_fortune_canvas(
 
     draw.text((cx, y), f"{nickname}的今日运势", font=FONT_TINY, fill=color, anchor="mm")
     y += 80
-    draw.text((cx, y), fortune.get("fortuneSummary", "今日运势"), font=FONT_LARGE, fill=color, anchor="mm")
+    draw.text(
+        (cx, y),
+        fortune.get("fortuneSummary", "今日运势"),
+        font=FONT_LARGE,
+        fill=color,
+        anchor="mm",
+    )
     y += 120
 
     lucky_star = fortune.get("luckyStar", "")
@@ -203,8 +219,22 @@ def _generate_fortune_canvas(
     y += 60
 
     wrapped = _draw_wrapped_text(fortune.get("unsignText", ""), 22)
-    draw.multiline_text((cx, y), wrapped, font=FONT_SMALL, fill=color, anchor="ma", spacing=15, align="center")
-    draw.text((cx, height - 50), "| 仅供参考，切勿拘泥 |", font=FONT_TINY, fill=(0, 0, 0, 150), anchor="mm")
+    draw.multiline_text(
+        (cx, y),
+        wrapped,
+        font=FONT_SMALL,
+        fill=color,
+        anchor="ma",
+        spacing=15,
+        align="center",
+    )
+    draw.text(
+        (cx, height - 50),
+        "| 仅供参考，切勿拘泥 |",
+        font=FONT_TINY,
+        fill=(0, 0, 0, 150),
+        anchor="mm",
+    )
     return image
 
 
@@ -252,5 +282,7 @@ async def _handle_fortune(matcher: Matcher, bot: Bot, event: Event) -> None:
     except Exception as exc:
         await matcher.finish(f"生成失败：{exc}")
     background = await _get_background_image()
-    image = _generate_fortune_canvas(_nickname(event, user_id), data, background=background)
+    image = _generate_fortune_canvas(
+        _nickname(event, user_id), data, background=background
+    )
     await matcher.finish(build_message(bot, build_message_segment(bot, "image", image)))

@@ -9,15 +9,24 @@ import uuid
 from pathlib import Path
 from urllib.parse import urlsplit
 
-import httpx
 import curl_cffi
+import httpx
 
 from ...utils.paths import cache_dir
 from .config import cfg_general, cfg_network
 from .types import VideoResult
 
 CACHE_DIR = cache_dir("video_parser")
-LEGACY_MEDIA_SUFFIXES = {".gif", ".jpg", ".jpeg", ".m4a", ".m4s", ".mp4", ".png", ".webp"}
+LEGACY_MEDIA_SUFFIXES = {
+    ".gif",
+    ".jpg",
+    ".jpeg",
+    ".m4a",
+    ".m4s",
+    ".mp4",
+    ".png",
+    ".webp",
+}
 _legacy_cache_cleaned = False
 
 
@@ -44,7 +53,10 @@ def cleanup_download_dir(directory: Path) -> None:
     """清理单次解析留下的临时下载目录。"""
     resolved_cache = CACHE_DIR.resolve()
     resolved_directory = directory.resolve()
-    if resolved_directory == resolved_cache or resolved_cache not in resolved_directory.parents:
+    if (
+        resolved_directory == resolved_cache
+        or resolved_cache not in resolved_directory.parents
+    ):
         return
     shutil.rmtree(resolved_directory, ignore_errors=True)
 
@@ -115,11 +127,15 @@ async def download_file(
             raise DownloadError("媒体下载失败") from exc
 
 
-async def _download_file_httpx(url: str, *, file_path: Path, headers: dict[str, str]) -> Path:
+async def _download_file_httpx(
+    url: str, *, file_path: Path, headers: dict[str, str]
+) -> Path:
     """使用 httpx 下载文件。"""
     max_bytes = int(cfg_general().get("max_file_mb", 80)) * 1024 * 1024
     total = 0
-    async with httpx.AsyncClient(timeout=_timeout(), proxy=_proxy(), follow_redirects=True, verify=False) as client:
+    async with httpx.AsyncClient(
+        timeout=_timeout(), proxy=_proxy(), follow_redirects=True, verify=False
+    ) as client:
         async with client.stream("GET", url, headers=headers) as response:
             response.raise_for_status()
             _check_content_length(response.headers.get("Content-Length"), max_bytes)
@@ -131,7 +147,9 @@ async def _download_file_httpx(url: str, *, file_path: Path, headers: dict[str, 
     return _ensure_downloaded(file_path)
 
 
-async def _download_file_curl(url: str, *, file_path: Path, headers: dict[str, str]) -> Path:
+async def _download_file_curl(
+    url: str, *, file_path: Path, headers: dict[str, str]
+) -> Path:
     """使用 curl_cffi 下载文件。"""
     max_bytes = int(cfg_general().get("max_file_mb", 80)) * 1024 * 1024
     total = 0
@@ -155,7 +173,9 @@ async def _download_file_curl(url: str, *, file_path: Path, headers: dict[str, s
 def _check_content_length(content_length: str | None, max_bytes: int) -> None:
     """检查响应声明大小。"""
     if content_length and int(content_length) > max_bytes:
-        raise DownloadError(f"文件大小超过限制：{int(content_length) / 1024 / 1024:.1f} MB")
+        raise DownloadError(
+            f"文件大小超过限制：{int(content_length) / 1024 / 1024:.1f} MB"
+        )
 
 
 def _check_total_size(total: int, max_bytes: int) -> None:
@@ -204,33 +224,51 @@ async def download_video(result: VideoResult, *, directory: Path | None = None) 
         raise DownloadError(f"视频时长超过限制：{int(result.duration)} 秒")
 
     if not result.audio_url:
-        return await download_file(result.video_url, suffix=".mp4", headers=result.headers, directory=directory)
+        return await download_file(
+            result.video_url, suffix=".mp4", headers=result.headers, directory=directory
+        )
 
     video_path, audio_path = await asyncio.gather(
-        download_file(result.video_url, suffix=".m4s", headers=result.headers, directory=directory),
-        download_file(result.audio_url, suffix=".m4a", headers=result.headers, directory=directory),
+        download_file(
+            result.video_url, suffix=".m4s", headers=result.headers, directory=directory
+        ),
+        download_file(
+            result.audio_url, suffix=".m4a", headers=result.headers, directory=directory
+        ),
     )
     output_dir = directory or CACHE_DIR
-    output = output_dir / f"{hashlib.sha1((result.video_url + result.audio_url).encode('utf-8')).hexdigest()}.mp4"
+    output = (
+        output_dir
+        / f"{hashlib.sha1((result.video_url + result.audio_url).encode('utf-8')).hexdigest()}.mp4"
+    )
     return await _merge_av(video_path, audio_path, output)
 
 
-async def download_images(result: VideoResult, *, directory: Path | None = None) -> list[Path]:
+async def download_images(
+    result: VideoResult, *, directory: Path | None = None
+) -> list[Path]:
     """下载解析结果中的图片。"""
     if not result.image_urls:
         raise DownloadError("解析结果没有图片")
-    tasks = [_download_image(url, headers=result.headers, directory=directory) for url in result.image_urls]
+    tasks = [
+        _download_image(url, headers=result.headers, directory=directory)
+        for url in result.image_urls
+    ]
     paths = [path for path in await asyncio.gather(*tasks) if path is not None]
     if not paths:
         raise DownloadError("图片下载失败")
     return paths
 
 
-async def _download_image(url: str, *, headers: dict[str, str], directory: Path | None = None) -> Path | None:
+async def _download_image(
+    url: str, *, headers: dict[str, str], directory: Path | None = None
+) -> Path | None:
     """下载图片，失败时尝试常见无样式原图地址。"""
     for candidate in _url_candidates(url):
         try:
-            return await download_file(candidate, suffix=".jpg", headers=headers, directory=directory)
+            return await download_file(
+                candidate, suffix=".jpg", headers=headers, directory=directory
+            )
         except Exception:
             continue
     return None

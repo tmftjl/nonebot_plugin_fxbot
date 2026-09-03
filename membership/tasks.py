@@ -10,9 +10,9 @@ from typing import Any
 from nonebot import get_bots, logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..adapter import selfBot
 from ..config import get_manager as get_config_manager
 from ..db import with_session
-
 from .guard import membership_guard
 from .models import MembershipGroup, utc_now
 from .service import membership_service
@@ -55,7 +55,9 @@ class _MembershipTaskStore:
                 group_in_session.expired_at = utc_now()
                 group_in_session.updated_at = utc_now()
                 result.expired += 1
-                if auto_leave and await _leave_group(group.managed_by_bot, group.group_id):
+                if auto_leave and await _leave_group(
+                    group.managed_by_bot, group.group_id
+                ):
                     result.left += 1
                 if delay:
                     await asyncio.sleep(delay)
@@ -94,9 +96,8 @@ async def _leave_group(bot_id: str | None, group_id: str) -> bool:
     if bot is None:
         return False
     try:
-        if hasattr(bot, "set_group_leave"):
-            await bot.set_group_leave(group_id=int(group_id))
-            return True
+        await selfBot.leave_group(group_id)
+        return True
     except Exception as exc:
         logger.warning(f"[MembershipTask] 群 {group_id} 退群失败: {exc}")
     return False
@@ -121,9 +122,7 @@ async def check_and_process_memberships() -> MembershipTaskResult:
 async def membership_task_job() -> MembershipTaskResult:
     """会员定时任务入口。"""
     result = await check_and_process_memberships()
-    logger.info(
-        f"[MembershipTask] 检查完成，过期={result.expired}，退群={result.left}"
-    )
+    logger.info(f"[MembershipTask] 检查完成，过期={result.expired}，退群={result.left}")
     return result
 
 
@@ -132,7 +131,9 @@ def setup_membership_tasks() -> None:
     try:
         from nonebot_plugin_apscheduler import scheduler
     except Exception:
-        logger.warning("[MembershipTask] nonebot-plugin-apscheduler 未安装或未加载，跳过定时任务")
+        logger.warning(
+            "[MembershipTask] nonebot-plugin-apscheduler 未安装或未加载，跳过定时任务"
+        )
         return
 
     cfg = _membership_cfg()

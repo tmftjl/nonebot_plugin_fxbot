@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Bot 状态查询命令。"""
+
 from __future__ import annotations
 
 import asyncio
@@ -10,12 +11,12 @@ import socket
 import time
 from collections import defaultdict
 from datetime import datetime
+from functools import wraps
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import quote
 
 import psutil
-from functools import wraps
-from urllib.parse import quote
 from nonebot import get_driver, logger
 from nonebot.adapters import Bot, Event
 from playwright.async_api import Browser, async_playwright
@@ -42,7 +43,9 @@ _BROWSER: Optional[Browser] = None
 _BROWSER_INIT_LOCK = asyncio.Lock()
 
 # ========== 消息统计缓存 ==========
-_MESSAGE_CACHE: Dict[str, Dict[str, int]] = defaultdict(lambda: {"received": 0, "sent": 0})
+_MESSAGE_CACHE: Dict[str, Dict[str, int]] = defaultdict(
+    lambda: {"received": 0, "sent": 0}
+)
 _MESSAGE_CACHE_LOCK = asyncio.Lock()
 _MESSAGE_CACHE_DATE = datetime.now().strftime("%Y-%m-%d")
 
@@ -85,7 +88,14 @@ async def _collect_status_data() -> Dict[str, Any]:
         _collect_process_info(),
         _collect_system_info(),
     ]
-    bot_info_list, hardware, disks, network, processes, system_info = await asyncio.gather(*tasks)
+    (
+        bot_info_list,
+        hardware,
+        disks,
+        network,
+        processes,
+        system_info,
+    ) = await asyncio.gather(*tasks)
 
     return {
         "bot_info_list": bot_info_list,
@@ -136,7 +146,10 @@ async def _collect_bot_info() -> List[Dict[str, Any]]:
             # 获取群列表和好友列表
             group_list = await bot.get_group_list()
             friend_list = await bot.get_friend_list()
-            total_members = sum(g.get("member_count", 0) or g.get("max_member_count", 0) for g in group_list)
+            total_members = sum(
+                g.get("member_count", 0) or g.get("max_member_count", 0)
+                for g in group_list
+            )
             count_contacts = {
                 "好友": len(friend_list),
                 "群聊": len(group_list),
@@ -147,27 +160,34 @@ async def _collect_bot_info() -> List[Dict[str, Any]]:
             cache = _MESSAGE_CACHE[f"bot_{user_id}"]
             message_count = {"今日接收": cache["received"], "今日发送": cache["sent"]}
 
-        bot_info_list.append({
-            "nickname": nickname,
-            "user_id": user_id,
-            "avatar_url": avatar_url,
-            "platform": platform.system(),
-            "bot_version": f"NoneBot2 ({adapter_name})",
-            "bot_runtime": runtime_str,
-            "count_contacts": count_contacts,
-            "message_count": message_count,
-        })
+        bot_info_list.append(
+            {
+                "nickname": nickname,
+                "user_id": user_id,
+                "avatar_url": avatar_url,
+                "platform": platform.system(),
+                "bot_version": f"NoneBot2 ({adapter_name})",
+                "bot_runtime": runtime_str,
+                "count_contacts": count_contacts,
+                "message_count": message_count,
+            }
+        )
 
     return bot_info_list
 
 
 async def _collect_hardware_info() -> List[Dict[str, Any]]:
     """收集硬件信息"""
+
     def _sync_collect():
         # CPU
         monitor = get_monitor()
         monitor_data = monitor.get_current_data()
-        cpu_percent = monitor_data.cpu_history[-1][1] if monitor_data and monitor_data.cpu_history else 0.0
+        cpu_percent = (
+            monitor_data.cpu_history[-1][1]
+            if monitor_data and monitor_data.cpu_history
+            else 0.0
+        )
         cpu_count = psutil.cpu_count()
         cpu_freq = psutil.cpu_freq()
         cpu_freq_str = f"{cpu_freq.current:.0f}MHz" if cpu_freq else "N/A"
@@ -194,20 +214,28 @@ async def _collect_hardware_info() -> List[Dict[str, Any]]:
                     "per": _calc_dashoffset(mem.percent),
                     "color": _get_color_by_percent(mem.percent),
                 },
-                "info": [f"已用: {_format_bytes(mem.used)}", f"总量: {_format_bytes(mem.total)}"],
+                "info": [
+                    f"已用: {_format_bytes(mem.used)}",
+                    f"总量: {_format_bytes(mem.total)}",
+                ],
             },
         ]
 
         if swap.percent > 0:
-            visual_data.append({
-                "title": "SWAP",
-                "inner": f"{swap.percent:.1f}%",
-                "percentage": {
-                    "per": _calc_dashoffset(swap.percent),
-                    "color": _get_color_by_percent(swap.percent),
-                },
-                "info": [f"已用: {_format_bytes(swap.used)}", f"总量: {_format_bytes(swap.total)}"],
-            })
+            visual_data.append(
+                {
+                    "title": "SWAP",
+                    "inner": f"{swap.percent:.1f}%",
+                    "percentage": {
+                        "per": _calc_dashoffset(swap.percent),
+                        "color": _get_color_by_percent(swap.percent),
+                    },
+                    "info": [
+                        f"已用: {_format_bytes(swap.used)}",
+                        f"总量: {_format_bytes(swap.total)}",
+                    ],
+                }
+            )
 
         return visual_data
 
@@ -216,19 +244,22 @@ async def _collect_hardware_info() -> List[Dict[str, Any]]:
 
 async def _collect_disk_info() -> Dict[str, Any]:
     """收集磁盘信息"""
+
     def _sync_collect():
         partitions = psutil.disk_partitions()
         disks_size = []
         for part in partitions:
             try:
                 usage = psutil.disk_usage(part.mountpoint)
-                disks_size.append({
-                    "mount": part.mountpoint,
-                    "size": _format_bytes(usage.total),
-                    "used": _format_bytes(usage.used),
-                    "use": usage.percent,
-                    "color": _get_color_by_percent(usage.percent),
-                })
+                disks_size.append(
+                    {
+                        "mount": part.mountpoint,
+                        "size": _format_bytes(usage.total),
+                        "used": _format_bytes(usage.used),
+                        "use": usage.percent,
+                        "color": _get_color_by_percent(usage.percent),
+                    }
+                )
             except Exception:
                 continue
 
@@ -237,11 +268,13 @@ async def _collect_disk_info() -> Dict[str, Any]:
         data = monitor.get_current_data()
         disks_io = []
         if data:
-            disks_io.append({
-                "name": "总计",
-                "rIO_sec": _format_bytes(data.disk_read_speed),
-                "wIO_sec": _format_bytes(data.disk_write_speed),
-            })
+            disks_io.append(
+                {
+                    "name": "总计",
+                    "rIO_sec": _format_bytes(data.disk_read_speed),
+                    "wIO_sec": _format_bytes(data.disk_write_speed),
+                }
+            )
 
         return {"disksSize": disks_size, "disksIo": disks_io}
 
@@ -303,6 +336,7 @@ async def _collect_network_info() -> Dict[str, Any]:
 
 async def _collect_network_interfaces() -> List[Dict[str, Any]]:
     """收集网卡速度（只显示物理网卡）"""
+
     def _sync_collect():
         interfaces = []
         net_io = psutil.net_io_counters(pernic=True)
@@ -315,21 +349,25 @@ async def _collect_network_interfaces() -> List[Dict[str, Any]]:
         # 过滤虚拟网卡
         for iface_name, _ in net_io.items():
             # 跳过回环、Docker、虚拟网桥等
-            if any([
-                iface_name.startswith("lo"),
-                iface_name.startswith("docker"),
-                iface_name.startswith("br-"),
-                iface_name.startswith("veth"),
-                iface_name.startswith("virbr"),
-                iface_name.startswith("vmnet"),
-            ]):
+            if any(
+                [
+                    iface_name.startswith("lo"),
+                    iface_name.startswith("docker"),
+                    iface_name.startswith("br-"),
+                    iface_name.startswith("veth"),
+                    iface_name.startswith("virbr"),
+                    iface_name.startswith("vmnet"),
+                ]
+            ):
                 continue
 
-            interfaces.append({
-                "name": iface_name,
-                "upload_speed": _format_bytes(data.upload_speed),
-                "download_speed": _format_bytes(data.download_speed),
-            })
+            interfaces.append(
+                {
+                    "name": iface_name,
+                    "upload_speed": _format_bytes(data.upload_speed),
+                    "download_speed": _format_bytes(data.download_speed),
+                }
+            )
 
         return interfaces
 
@@ -356,20 +394,36 @@ async def _collect_website_latency() -> List[Dict[str, Any]]:
                 "success": True,
             }
         except TimeoutError:
-            return {"name": site["name"], "status": "timeout", "delay": "timeout", "success": False}
+            return {
+                "name": site["name"],
+                "status": "timeout",
+                "delay": "timeout",
+                "success": False,
+            }
         except Exception:
-            return {"name": site["name"], "status": "error", "delay": "error", "success": False}
+            return {
+                "name": site["name"],
+                "status": "error",
+                "delay": "error",
+                "success": False,
+            }
 
     return await asyncio.gather(*[test_site(site) for site in test_sites])
 
 
 async def _collect_system_info() -> List[Dict[str, Any]]:
     """收集系统信息（FastFetch）"""
+
     def _sync_collect():
         info_items = []
 
         # OS
-        info_items.append({"first": "OS", "tail": f"{platform.system()} {platform.release()} {platform.machine()}"})
+        info_items.append(
+            {
+                "first": "OS",
+                "tail": f"{platform.system()} {platform.release()} {platform.machine()}",
+            }
+        )
 
         # Host
         info_items.append({"first": "Host", "tail": socket.gethostname()})
@@ -386,7 +440,10 @@ async def _collect_system_info() -> List[Dict[str, Any]]:
 
         # Shell
         import os
-        shell = os.environ.get("SHELL", "PowerShell / CMD" if platform.system() == "Windows" else "Unknown")
+
+        shell = os.environ.get(
+            "SHELL", "PowerShell / CMD" if platform.system() == "Windows" else "Unknown"
+        )
         info_items.append({"first": "Shell", "tail": shell})
 
         # Display
@@ -396,13 +453,19 @@ async def _collect_system_info() -> List[Dict[str, Any]]:
         info_items.append({"first": "Cursor", "tail": "Default"})
 
         # Terminal
-        info_items.append({"first": "Terminal", "tail": os.environ.get("TERM", "Unknown")})
+        info_items.append(
+            {"first": "Terminal", "tail": os.environ.get("TERM", "Unknown")}
+        )
 
         # CPU
         cpu_name = platform.processor() or "Unknown"
         cpu_count = psutil.cpu_count()
         cpu_freq = psutil.cpu_freq()
-        cpu_info = f"{cpu_name} ({cpu_count}) @ {cpu_freq.max / 1000:.2f} GHz" if cpu_freq else f"{cpu_name} ({cpu_count})"
+        cpu_info = (
+            f"{cpu_name} ({cpu_count}) @ {cpu_freq.max / 1000:.2f} GHz"
+            if cpu_freq
+            else f"{cpu_name} ({cpu_count})"
+        )
         info_items.append({"first": "CPU", "tail": cpu_info})
 
         # GPU
@@ -410,18 +473,33 @@ async def _collect_system_info() -> List[Dict[str, Any]]:
 
         # Memory
         mem = psutil.virtual_memory()
-        info_items.append({"first": "Memory", "tail": f"{_format_bytes(mem.used)} / {_format_bytes(mem.total)} ({int(mem.percent)}%)"})
+        info_items.append(
+            {
+                "first": "Memory",
+                "tail": f"{_format_bytes(mem.used)} / {_format_bytes(mem.total)} ({int(mem.percent)}%)",
+            }
+        )
 
         # Swap
         swap = psutil.swap_memory()
-        info_items.append({"first": "Swap", "tail": f"{_format_bytes(swap.used)} / {_format_bytes(swap.total)} ({int(swap.percent)}%)"})
+        info_items.append(
+            {
+                "first": "Swap",
+                "tail": f"{_format_bytes(swap.used)} / {_format_bytes(swap.total)} ({int(swap.percent)}%)",
+            }
+        )
 
         # Disk
         for part in psutil.disk_partitions():
             try:
                 usage = psutil.disk_usage(part.mountpoint)
                 mount_name = part.mountpoint.replace("\\", "/")
-                info_items.append({"first": f"Disk ({mount_name})", "tail": f"{_format_bytes(usage.used)} / {_format_bytes(usage.total)} ({int(usage.percent)}%)"})
+                info_items.append(
+                    {
+                        "first": f"Disk ({mount_name})",
+                        "tail": f"{_format_bytes(usage.used)} / {_format_bytes(usage.total)} ({int(usage.percent)}%)",
+                    }
+                )
             except Exception:
                 continue
 
@@ -446,6 +524,7 @@ async def _collect_system_info() -> List[Dict[str, Any]]:
         # Locale
         try:
             import locale
+
             loc = locale.getdefaultlocale()
             locale_str = f"{loc[0]}.{loc[1]}" if loc[1] else str(loc[0])
             info_items.append({"first": "Locale", "tail": locale_str})
@@ -466,10 +545,10 @@ async def _collect_process_info() -> Dict[str, Any]:
     total_count = process_data.get("total_count", 0)
 
     return {
-        'total_count': total_count,
-        'status_counts': status_counts,
-        'top_mem': top_mem,
-        'top_cpu': top_cpu
+        "total_count": total_count,
+        "status_counts": status_counts,
+        "top_mem": top_mem,
+        "top_cpu": top_cpu,
     }
 
 
@@ -512,7 +591,9 @@ async def _build_status_html(data: Dict[str, Any]) -> str:
     # 构建背景样式
     background_style = ""
     if background_url:
-        background_style = f".container {{ background-image: url('{background_url}'); }}"
+        background_style = (
+            f".container {{ background-image: url('{background_url}'); }}"
+        )
 
     # 机器人数量
     bot_count = len(bot_info_list)
@@ -573,27 +654,37 @@ def _render_bot_info(bot_info_list: List[Dict[str, Any]]) -> str:
     """渲染Bot信息"""
     html_parts = []
     for bot in bot_info_list:
-        contacts_html = "".join([f'<span>{label}: {value}</span>' for label, value in bot.get("count_contacts", {}).items()])
-        messages_html = "".join([f'<span>{label}: {value}</span>' for label, value in bot.get("message_count", {}).items()])
+        contacts_html = "".join(
+            [
+                f"<span>{label}: {value}</span>"
+                for label, value in bot.get("count_contacts", {}).items()
+            ]
+        )
+        messages_html = "".join(
+            [
+                f"<span>{label}: {value}</span>"
+                for label, value in bot.get("message_count", {}).items()
+            ]
+        )
 
         html_parts.append(f"""
         <div class="box">
             <div class="botInfo">
                 <div class="avatar-box">
                     <div class="avatar">
-                        <img src="{bot.get('avatar_url', '')}" alt="avatar">
+                        <img src="{bot.get("avatar_url", "")}" alt="avatar">
                     </div>
                     <div class="info">
                         <div class="onlineStatus" style="width:15px;height:15px;border-radius:50%;background:#44b700;"></div>
-                        <div class="platform">{bot.get('platform', 'Unknown')}</div>
+                        <div class="platform">{bot.get("platform", "Unknown")}</div>
                     </div>
                 </div>
                 <div class="header">
-                    <h1>{bot.get('nickname', 'Bot')}</h1>
+                    <h1>{bot.get("nickname", "Bot")}</h1>
                     <hr noshade>
                     <p>
-                        <span style="background: #d799de">🤖 {bot.get('bot_version', 'NoneBot2')}</span>
-                        <span style="background: #CBC7C8">⏰ Bot已运行 {bot.get('bot_runtime', '0秒')}</span>
+                        <span style="background: #d799de">🤖 {bot.get("bot_version", "NoneBot2")}</span>
+                        <span style="background: #CBC7C8">⏰ Bot已运行 {bot.get("bot_runtime", "0秒")}</span>
                     </p>
                     <p>{contacts_html}{messages_html}</p>
                 </div>
@@ -614,11 +705,11 @@ def _render_hardware(hardware: List[Dict[str, Any]], current_time: str) -> str:
         info_lines = "".join([f"<p>{info}</p>" for info in item.get("info", [])])
         items_html.append(f"""
         <li class="li">
-            <div class="container-box" data-num="{item['inner']}" id="box">
+            <div class="container-box" data-num="{item["inner"]}" id="box">
                 <div class="circle-outer"></div>
-                <svg><circle id="circle" stroke="{item['percentage']['color']}" style="stroke-dashoffset:{item['percentage']['per']}"></circle></svg>
+                <svg><circle id="circle" stroke="{item["percentage"]["color"]}" style="stroke-dashoffset:{item["percentage"]["per"]}"></circle></svg>
             </div>
-            <article><summary>{item['title']}</summary>{info_lines}</article>
+            <article><summary>{item["title"]}</summary>{info_lines}</article>
         </li>
         """)
 
@@ -641,12 +732,12 @@ def _render_disks(disks: Dict[str, Any]) -> str:
     for disk in disks_size:
         size_html.append(f"""
         <li class="HardDisk_li">
-            <div class="word mount">{disk['mount']}</div>
+            <div class="word mount">{disk["mount"]}</div>
             <div class="progress">
-                <div class="word">{disk['used']} / {disk['size']}</div>
-                <div class="current" style="width:{disk['use']}%;background:{disk['color']}"></div>
+                <div class="word">{disk["used"]} / {disk["size"]}</div>
+                <div class="current" style="width:{disk["use"]}%;background:{disk["color"]}"></div>
             </div>
-            <div class="percentage">{disk['use']}%</div>
+            <div class="percentage">{disk["use"]}%</div>
         </li>
         """)
 
@@ -654,8 +745,8 @@ def _render_disks(disks: Dict[str, Any]) -> str:
     for io_item in disks_io:
         io_html.append(f"""
         <div class="speed">
-            <p>{io_item['name']}</p>
-            <p>读 {io_item['rIO_sec']}/s | 写 {io_item['wIO_sec']}/s</p>
+            <p>{io_item["name"]}</p>
+            <p>读 {io_item["rIO_sec"]}/s | 写 {io_item["wIO_sec"]}/s</p>
         </div>
         """)
 
@@ -688,8 +779,8 @@ def _render_network(network: Dict[str, Any], chart_data_json: str) -> str:
     for iface in network.get("interfaces", []):
         interfaces_html += f"""
         <div class="speed">
-            <p>{iface['name']}</p>
-            <p>↑ {iface['upload_speed']}/s | ↓ {iface['download_speed']}/s</p>
+            <p>{iface["name"]}</p>
+            <p>↑ {iface["upload_speed"]}/s | ↓ {iface["download_speed"]}/s</p>
         </div>
         """
 
@@ -699,9 +790,13 @@ def _render_network(network: Dict[str, Any], chart_data_json: str) -> str:
     if website_tests:
         test_items = []
         for test in website_tests:
-            color = "#46971d" if test['success'] else "#d73403"
-            test_items.append(f'{test["name"]}：<span style="color:{color};">{test["delay"]}</span>')
-        website_tests_html = f'<div class="speed"><p>延迟</p><p>{" | ".join(test_items)}</p></div>'
+            color = "#46971d" if test["success"] else "#d73403"
+            test_items.append(
+                f'{test["name"]}：<span style="color:{color};">{test["delay"]}</span>'
+            )
+        website_tests_html = (
+            f'<div class="speed"><p>延迟</p><p>{" | ".join(test_items)}</p></div>'
+        )
 
     return f"""
     <div class="box" data-boxInfo="网络">
@@ -713,28 +808,28 @@ def _render_network(network: Dict[str, Any], chart_data_json: str) -> str:
                     <div class="icon">⬆️</div>
                     <div class="info">
                         <p class="text">上传速度</p>
-                        <p class="networkData">{upload.get('size', '0')}<span class="unit">{upload.get('suffix', 'B')}/s</span></p>
+                        <p class="networkData">{upload.get("size", "0")}<span class="unit">{upload.get("suffix", "B")}/s</span></p>
                     </div>
                 </div>
                 <div class="download">
                     <div class="icon">⬇️</div>
                     <div class="info">
                         <p class="text">下载速度</p>
-                        <p class="networkData">{download.get('size', '0')}<span class="unit">{download.get('suffix', 'B')}/s</span></p>
+                        <p class="networkData">{download.get("size", "0")}<span class="unit">{download.get("suffix", "B")}/s</span></p>
                     </div>
                 </div>
                 <div class="uploadVolume">
                     <div class="icon">📤</div>
                     <div class="info">
                         <p class="text">上传量</p>
-                        <p class="networkData">{upload_traffic.get('size', '0')}<span class="unit">{upload_traffic.get('suffix', 'B')}</span></p>
+                        <p class="networkData">{upload_traffic.get("size", "0")}<span class="unit">{upload_traffic.get("suffix", "B")}</span></p>
                     </div>
                 </div>
                 <div class="downloadVolume">
                     <div class="icon">📥</div>
                     <div class="info">
                         <p class="text">下载量</p>
-                        <p class="networkData">{download_traffic.get('size', '0')}<span class="unit">{download_traffic.get('suffix', 'B')}</span></p>
+                        <p class="networkData">{download_traffic.get("size", "0")}<span class="unit">{download_traffic.get("suffix", "B")}</span></p>
                     </div>
                 </div>
             </div>
@@ -795,7 +890,12 @@ def _render_system_info(system_info: List[Dict[str, Any]]) -> str:
     if not system_info:
         return ""
 
-    items_html = "".join([f'<div class="speed"><p>{item["first"]}</p><p>{item["tail"]}</p></div>' for item in system_info])
+    items_html = "".join(
+        [
+            f'<div class="speed"><p>{item["first"]}</p><p>{item["tail"]}</p></div>'
+            for item in system_info
+        ]
+    )
 
     return f"""
     <div class="box" data-boxInfo="FastFetch">
@@ -810,10 +910,10 @@ def _render_process_info(processes: Dict[str, Any]) -> str:
     if not processes:
         return ""
 
-    total_count = processes.get('total_count', 0)
-    status_counts = processes.get('status_counts', {})
-    top_mem = processes.get('top_mem', [])
-    top_cpu = processes.get('top_cpu', [])
+    total_count = processes.get("total_count", 0)
+    status_counts = processes.get("status_counts", {})
+    top_mem = processes.get("top_mem", [])
+    top_cpu = processes.get("top_cpu", [])
 
     # 渲染状态统计 - 全部放一行
     status_items = [f"{status}：{count}" for status, count in status_counts.items()]
@@ -824,8 +924,8 @@ def _render_process_info(processes: Dict[str, Any]) -> str:
     for proc in top_mem:
         mem_rows.append(f"""
         <div class="speed">
-            <p style="flex: 1 1 70%; text-align: left;">{proc['name']}</p>
-            <p style="flex: 0 0 30%; max-width: 30%;">{proc['mem_str']}</p>
+            <p style="flex: 1 1 70%; text-align: left;">{proc["name"]}</p>
+            <p style="flex: 0 0 30%; max-width: 30%;">{proc["mem_str"]}</p>
         </div>
         """)
 
@@ -834,8 +934,8 @@ def _render_process_info(processes: Dict[str, Any]) -> str:
     for proc in top_cpu:
         cpu_rows.append(f"""
         <div class="speed">
-            <p style="flex: 1 1 70%; text-align: left;">{proc['name']}</p>
-            <p style="flex: 0 0 30%; max-width: 30%;">{proc['cpu_percent']:.1f}%</p>
+            <p style="flex: 1 1 70%; text-align: left;">{proc["name"]}</p>
+            <p style="flex: 0 0 30%; max-width: 30%;">{proc["cpu_percent"]:.1f}%</p>
         </div>
         """)
 
@@ -995,6 +1095,7 @@ async def _render_html_to_image(html: str) -> bytes:
 
     try:
         page.set_default_timeout(5000)
+
         # 设置路由以处理头像图片的跨域问题
         async def handle_route(route):
             await route.continue_()
@@ -1271,7 +1372,9 @@ async def _hook_bot_methods(bot: Bot):
                     async with _MESSAGE_CACHE_LOCK:
                         _MESSAGE_CACHE[f"bot_{bot.self_id}"]["received"] += 1
                 except Exception as e:
-                    logger.error(f"[bot_status] 接收消息统计失败: bot={bot.self_id} error={e}")
+                    logger.error(
+                        f"[bot_status] 接收消息统计失败: bot={bot.self_id} error={e}"
+                    )
 
             return result
 
@@ -1282,7 +1385,9 @@ async def _hook_bot_methods(bot: Bot):
         original_send = bot.send
 
         @wraps(original_send)
-        async def patched_send(event: Any, message: Any, *args: Any, **kwargs: Any) -> Any:
+        async def patched_send(
+            event: Any, message: Any, *args: Any, **kwargs: Any
+        ) -> Any:
             result = await original_send(event, message, *args, **kwargs)
 
             # 统计发送消息并上报
@@ -1293,10 +1398,14 @@ async def _hook_bot_methods(bot: Bot):
                     async with _MESSAGE_CACHE_LOCK:
                         _MESSAGE_CACHE[f"bot_{bot.self_id}"]["sent"] += 1
                 except Exception as e:
-                    logger.error(f"[bot_status] 发送消息统计失败: bot={bot.self_id} error={e}")
+                    logger.error(
+                        f"[bot_status] 发送消息统计失败: bot={bot.self_id} error={e}"
+                    )
 
                 # 异步上报中央API（不阻塞）
-                asyncio.create_task(_report_to_central_api(chat_type, bot.self_id, target_id))
+                asyncio.create_task(
+                    _report_to_central_api(chat_type, bot.self_id, target_id)
+                )
 
             return result
 

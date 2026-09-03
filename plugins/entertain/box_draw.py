@@ -36,7 +36,10 @@ def create_image(avatar: bytes, reply: list[str]) -> bytes:
     temp_img = Image.new("RGBA", (1, 1))
     temp_draw = ImageDraw.Draw(temp_img)
     if emoji is not None:
-        measure_text = "".join("一" if getattr(emoji, "is_emoji", None) and emoji.is_emoji(ch) else ch for ch in text)
+        measure_text = "".join(
+            "一" if getattr(emoji, "is_emoji", None) and emoji.is_emoji(ch) else ch
+            for ch in text
+        )
     else:
         measure_text = text
     text_bbox = temp_draw.textbbox((0, 0), measure_text, font=FONT)
@@ -47,7 +50,11 @@ def create_image(avatar: bytes, reply: list[str]) -> bytes:
     try:
         avatar_image = Image.open(BytesIO(avatar)).convert("RGBA")
     except Exception:
-        avatar_image = Image.new("RGBA", (max(1, text_height), max(1, text_height)), color=(240, 240, 240, 255))
+        avatar_image = Image.new(
+            "RGBA",
+            (max(1, text_height), max(1, text_height)),
+            color=(240, 240, 240, 255),
+        )
     avatar_image = avatar_image.resize((max(1, text_height), max(1, text_height)))
 
     image_width = avatar_image.width + text_width + 2 * TEXT_PADDING
@@ -55,7 +62,9 @@ def create_image(avatar: bytes, reply: list[str]) -> bytes:
 
     mask = Image.new("L", (avatar_image.width, avatar_image.height), 0)
     mask_draw = ImageDraw.Draw(mask)
-    mask_draw.rounded_rectangle([(0, 0), (avatar_image.width, avatar_image.height)], CORNER_RADIUS, fill=255)
+    mask_draw.rounded_rectangle(
+        [(0, 0), (avatar_image.width, avatar_image.height)], CORNER_RADIUS, fill=255
+    )
     avatar_image.putalpha(mask)
     image.paste(avatar_image, (0, (image_height - avatar_image.height) // 2), mask)
     _draw_multi(image, text, avatar_image.width + TEXT_PADDING, TEXT_PADDING)
@@ -76,7 +85,9 @@ def create_image(avatar: bytes, reply: list[str]) -> bytes:
     return buffer.getvalue()
 
 
-def _draw_multi(image: Image.Image, text: str, text_x: int = 10, text_y: int = 10) -> Image.Image:
+def _draw_multi(
+    image: Image.Image, text: str, text_x: int = 10, text_y: int = 10
+) -> Image.Image:
     """逐字绘制文本，保持旧版随机颜色和 emoji 字体。"""
     draw = ImageDraw.Draw(image)
     current_y = text_y
@@ -96,7 +107,12 @@ def _draw_multi(image: Image.Image, text: str, text_x: int = 10, text_y: int = 1
                 except Exception:
                     is_emoji = False
             font = EMOJI_FONT if is_emoji else FONT
-            draw.text((current_x, current_y + (10 if is_emoji else 0)), char, font=font, fill=line_color)
+            draw.text(
+                (current_x, current_y + (10 if is_emoji else 0)),
+                char,
+                font=font,
+                fill=line_color,
+            )
             bbox = font.getbbox(char)
             current_x += bbox[2] - bbox[0]
         current_y += 40

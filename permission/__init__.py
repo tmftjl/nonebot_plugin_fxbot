@@ -3,7 +3,14 @@
 from .helpers import upsert_command_defaults, upsert_plugin_defaults
 from .policy import PolicyChain
 from .storage import PermissionStorage, get_storage, scan_plugins_for_permissions
-from .types import Decision, PermContext, PermLevel, PermScene, PolicyResult, perm_entry_default
+from .types import (
+    Decision,
+    PermContext,
+    PermLevel,
+    PermScene,
+    PolicyResult,
+    perm_entry_default,
+)
 
 _CHECKER_EXPORTS = {
     "PermissionChecker",

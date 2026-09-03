@@ -25,7 +25,9 @@ class ChatSessionStore:
 
     def replace(self, session_id: str, messages: list[dict[str, Any]]) -> None:
         """替换会话历史。"""
-        self._store[session_id] = deque(messages[-self.max_messages :], maxlen=self.max_messages)
+        self._store[session_id] = deque(
+            messages[-self.max_messages :], maxlen=self.max_messages
+        )
 
     def clear(self, session_id: str) -> None:
         """清空会话历史。"""
