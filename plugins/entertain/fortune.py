@@ -103,20 +103,6 @@ def _nickname(event: Event, user_id: str) -> str:
     return event_user_name(event, f"用户{user_id}") or f"用户{user_id}"
 
 
-def _num_to_chinese(num: int) -> str:
-    """数字转中文日期。"""
-    digits = "零一二三四五六七八九"
-    if 1 <= num <= 9:
-        return digits[num]
-    if num == 10:
-        return "十"
-    if 10 < num < 20:
-        return "十" + digits[num % 10]
-    if num % 10 == 0:
-        return digits[num // 10] + "十"
-    return digits[num // 10] + "十" + digits[num % 10]
-
-
 async def _get_background_image() -> Image.Image | None:
     """获取可选背景图。"""
     url = str(cfg_api_urls()["background_api"]).strip()
@@ -198,7 +184,7 @@ def _generate_fortune_canvas(
     cx = width / 2
     color = (0, 0, 0, 220)
 
-    draw.text((cx, y), f"{nickname} 的{_num_to_chinese(datetime.now().day)}日运势", font=FONT_TINY, fill=color, anchor="mm")
+    draw.text((cx, y), f"{nickname}的今日运势", font=FONT_TINY, fill=color, anchor="mm")
     y += 80
     draw.text((cx, y), fortune.get("fortuneSummary", "今日运势"), font=FONT_LARGE, fill=color, anchor="mm")
     y += 120
