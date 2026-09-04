@@ -97,6 +97,21 @@ def _extract_target_ids(event: Any, fallback: str = "") -> list[str]:
     return re.findall(r"\d{5,}", fallback or _plain_text(event))
 
 
+def _target_names(event: Any, target_ids: list[str]) -> dict[str, str]:
+    """提取目标昵称，无法获取时回退到目标 ID。"""
+    names = {str(target_id): str(target_id) for target_id in target_ids}
+    try:
+        for segment in event.get_message():
+            data = getattr(segment, "data", {}) or {}
+            target_id = str(data.get("user_id") or data.get("id") or "")
+            username = str(data.get("username") or "").strip()
+            if target_id in names and username:
+                names[target_id] = username
+    except (AttributeError, TypeError, ValueError):
+        pass
+    return names
+
+
 def _parse_duration(text: str, default: int = 600) -> int:
     """解析简单禁言时长。"""
     raw = str(text or "").strip()
@@ -345,16 +360,17 @@ async def _handle_mute(
     if not target_ids:
         await matcher.finish("请 @ 目标成员或提供 QQ 号")
     duration = _parse_duration(time_text or "10分", 600)
+    target_names = _target_names(event, target_ids)
     success_list: list[str] = []
     fail_list: list[str] = []
     fail_reasons: list[str] = []
     for target_id in target_ids:
         result = await _mute_member(bot, group_id, target_id, duration, operator_id=_uid(event))
         if result.success:
-            success_list.append(target_id)
+            success_list.append(target_names[target_id])
         else:
-            fail_list.append(target_id)
-            fail_reasons.append(f"{target_id}: {result.message}")
+            fail_list.append(target_names[target_id])
+            fail_reasons.append(f"{target_names[target_id]}: {result.message}")
     lines: list[str] = []
     if success_list:
         lines.append(f"✅ 已禁言 {len(success_list)} 人，时长: {_format_duration(duration)}")
@@ -391,12 +407,13 @@ async def _handle_unmute(
         await matcher.finish("请 @ 目标成员或提供 QQ 号")
     success_list: list[str] = []
     fail_list: list[str] = []
+    target_names = _target_names(event, target_ids)
     for target_id in target_ids:
         result = await _mute_member(bot, group_id, target_id, 0, operator_id=_uid(event))
         if result.success:
-            success_list.append(target_id)
+            success_list.append(target_names[target_id])
         else:
-            fail_list.append(target_id)
+            fail_list.append(target_names[target_id])
     lines: list[str] = []
     if success_list:
         lines.append(f"✅ 已解除禁言 {len(success_list)} 人")
