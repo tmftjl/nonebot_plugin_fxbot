@@ -13,7 +13,11 @@ def event_message_type(event: Event) -> str:
 
 def event_user_id(event: Event) -> str:
     get_user_id = getattr(event, "get_user_id", None)
-    value = get_user_id() if callable(get_user_id) else None
+    try:
+        value = get_user_id() if callable(get_user_id) else None
+    except (AttributeError, ValueError):
+        # OneBot 通知事件可能没有消息上下文，get_user_id() 会主动抛错。
+        value = None
     if value is not None:
         return str(value)
     for attr in ("user_id", "user_openid", "author"):
