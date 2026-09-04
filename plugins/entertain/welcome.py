@@ -333,16 +333,13 @@ welcome_notice = on_notice(priority=12, block=False, permission=P.permission())
 @welcome_notice.handle()
 async def _handle_group_increase(bot: Bot, event: Event) -> None:
     """新成员入群时发送欢迎语。"""
-    notice_type = str(getattr(event, "notice_type", "") or "")
-    sub_type = str(getattr(event, "sub_type", "") or "")
-    if notice_type != "group_increase" and "increase" not in type(event).__name__.lower():
+    join_info = selfBot.extract_group_member_add(event)
+    if not join_info:
         return
-    if sub_type == "invite" and getattr(event, "user_id", None) is None:
-        return
-    user_id = str(getattr(event, "user_id", "") or "")
+    group_key = join_info["group_id"]
+    user_id = join_info["user_id"]
     if user_id == str(getattr(bot, "self_id", "")):
         return
-    group_key = _group_key(event)
     if not group_key:
         return
     record = _load_store().get(group_key)

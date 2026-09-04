@@ -17,6 +17,16 @@ from .message_utils import _image_bytes
 class OneBotV11MessageAdapter(PlatformAdapter):
     """OneBot V11 消息适配器。"""
 
+    def extract_group_member_add(self, event: Any) -> dict[str, str] | None:
+        """识别 OneBot V11 新成员入群通知。"""
+        if str(getattr(event, "notice_type", "") or "") != "group_increase":
+            return None
+        group_id = str(getattr(event, "group_id", "") or "").strip()
+        user_id = str(getattr(event, "user_id", "") or "").strip()
+        if not group_id or not user_id:
+            return None
+        return {"group_id": group_id, "user_id": user_id}
+
     def match(self, bot: Bot) -> bool:
         return isinstance(bot, OneBotV11Bot)
 

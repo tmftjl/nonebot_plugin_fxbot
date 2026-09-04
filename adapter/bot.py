@@ -36,6 +36,10 @@ class PlatformAdapter(ABC):
     def message_segment_class(self) -> type | None:
         return None
 
+    def extract_group_member_add(self, event: Any) -> dict[str, str] | None:
+        """识别成员入群事件并返回统一的群 ID、成员 ID。"""
+        return None
+
     @abstractmethod
     async def send_message_to_target(self, bot: Any, target: dict[str, Any], message: Any) -> Any:
         """向持久化目标发送消息。"""
@@ -217,6 +221,9 @@ class PlatformBot:
 
     def is_mention_segment(self, segment: Any) -> bool:
         return self.adapter.is_mention_segment(segment)
+
+    def extract_group_member_add(self, event: Any) -> dict[str, str] | None:
+        return self.adapter.extract_group_member_add(event)
 
     def mention_target(self, segment: Any) -> str | None:
         return self.adapter.mention_target(segment)

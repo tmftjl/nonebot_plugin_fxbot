@@ -10,6 +10,7 @@ from typing import Any
 
 from nonebot.adapters import Bot
 from nonebot.adapters.qq import Bot as QQBot
+from nonebot.adapters.qq.event import GroupMemberAddEvent
 from nonebot.adapters.qq.models import SetMemberMuteState
 
 from .bot import PlatformAdapter, UnsupportedCapability
@@ -18,6 +19,15 @@ from .message_utils import _image_bytes
 
 class QQOfficialMessageAdapter(PlatformAdapter):
     """QQ 官方消息适配器。"""
+
+    def extract_group_member_add(self, event: Any) -> dict[str, str] | None:
+        """识别 QQ 官方新成员入群通知。"""
+        if not isinstance(event, GroupMemberAddEvent):
+            return None
+        return {
+            "group_id": str(event.group_openid),
+            "user_id": str(event.member_openid),
+        }
 
     def match(self, bot: Bot) -> bool:
         return isinstance(bot, QQBot)
