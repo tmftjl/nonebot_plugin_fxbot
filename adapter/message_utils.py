@@ -8,7 +8,7 @@ from re import Match, Pattern
 from typing import Any
 
 from .events import extract_message_target
-from .interfaces import PlatformAdapter
+from .bot import PlatformAdapter
 from .registry import adapter_name, get_platform_adapter, register_adapter
 
 MessageAdapter = PlatformAdapter

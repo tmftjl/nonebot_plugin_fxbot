@@ -1,7 +1,14 @@
 """适配器抽象层。"""
 
-from .bot import PlatformBot, bind_bot, platform_bot, selfBot
-from .interfaces import PlatformAdapter, PlatformError, UnsupportedCapability
+from .bot import (
+    PlatformAdapter,
+    PlatformBot,
+    PlatformError,
+    UnsupportedCapability,
+    bind_bot,
+    platform_bot,
+    selfBot,
+)
 from .message_utils import (
     MessageAdapter,
     build_message,

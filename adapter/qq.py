@@ -9,7 +9,7 @@ from typing import Any
 from nonebot.adapters import Bot
 from nonebot.adapters.qq import Bot as QQBot
 
-from .interfaces import PlatformAdapter
+from .bot import PlatformAdapter
 from .message_utils import _image_bytes
 
 

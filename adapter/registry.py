@@ -6,7 +6,7 @@ from typing import Any
 
 from nonebot.log import logger
 
-from .interfaces import PlatformAdapter, PlatformError
+from .bot import PlatformAdapter, PlatformError
 
 _adapters: list[PlatformAdapter] = []
 

@@ -2,16 +2,175 @@
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from contextvars import ContextVar
 from typing import Any
 
-from .registry import get_platform_adapter
+from nonebot.exception import IgnoredException
+from nonebot.log import logger
+
+
+class PlatformError(IgnoredException):
+    """平台调用失败。"""
+
+
+class UnsupportedCapability(PlatformError):
+    """当前平台不具备指定能力。"""
+
+
+class PlatformAdapter(ABC):
+    """所有平台适配器必须实现的能力边界。"""
+
+    @abstractmethod
+    def match(self, bot: Any) -> bool:
+        """判断当前适配器是否支持指定 Bot。"""
+
+    @abstractmethod
+    def build_segment(self, bot: Any, segment_type: str, data: Any = None) -> Any:
+        """构造平台消息段。"""
+
+    @abstractmethod
+    def build_message(self, bot: Any, segments: list[Any]) -> Any:
+        """构造平台消息对象。"""
+
+    def message_segment_class(self) -> type | None:
+        return None
+
+    @abstractmethod
+    async def send_message_to_target(self, bot: Any, target: dict[str, Any], message: Any) -> Any:
+        """向持久化目标发送消息。"""
+
+    async def send_group_message(self, bot: Any, group_id: str, message: Any) -> Any:
+        return await self.send_message_to_target(
+            bot, {"group_id": group_id, "group_openid": group_id}, message
+        )
+
+    async def send_private_message(self, bot: Any, user_id: str, message: Any) -> Any:
+        return await self.send_message_to_target(
+            bot, {"user_id": user_id, "user_openid": user_id}, message
+        )
+
+    async def send_text_to_target(self, bot: Any, target: dict[str, Any], text: str) -> Any:
+        message = self.build_message(bot, [self.build_segment(bot, "text", text)])
+        return await self.send_message_to_target(bot, target, message)
+
+    async def send_forward_messages(
+        self, bot: Any, event: Any, messages: list[Any], *, nickname: str = "FxBot"
+    ) -> bool:
+        return await self._unsupported("转发消息")
+
+    async def get_replied_message(self, bot: Any, message_id: int) -> Any:
+        result = await self.get_message(bot, message_id)
+        return result.get("message") if isinstance(result, dict) else None
+
+    def extract_image_sources(self, message: Any) -> list[str]:
+        return [
+            source
+            for segment in list(message or [])
+            if getattr(segment, "type", "") == "image"
+            and isinstance(
+                source := (getattr(segment, "data", {}) or {}).get("url")
+                or (getattr(segment, "data", {}) or {}).get("file"),
+                str,
+            )
+            and source
+            and not source.startswith("base64://")
+        ]
+
+    def extract_reply_message_id(self, message: Any) -> int | None:
+        for segment in list(message or []):
+            if getattr(segment, "type", "") != "reply":
+                continue
+            try:
+                return int((getattr(segment, "data", {}) or {}).get("id"))
+            except (TypeError, ValueError):
+                return None
+        return None
+
+    def is_mention_segment(self, segment: Any) -> bool:
+        return False
+
+    def mention_target(self, segment: Any) -> str | None:
+        return None
+
+    def mention_targets(self, message: Any, ignored_targets: set[str] | None = None) -> list[str]:
+        ignored = {str(target) for target in (ignored_targets or set())}
+        return [
+            target
+            for segment in list(message or [])
+            if (target := self.mention_target(segment)) and target not in ignored
+        ]
+
+    async def _unsupported(self, capability: str) -> Any:
+        logger.info(f"[adapter] 当前适配器不支持能力: {capability}")
+        raise UnsupportedCapability(capability)
+
+    async def delete_message(self, bot: Any, message_id: int) -> Any:
+        return await self._unsupported("撤回消息")
+
+    async def get_message(self, bot: Any, message_id: int) -> Any:
+        return await self._unsupported("获取消息")
+
+    async def get_group_info(self, bot: Any, group_id: str) -> Any:
+        return await self._unsupported("获取群信息")
+
+    async def get_group_member(self, bot: Any, group_id: str, user_id: str) -> Any:
+        return await self._unsupported("获取成员信息")
+
+    async def get_group_members(self, bot: Any, group_id: str) -> Any:
+        return await self._unsupported("获取群成员列表")
+
+    async def get_group_list(self, bot: Any) -> Any:
+        return await self._unsupported("获取群列表")
+
+    async def get_user(self, bot: Any, user_id: str) -> Any:
+        return await self._unsupported("获取用户信息")
+
+    def user_avatar(self, bot: Any, user_id: str) -> str | None:
+        return None
+
+    def group_avatar(self, bot: Any, group_id: str) -> str | None:
+        return None
+
+    async def ban(self, bot: Any, group_id: str, user_id: str, duration: int) -> Any:
+        return await self._unsupported("禁言")
+
+    async def kick(
+        self, bot: Any, group_id: str, user_id: str, reject_add_request: bool = False
+    ) -> Any:
+        return await self._unsupported("踢人")
+
+    async def whole_ban(self, bot: Any, group_id: str, enable: bool) -> Any:
+        return await self._unsupported("全体禁言")
+
+    async def set_admin(self, bot: Any, group_id: str, user_id: str, enable: bool) -> Any:
+        return await self._unsupported("管理员")
+
+    async def leave_group(self, bot: Any, group_id: str) -> Any:
+        return await self._unsupported("退群")
+
+    async def set_special_title(self, bot: Any, group_id: str, user_id: str, title: str) -> Any:
+        return await self._unsupported("群头衔")
+
+    async def set_essence(self, bot: Any, message_id: int, enable: bool) -> Any:
+        return await self._unsupported("精华消息")
+
+    async def like(self, bot: Any, user_id: str, times: int = 1) -> Any:
+        return await self._unsupported("点赞")
+
+    async def upload_file(self, bot: Any, **kwargs: Any) -> Any:
+        return await self._unsupported("文件上传")
+
+    async def send_event(self, bot: Any, event: Any, message: Any) -> Any:
+        return await bot.send(event, message)
 
 
 class PlatformBot:
     """面向业务层的统一 Bot 对象。"""
 
     def __init__(self, bot: Any):
+        from .registry import get_platform_adapter
+
         self.raw = bot
         self.adapter = get_platform_adapter(bot)
 
