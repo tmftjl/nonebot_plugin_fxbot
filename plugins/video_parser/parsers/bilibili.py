@@ -10,6 +10,8 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
+from nonebot import logger
+
 from ....utils.paths import data_dir
 from ..types import VideoResult
 from .base import ParseError
@@ -117,6 +119,24 @@ async def _parse_video(
     cover = page_info.get("first_frame") or info.get("pic")
 
     download_data = await video.get_download_url(page_index=page_index)
+    if not isinstance(download_data, dict):
+        raise ParseError(f"B 站下载接口返回格式异常：{type(download_data).__name__}")
+    if not download_data.get("dash") and not download_data.get("durl"):
+        response_code = download_data.get("code")
+        response_message = str(download_data.get("message") or "").strip()
+        logger.warning(
+            "[video_parser] B站下载接口未返回流 bvid={} avid={} page={} keys={} code={} message={}",
+            bvid,
+            avid,
+            page_num,
+            sorted(str(key) for key in download_data),
+            response_code,
+            response_message,
+        )
+        if response_code is not None or response_message:
+            detail = f"{response_code}: {response_message}".strip(": ")
+            raise ParseError(f"B 站下载接口拒绝请求：{detail}")
+        raise ParseError("B 站下载接口未返回 dash/durl 流")
     try:
         detector = VideoDownloadURLDataDetecter(download_data)
         video_url, audio_url = _select_download_urls(
@@ -125,7 +145,19 @@ async def _parse_video(
     except ParseError:
         raise
     except Exception as exc:
-        raise ParseError("B 站下载流解析失败") from exc
+        # 保留库的原始异常，便于区分接口错误响应、库版本不兼容和流为空。
+        logger.opt(exception=True).warning(
+            "[video_parser] B站下载流解析失败 bvid={} avid={} page={} error_type={} error={}",
+            bvid,
+            avid,
+            page_num,
+            type(exc).__name__,
+            str(exc),
+        )
+        detail = str(exc).strip()
+        if detail:
+            raise ParseError(f"B 站下载流解析失败：{type(exc).__name__}: {detail}") from exc
+        raise ParseError(f"B 站下载流解析失败：{type(exc).__name__}") from exc
 
     return VideoResult(
         platform="B站",
@@ -144,7 +176,15 @@ def _select_download_urls(
     detector: Any, video_stream_type: type[Any], audio_stream_type: type[Any]
 ) -> tuple[str, str | None]:
     """从 bilibili_api 解析结果中选择可下载流。"""
-    streams = detector.detect(no_dolby_video=True, no_hdr=True)
+    from bilibili_api.video import VideoCodecs
+
+    # 某些 bilibili-api-python 版本的默认 VideoCodecs.UNKNOWN.value
+    # 是不可迭代对象；显式传入已知编码可避免库内部 TypeError。
+    streams = detector.detect(
+        codecs=[VideoCodecs.AV1, VideoCodecs.AVC, VideoCodecs.HEV],
+        no_dolby_video=True,
+        no_hdr=True,
+    )
     video_streams = [
         stream
         for stream in streams
