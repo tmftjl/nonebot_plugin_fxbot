@@ -117,6 +117,18 @@ class PlatformAdapter(ABC):
     async def get_group_member(self, bot: Any, group_id: str, user_id: str) -> Any:
         return await self._unsupported("获取成员信息")
 
+    async def get_group_member_name(
+        self, bot: Any, group_id: str, user_id: str, event: Any = None
+    ) -> str:
+        """获取群成员昵称。"""
+        member = await self.get_group_member(bot, group_id, user_id)
+        if not isinstance(member, dict):
+            raise PlatformError("获取成员信息接口返回格式错误")
+        name = str(member.get("nickname") or "").strip()
+        if not name:
+            raise PlatformError("获取成员信息接口未返回 nickname")
+        return name
+
     async def get_group_member_role(self, bot: Any, group_id: str, user_id: str) -> str | None:
         member = await self.get_group_member(bot, group_id, user_id)
         return str(member.get("role") or member.get("member_role") or "") or None
@@ -252,6 +264,11 @@ class PlatformBot:
 
     async def get_group_member(self, group_id: str, user_id: str):
         return await self.adapter.get_group_member(self.raw, str(group_id), str(user_id))
+
+    async def get_group_member_name(self, group_id: str, user_id: str, event: Any = None) -> str:
+        return await self.adapter.get_group_member_name(
+            self.raw, str(group_id), str(user_id), event
+        )
 
     async def get_group_member_role(self, group_id: str, user_id: str):
         return await self.adapter.get_group_member_role(self.raw, str(group_id), str(user_id))

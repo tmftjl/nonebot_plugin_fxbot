@@ -103,6 +103,17 @@ class QQOfficialMessageAdapter(PlatformAdapter):
             return {"user_id": str(user_id), "role": state.member_role}
         raise UnsupportedCapability("获取群成员信息")
 
+    async def get_group_member_name(self, bot, group_id, user_id, event=None):
+        for segment in getattr(event, "get_message", lambda: ())():
+            data = getattr(segment, "data", {}) or {}
+            target_id = str(data.get("user_id") or data.get("id") or data.get("target") or "")
+            if target_id != str(user_id):
+                continue
+            name = str(data.get("username") or data.get("nickname") or "").strip()
+            if name:
+                return name
+        raise UnsupportedCapability("QQ 消息段未提供目标昵称")
+
     async def get_group_member_role(self, bot, group_id, user_id):
         state = await bot.get_group_bot_state(group_id=str(group_id))
         bot_openid = getattr(getattr(bot, "self_info", None), "id", None)

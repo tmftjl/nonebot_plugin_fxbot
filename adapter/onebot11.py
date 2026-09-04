@@ -101,6 +101,13 @@ class OneBotV11MessageAdapter(PlatformAdapter):
             bot, "get_group_member_info", group_id=int(group_id), user_id=int(user_id)
         )
 
+    async def get_group_member_name(self, bot, group_id, user_id, event=None):
+        member = await self.get_group_member(bot, group_id, user_id)
+        name = str(member.get("nickname") or "").strip()
+        if not name:
+            raise RuntimeError("OneBot get_group_member_info 未返回 nickname")
+        return name
+
     async def get_group_member_role(self, bot, group_id, user_id):
         member = await self.get_group_member(bot, group_id, user_id)
         return str(member.get("role") or "member")

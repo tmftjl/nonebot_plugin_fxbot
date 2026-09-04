@@ -33,33 +33,39 @@ P = Plugin(
 
 DATA_DIR = data_dir("group_admin") / "banned_words"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
-_compiled_cache: dict[int, list[tuple[re.Pattern[str], dict[str, Any]]]] = {}
-_config_cache: dict[int, dict[str, Any]] = {}
+_compiled_cache: dict[str, list[tuple[re.Pattern[str], dict[str, Any]]]] = {}
+_config_cache: dict[str, dict[str, Any]] = {}
 
 
-def _gid(event: Event) -> int | None:
+def _gid(event: Event) -> str | None:
     """提取群 ID。"""
-    value = getattr(event, "group_id", None)
+    value = next(
+        (
+            getattr(event, field, None)
+            for field in ("group_id", "group_openid")
+            if getattr(event, field, None)
+        ),
+        None,
+    )
     if value is None and hasattr(event, "get_group_id"):
         try:
             value = event.get_group_id()
         except Exception:
             value = None
-    try:
-        return int(value) if value is not None else None
-    except Exception:
-        return None
+    text = str(value or "").strip()
+    return text or None
 
 
-def _uid(event: Event) -> int | None:
+def _uid(event: Event) -> str | None:
     """提取用户 ID。"""
     if hasattr(event, "get_user_id"):
         try:
-            return int(event.get_user_id())
+            return str(event.get_user_id())
         except Exception:
             pass
     try:
-        return int(getattr(event, "user_id", None))
+        value = getattr(event, "user_id", None) or getattr(event, "user_openid", None)
+        return str(value) if value is not None else None
     except Exception:
         return None
 
