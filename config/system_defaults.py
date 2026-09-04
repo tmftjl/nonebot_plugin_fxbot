@@ -4,7 +4,7 @@ from __future__ import annotations
 
 SYSTEM_DEFAULTS = {
     "membership": {
-        "enabled": True,
+        "enabled": False,
         "free_bot_ids": [],
         "expire_notice_days": 7,
         "expire_prompt_text_prefixes": ["ww"],
@@ -25,9 +25,9 @@ SYSTEM_DEFAULTS = {
         "qq_group_requires_mention": True,
     },
     "chat": {
-        "enabled": True,
+        "enabled": False,
         "command_prefixes": ["#", "/", "."],
-        "group_requires_mention": True,
+        "group_requires_mention": False,
         "provider": "",
         "providers": {},
         "max_history": 20,
