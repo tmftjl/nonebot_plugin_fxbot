@@ -14,6 +14,7 @@ from nonebot.params import RegexGroup
 from PIL import Image
 
 from ...adapter import build_message, build_message_segment, selfBot
+from ...adapter.events import event_group_id, event_user_id
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
 from ...utils.http import get_shared_async_client
@@ -36,24 +37,12 @@ def _cfg_get(key: str) -> Any:
 
 def _uid(event: Event) -> str:
     """提取用户 ID。"""
-    if hasattr(event, "get_user_id"):
-        try:
-            return str(event.get_user_id())
-        except Exception:
-            pass
-    return str(getattr(event, "user_id", "") or "")
+    return event_user_id(event)
 
 
 def _gid(event: Event) -> str | None:
     """提取群 ID。"""
-    value = getattr(event, "group_id", None)
-    if value is None and hasattr(event, "get_group_id"):
-        try:
-            value = event.get_group_id()
-        except Exception:
-            value = None
-    text = str(value or "").strip()
-    return text or None
+    return event_group_id(event)
 
 
 def _extract_target_id(event: Event, fallback: str = "", self_id: str = "") -> str:
@@ -72,7 +61,7 @@ def _extract_target_id(event: Event, fallback: str = "", self_id: str = "") -> s
 async def _is_admin(bot: Bot, group_id: str, user_id: str) -> bool:
     """判断用户是否为群管理员。"""
     try:
-        info = await bot.get_group_member_info(group_id=int(group_id), user_id=int(user_id))
+        info = await selfBot.get_group_member(group_id, user_id)
         return str(info.get("role")) in {"owner", "admin"}
     except Exception:
         return False
@@ -114,15 +103,13 @@ async def _handle_box(
 async def _do_box(bot: Bot, *, target_id: str, group_id: str | None):
     """执行开盒信息查询并生成消息。"""
     try:
-        stranger_info = await bot.get_stranger_info(user_id=int(target_id), no_cache=True)
+        stranger_info = await selfBot.get_user(target_id)
     except Exception:
         return build_message(bot, build_message_segment(bot, "text", "无效 QQ 号"))
     member_info: dict[str, Any] = {}
     if group_id:
         try:
-            member_info = await bot.get_group_member_info(
-                user_id=int(target_id), group_id=int(group_id)
-            )
+            member_info = await selfBot.get_group_member(group_id, target_id)
         except Exception:
             member_info = {}
 
@@ -345,6 +332,6 @@ async def _handle_increase_box(bot: Bot, event: Event) -> None:
         return
     try:
         message = await _do_box(bot, target_id=user_id, group_id=group_id)
-        await bot.send(event, message)
+        await selfBot.send(event, message)
     except Exception:
         logger.opt(exception=True).debug("[box] 入群自动开盒失败")

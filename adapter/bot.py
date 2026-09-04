@@ -18,13 +18,56 @@ class PlatformBot:
     def __getattr__(self, name: str):
         if name in {"raw", "adapter"}:
             raise AttributeError(name)
-        return getattr(self.adapter, name)
+        return getattr(self.raw, name)
+
+    def build_segment(self, segment_type: str, data: Any = None) -> Any:
+        return self.adapter.build_segment(self.raw, segment_type, data)
+
+    def build_message(self, *segments: Any) -> Any:
+        return self.adapter.build_message(
+            self.raw, [segment for segment in segments if segment is not None]
+        )
+
+    def message_segment_class(self) -> type | None:
+        return self.adapter.message_segment_class()
+
+    def is_mention_segment(self, segment: Any) -> bool:
+        return self.adapter.is_mention_segment(segment)
+
+    def mention_target(self, segment: Any) -> str | None:
+        return self.adapter.mention_target(segment)
 
     async def send_group_message(self, group_id: str, message: Any):
         return await self.adapter.send_group_message(self.raw, str(group_id), message)
 
     async def send_private_message(self, user_id: str, message: Any):
         return await self.adapter.send_private_message(self.raw, str(user_id), message)
+
+    async def send(self, event: Any, message: Any):
+        """按当前事件上下文发送消息。"""
+        return await self.adapter.send_event(self.raw, event, message)
+
+    async def send_message_to_target(self, target: dict[str, Any], message: Any):
+        return await self.adapter.send_message_to_target(self.raw, target, message)
+
+    async def send_text_to_target(self, target: dict[str, Any], text: str):
+        return await self.adapter.send_text_to_target(self.raw, target, text)
+
+    async def send_forward_messages(
+        self, event: Any, messages: list[Any], *, nickname: str = "FxBot"
+    ) -> bool:
+        return await self.adapter.send_forward_messages(
+            self.raw, event, messages, nickname=nickname
+        )
+
+    async def get_replied_message(self, message_id: int) -> Any:
+        return await self.adapter.get_replied_message(self.raw, message_id)
+
+    def extract_image_sources(self, message: Any) -> list[str]:
+        return self.adapter.extract_image_sources(message)
+
+    def extract_reply_message_id(self, message: Any) -> int | None:
+        return self.adapter.extract_reply_message_id(message)
 
     async def delete_message(self, message_id: int):
         return await self.adapter.delete_message(self.raw, message_id)
@@ -105,15 +148,7 @@ def current_bot() -> PlatformBot:
     client = _current.get()
     if client is not None:
         return client
-    try:
-        from nonebot import get_bots
-
-        bots = list(get_bots().values())
-    except Exception:
-        bots = []
-    if len(bots) == 1:
-        return PlatformBot(bots[0])
-    raise RuntimeError("当前上下文无法唯一确定 Bot")
+    raise RuntimeError("当前事件未绑定 Bot；请仅在事件处理上下文中使用 selfBot")
 
 
 class _SelfBot:

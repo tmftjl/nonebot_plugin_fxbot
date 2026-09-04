@@ -15,7 +15,6 @@ from .fortune import (
 )
 from .musicshare import (
     MusicLoginRequired,
-    Platform,
     _get_song_url_with_pool,
     _login_hint,
     _search_songs_with_pool,

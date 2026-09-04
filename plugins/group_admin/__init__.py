@@ -607,9 +607,7 @@ async def _handle_unmute_all(matcher: Matcher, bot: Bot, event: Event) -> None:
     fail = 0
     for member in members:
         try:
-            await bot.set_group_ban(
-                group_id=int(group_id), user_id=int(member["user_id"]), duration=0
-            )
+            await selfBot.ban(group_id, str(member["user_id"]), 0)
             success += 1
         except Exception:
             fail += 1

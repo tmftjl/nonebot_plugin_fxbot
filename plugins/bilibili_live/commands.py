@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import re
 
-from nonebot.adapters import Bot, Event
+from nonebot.adapters import Event
+from ...adapter import selfBot
 from nonebot.matcher import Matcher
 
-from ...adapter import build_message, build_message_segment, extract_message_target
+from ...adapter import extract_message_target
 from ...adapter.events import event_group_id, event_user_id
 from ...permission import PermLevel, PermScene
 from . import P
@@ -218,14 +219,14 @@ async def _handle_subscription_list(matcher: Matcher, event: Event) -> None:
 
 
 @room_query.handle()
-async def _handle_room_query(matcher: Matcher, bot: Bot, event: Event) -> None:
+async def _handle_room_query(matcher: Matcher, event: Event) -> None:
     """查询直播间当前状态。"""
     try:
         room = await _fetch_argument_room(event, r"[Bb]站直播查询")
     except BilibiliLiveError as exc:
         await matcher.finish(str(exc))
 
-    segments = [build_message_segment(bot, "text", _room_status(room))]
+    segments = [selfBot.build_segment("text", _room_status(room))]
     if room.cover:
-        segments.append(build_message_segment(bot, "image", room.cover))
-    await matcher.finish(build_message(bot, *segments))
+        segments.append(selfBot.build_segment("image", room.cover))
+    await matcher.finish(selfBot.build_message(*segments))

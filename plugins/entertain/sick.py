@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from nonebot.adapters import Bot, Event
+from nonebot.adapters import Event
 from nonebot.matcher import Matcher
 
-from ...adapter import build_message, build_message_segment
+from ...adapter import selfBot
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
 from ...utils.http import get_shared_async_client
@@ -31,7 +31,7 @@ sick_cmd = P.on_regex(
 
 
 @sick_cmd.handle()
-async def _handle_sick(matcher: Matcher, bot: Bot, event: Event) -> None:
+async def _handle_sick(matcher: Matcher, event: Event) -> None:
     """获取发病语录。"""
     url = str(cfg_api_urls()["sick_quote_api"]).strip()
     if not url:
@@ -49,9 +49,8 @@ async def _handle_sick(matcher: Matcher, bot: Bot, event: Event) -> None:
         event.get_user_id() if hasattr(event, "get_user_id") else getattr(event, "user_id", None)
     )
     await matcher.finish(
-        build_message(
-            bot,
-            build_message_segment(bot, "at", user_id) if user_id else None,
-            build_message_segment(bot, "text", f"\n{text}" if user_id else text),
+        selfBot.build_message(
+            selfBot.build_segment("at", user_id) if user_id else None,
+            selfBot.build_segment("text", f"\n{text}" if user_id else text),
         )
     )

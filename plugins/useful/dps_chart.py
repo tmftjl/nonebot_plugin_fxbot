@@ -4,13 +4,12 @@ from __future__ import annotations
 
 from io import BytesIO
 
-from nonebot.adapters import Bot, Event
+from nonebot.adapters import Event
+from ...adapter import selfBot
 from nonebot.matcher import Matcher
 from PIL import Image
 
 from ...adapter import (
-    build_message,
-    build_message_segment,
     fetch_image_bytes,
     image_sources_from_event_or_reply,
 )
@@ -61,19 +60,19 @@ def _is_valid_image(image_bytes: bytes) -> bool:
 
 
 @wwdps_cmd.handle()
-async def _handle_wwdps(matcher: Matcher, bot: Bot) -> None:
+async def _handle_wwdps(matcher: Matcher) -> None:
     """发送当前鸣潮 DPS 榜图片。"""
     if not DPS_IMAGE_PATH.is_file():
         await matcher.finish("DPS榜图片尚未设置，请发送图片并使用 ww更新dps 更新。")
     await matcher.finish(
-        build_message(bot, build_message_segment(bot, "image", DPS_IMAGE_PATH.read_bytes()))
+        selfBot.build_message(selfBot.build_segment("image", DPS_IMAGE_PATH.read_bytes()))
     )
 
 
 @update_wwdps_cmd.handle()
-async def _handle_update_wwdps(matcher: Matcher, bot: Bot, event: Event) -> None:
+async def _handle_update_wwdps(matcher: Matcher, event: Event) -> None:
     """更新鸣潮 DPS 榜图片。"""
-    sources = await image_sources_from_event_or_reply(bot, event)
+    sources = await image_sources_from_event_or_reply(selfBot.raw, event)
     if not sources:
         await matcher.finish("未找到图片，请发送带图消息或回复/引用带图消息后使用 ww更新dps")
 

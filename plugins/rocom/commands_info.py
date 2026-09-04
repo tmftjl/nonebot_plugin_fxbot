@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from nonebot.adapters import Bot
+from ...adapter import selfBot
 from nonebot.matcher import Matcher
 from nonebot.params import RegexGroup
 
-from ...adapter import build_message, build_message_segment
+from ...adapter import selfBot
 from ...permission import PermLevel, PermScene
 from . import P
 from .data import (
@@ -98,7 +98,7 @@ resource_download = P.on_regex(
 
 
 @pokedex_query.handle()
-async def _handle_pokedex(matcher: Matcher, bot: Bot, groups: tuple = RegexGroup()) -> None:
+async def _handle_pokedex(matcher: Matcher, groups: tuple = RegexGroup()) -> None:
     """查询精灵图鉴。"""
     name = str(groups[0]).strip()
     result = find_pet(name)
@@ -106,7 +106,7 @@ async def _handle_pokedex(matcher: Matcher, bot: Bot, groups: tuple = RegexGroup
         await matcher.finish(f"未找到精灵：{name}")
     pet_id, pet = result
     image = await render_pokedex_image(pet, pet_id)
-    await matcher.finish(build_message(bot, build_message_segment(bot, "image", image)))
+    await matcher.finish(selfBot.build_message(selfBot.build_segment("image", image)))
 
 
 @skill_query.handle()
@@ -185,12 +185,12 @@ async def _handle_pet_search(matcher: Matcher, groups: tuple = RegexGroup()) -> 
 
 
 @attribute_effectiveness.handle()
-async def _handle_attribute_effectiveness(matcher: Matcher, bot: Bot) -> None:
+async def _handle_attribute_effectiveness(matcher: Matcher) -> None:
     """发送属性克制表。"""
     if not ATTRIBUTE_EFFECTIVENESS_IMAGE.exists():
         await matcher.finish("属性克制表资源不存在，请检查插件资源文件")
     image = ATTRIBUTE_EFFECTIVENESS_IMAGE.read_bytes()
-    await matcher.finish(build_message(bot, build_message_segment(bot, "image", image)))
+    await matcher.finish(selfBot.build_message(selfBot.build_segment("image", image)))
 
 
 @resource_download.handle()

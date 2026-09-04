@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import json
-from typing import Any
 
 import httpx
-from nonebot.adapters import Bot, Event
+from nonebot.adapters import Event
+from ...adapter import selfBot
 from nonebot.exception import MatcherException
 from nonebot.matcher import Matcher
 from nonebot.params import RegexGroup
@@ -14,7 +14,6 @@ from nonebot.permission import SUPERUSER
 from nonebot.rule import Rule
 from nonebot.typing import T_State
 
-from ...adapter import build_message, build_message_segment
 from ...adapter.events import event_group_id
 from ...permission import PermLevel, PermScene
 from . import P
@@ -129,7 +128,7 @@ bili_login_cmd = P.on_regex(
 
 
 @video_matcher.handle()
-async def _handle_video(matcher: Matcher, bot: Bot, event: Event, state: T_State) -> None:
+async def _handle_video(matcher: Matcher, event: Event, state: T_State) -> None:
     """处理视频解析。"""
     url = str(state.get(STATE_URL_KEY) or "")
     if not can_parse_url(url):
@@ -141,10 +140,10 @@ async def _handle_video(matcher: Matcher, bot: Bot, event: Event, state: T_State
         result = await parse_url(url)
         if result.video_url:
             video_path = await download_video(result, directory=download_dir)
-            await send_video_result(matcher, bot, event, result, video_path)
+            await send_video_result(matcher, event, result, video_path)
         elif result.image_urls:
             image_paths = await download_images(result, directory=download_dir)
-            await send_image_result(matcher, bot, event, result, image_paths)
+            await send_image_result(matcher, event, result, image_paths)
         else:
             raise ParseError("解析结果没有可发送的媒体")
     except (ParseError, DownloadError) as exc:
@@ -181,7 +180,7 @@ async def _handle_global_toggle(matcher: Matcher, groups: tuple = RegexGroup()) 
 
 
 @bili_login_cmd.handle()
-async def _handle_bili_login(matcher: Matcher, bot: Bot) -> None:
+async def _handle_bili_login(matcher: Matcher) -> None:
     """处理 B 站扫码登录。"""
     from .parsers.bilibili import create_qrcode, poll_qrcode
 
@@ -190,10 +189,9 @@ async def _handle_bili_login(matcher: Matcher, bot: Bot) -> None:
     except ParseError as exc:
         await matcher.finish(str(exc))
     await matcher.send(
-        build_message(
-            bot,
-            build_message_segment(bot, "text", "请使用哔哩哔哩客户端扫码登录\n"),
-            build_message_segment(bot, "image", image),
+        selfBot.build_message(
+            selfBot.build_segment("text", "请使用哔哩哔哩客户端扫码登录\n"),
+            selfBot.build_segment("image", image),
         )
     )
     message = await poll_qrcode(matcher.send)

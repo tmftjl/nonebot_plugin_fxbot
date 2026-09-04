@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from nonebot.adapters import Bot
+from nonebot.adapters.onebot.v11 import Bot as OneBotV11Bot
 
 from .events import event_is_group, event_is_private
 from .interfaces import PlatformAdapter
@@ -16,7 +17,7 @@ class OneBotV11MessageAdapter(PlatformAdapter):
     """OneBot V11 消息适配器。"""
 
     def match(self, bot: Bot) -> bool:
-        return "onebot" in type(getattr(bot, "adapter", bot)).__module__.lower()
+        return isinstance(bot, OneBotV11Bot)
 
     def is_mention_segment(self, segment):
         return getattr(segment, "type", "") == "at"
@@ -40,10 +41,8 @@ class OneBotV11MessageAdapter(PlatformAdapter):
     @staticmethod
     def message_segment_class():
         """获取 OneBot V11 MessageSegment 类。"""
-        try:
-            from nonebot.adapters.onebot.v11 import MessageSegment
-        except Exception:
-            return None
+        from nonebot.adapters.onebot.v11 import MessageSegment
+
         return MessageSegment
 
     def build_segment(self, bot: Bot, seg_type: str, data: Any = None) -> Any:
@@ -72,20 +71,18 @@ class OneBotV11MessageAdapter(PlatformAdapter):
 
     async def send_message_to_target(self, bot: Bot, target: dict[str, Any], message: Any) -> Any:
         if target.get("group_id") is not None:
-            group_id = int(target["group_id"])
-            if hasattr(bot, "send_group_msg"):
-                return await bot.send_group_msg(group_id=group_id, message=message)
-            return await bot.call_api("send_group_msg", group_id=group_id, message=message)
+            return await self._api(
+                bot, "send_group_msg", group_id=int(target["group_id"]), message=message
+            )
         if target.get("user_id") is not None:
-            user_id = int(target["user_id"])
-            if hasattr(bot, "send_private_msg"):
-                return await bot.send_private_msg(user_id=user_id, message=message)
-            return await bot.call_api("send_private_msg", user_id=user_id, message=message)
+            return await self._api(
+                bot, "send_private_msg", user_id=int(target["user_id"]), message=message
+            )
         raise RuntimeError("无法识别消息目标")
 
     async def _api(self, bot: Bot, name: str, **kwargs: Any) -> Any:
         method = getattr(bot, name, None)
-        if method is not None:
+        if callable(method):
             return await method(**kwargs)
         return await bot.call_api(name, **kwargs)
 
@@ -180,28 +177,15 @@ class OneBotV11MessageAdapter(PlatformAdapter):
             for message in messages
         ]
 
-        try:
-            group_id = getattr(event, "group_id", None)
-            if event_is_group(event) and group_id is not None:
-                if hasattr(bot, "send_group_forward_msg"):
-                    await bot.send_group_forward_msg(group_id=int(group_id), messages=nodes)
-                else:
-                    await bot.call_api(
-                        "send_group_forward_msg", group_id=int(group_id), messages=nodes
-                    )
-                return True
+        group_id = getattr(event, "group_id", None)
+        if event_is_group(event) and group_id is not None:
+            await self._api(bot, "send_group_forward_msg", group_id=int(group_id), messages=nodes)
+            return True
 
-            user_id_value = getattr(event, "user_id", None)
-            if event_is_private(event) and user_id_value is not None:
-                if hasattr(bot, "send_private_forward_msg"):
-                    await bot.send_private_forward_msg(user_id=int(user_id_value), messages=nodes)
-                else:
-                    await bot.call_api(
-                        "send_private_forward_msg",
-                        user_id=int(user_id_value),
-                        messages=nodes,
-                    )
-                return True
-        except Exception:
-            return False
+        user_id_value = getattr(event, "user_id", None)
+        if event_is_private(event) and user_id_value is not None:
+            await self._api(
+                bot, "send_private_forward_msg", user_id=int(user_id_value), messages=nodes
+            )
+            return True
         return False

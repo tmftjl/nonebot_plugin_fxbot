@@ -14,7 +14,7 @@ from nonebot import on_notice
 from nonebot.adapters import Bot, Event
 from nonebot.matcher import Matcher
 
-from ...adapter import build_message, build_message_segment
+from ...adapter import build_message, build_message_segment, selfBot
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
 from ...utils.http import get_shared_async_client
@@ -351,7 +351,7 @@ async def _handle_group_increase(bot: Bot, event: Event) -> None:
     content = str(record.get("content", ""))
     if not content:
         return
-    await bot.send(
+    await selfBot.send(
         event,
         build_message(
             bot,

@@ -11,6 +11,7 @@ from nonebot.adapters import Bot, Event
 from nonebot.exception import IgnoredException
 from nonebot.message import event_preprocessor
 
+from ..adapter import selfBot
 from ..config import get_manager as get_config_manager
 from ..permission.message_policy import should_process_fxbot_message
 from .guard import membership_guard
@@ -172,7 +173,7 @@ async def _maybe_send_expiring_prompt(
     if days < 0 or days > threshold:
         return
     try:
-        await bot.send(event, _expiring_prompt(days, expires_at))
+        await selfBot.send(event, _expiring_prompt(days, expires_at))
         _mark_event_prompted(event)
     except Exception:
         pass

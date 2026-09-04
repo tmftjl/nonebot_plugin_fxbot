@@ -5,12 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from nonebot.adapters import Bot
 from nonebot.matcher import Matcher
 from nonebot.params import RegexGroup
 from PIL import Image, ImageDraw
 
-from ...adapter import build_message, build_message_segment
+from ...adapter import selfBot
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
 from ...utils.fonts import get_shared_font_path, load_font
@@ -75,7 +74,7 @@ def _fallback_image(title: str, sub_title: str, groups_data: list[dict[str, Any]
 
 
 @help_cmd.handle()
-async def _handle_help(matcher: Matcher, bot: Bot, groups: tuple = RegexGroup()) -> None:
+async def _handle_help(matcher: Matcher, groups: tuple = RegexGroup()) -> None:
     """发送旧版排版帮助图。"""
     keyword = str(groups[0]).strip() if groups and groups[0] else None
     resolved_ref = _resolve_config_ref(keyword)
@@ -127,4 +126,4 @@ async def _handle_help(matcher: Matcher, bot: Bot, groups: tuple = RegexGroup())
     if not image_bytes:
         image_bytes = _fallback_image(title, sub_title, groups_data)
 
-    await matcher.finish(build_message(bot, build_message_segment(bot, "image", image_bytes)))
+    await matcher.finish(selfBot.build_message(selfBot.build_segment("image", image_bytes)))

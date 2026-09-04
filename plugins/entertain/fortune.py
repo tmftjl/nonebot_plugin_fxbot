@@ -12,11 +12,11 @@ from pathlib import Path
 from typing import Any
 
 from nonebot import get_driver
-from nonebot.adapters import Bot, Event
+from nonebot.adapters import Event
 from nonebot.matcher import Matcher
 from PIL import Image, ImageDraw, ImageOps
 
-from ...adapter import build_message, build_message_segment
+from ...adapter import selfBot
 from ...adapter.events import event_user_name
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
@@ -270,7 +270,7 @@ fortune_cmd = P.on_regex(
 
 
 @fortune_cmd.handle()
-async def _handle_fortune(matcher: Matcher, bot: Bot, event: Event) -> None:
+async def _handle_fortune(matcher: Matcher, event: Event) -> None:
     """发送今日运势图片。"""
     user_id = _uid(event)
     if not user_id:
@@ -281,4 +281,4 @@ async def _handle_fortune(matcher: Matcher, bot: Bot, event: Event) -> None:
         await matcher.finish(f"生成失败：{exc}")
     background = await _get_background_image()
     image = _generate_fortune_canvas(_nickname(event, user_id), data, background=background)
-    await matcher.finish(build_message(bot, build_message_segment(bot, "image", image)))
+    await matcher.finish(selfBot.build_message(selfBot.build_segment("image", image)))

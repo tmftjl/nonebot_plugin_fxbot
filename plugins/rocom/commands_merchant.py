@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from nonebot.adapters import Bot, Event
+from nonebot.adapters import Event
+from ...adapter import selfBot
 from nonebot.matcher import Matcher
 
-from ...adapter import build_message, build_message_segment, extract_message_target
+from ...adapter import extract_message_target, selfBot
 from ...adapter.events import event_group_id, event_user_id
 from ...permission import PermLevel, PermScene
 from . import P
@@ -68,18 +69,18 @@ def _event_context(event: Event) -> tuple[str, str]:
 
 
 @merchant_query.handle()
-async def _handle_query(matcher: Matcher, bot: Bot) -> None:
+async def _handle_query(matcher: Matcher) -> None:
     """查询当前远行商人信息。"""
     try:
         snapshot = await fetch_merchant_snapshot()
         image = await render_merchant_image(snapshot)
     except Exception as exc:
         await matcher.finish(f"远行商人信息获取失败：{exc}")
-    await matcher.finish(build_message(bot, build_message_segment(bot, "image", image)))
+    await matcher.finish(selfBot.build_message(selfBot.build_segment("image", image)))
 
 
 @merchant_subscribe.handle()
-async def _handle_subscribe(matcher: Matcher, bot: Bot, event: Event) -> None:  # noqa: ARG001
+async def _handle_subscribe(matcher: Matcher, event: Event) -> None:  # noqa: ARG001
     """订阅远行商人推送（群聊或私聊）。"""
     sub_type, sub_key = _event_context(event)
     if not sub_key:

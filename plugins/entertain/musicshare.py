@@ -21,7 +21,7 @@ from nonebot.rule import Rule
 from nonebot.typing import T_State
 from PIL import Image, ImageDraw
 
-from ...adapter import build_message, build_message_segment
+from ...adapter import build_message, build_message_segment, selfBot
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
 from ...utils.fonts import (
@@ -503,7 +503,7 @@ def _decode_data_image(image: str) -> bytes:
 
 async def _send_login_text(bot: Bot, event: Event, text: str) -> None:
     """发送登录状态文本。"""
-    await bot.send(event, build_message(bot, build_message_segment(bot, "text", text)))
+    await selfBot.send(event, build_message(bot, build_message_segment(bot, "text", text)))
 
 
 async def _music_api_get(

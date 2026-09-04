@@ -5,10 +5,10 @@ from __future__ import annotations
 import base64
 from pathlib import Path
 
-from nonebot.adapters import Bot, Event
+from nonebot.adapters import Event
 from nonebot.matcher import Matcher
 
-from ...adapter import build_message, build_message_segment, send_forward_messages
+from ...adapter import selfBot
 from .config import cfg_general
 from .types import VideoResult
 
@@ -22,37 +22,36 @@ def _summary(result: VideoResult) -> str:
 
 
 async def send_video_result(
-    matcher: Matcher, bot: Bot, event: Event, result: VideoResult, video_path: Path
+    matcher: Matcher, event: Event, result: VideoResult, video_path: Path
 ) -> None:
     """发送标题、封面和视频。"""
-    text_seg = build_message_segment(bot, "text", _summary(result) + "\n")
-    image_seg = build_message_segment(bot, "image", result.cover_url) if result.cover_url else None
-    video_seg = build_message_segment(bot, "video", _video_payload(video_path))
+    text_seg = selfBot.build_segment("text", _summary(result) + "\n")
+    image_seg = selfBot.build_segment("image", result.cover_url) if result.cover_url else None
+    video_seg = selfBot.build_segment("video", _video_payload(video_path))
 
-    forward_messages = [build_message(bot, text_seg)]
+    forward_messages = [selfBot.build_message(text_seg)]
     if image_seg is not None:
-        forward_messages.append(build_message(bot, image_seg))
-    forward_messages.append(build_message(bot, video_seg))
+        forward_messages.append(selfBot.build_message(image_seg))
+    forward_messages.append(selfBot.build_message(video_seg))
 
-    if not await send_forward_messages(bot, event, forward_messages):
+    if not await selfBot.send_forward_messages(event, forward_messages):
         await matcher.finish("当前适配器不支持发送转发消息")
 
 
 async def send_image_result(
     matcher: Matcher,
-    bot: Bot,
     event: Event,
     result: VideoResult,
     image_paths: list[Path],
 ) -> None:
     """发送标题和图片。"""
-    text_seg = build_message_segment(bot, "text", _summary(result) + "\n")
-    image_segments = [build_message_segment(bot, "image", image_path) for image_path in image_paths]
+    text_seg = selfBot.build_segment("text", _summary(result) + "\n")
+    image_segments = [selfBot.build_segment("image", image_path) for image_path in image_paths]
 
-    forward_messages = [build_message(bot, text_seg)]
-    forward_messages.extend(build_message(bot, image_seg) for image_seg in image_segments)
+    forward_messages = [selfBot.build_message(text_seg)]
+    forward_messages.extend(selfBot.build_message(image_seg) for image_seg in image_segments)
 
-    if not await send_forward_messages(bot, event, forward_messages):
+    if not await selfBot.send_forward_messages(event, forward_messages):
         await matcher.finish("当前适配器不支持发送转发消息")
 
 

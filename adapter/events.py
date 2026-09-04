@@ -12,7 +12,8 @@ def event_message_type(event: Event) -> str:
 
 
 def event_user_id(event: Event) -> str:
-    value = event.get_user_id() if hasattr(event, "get_user_id") else None
+    get_user_id = getattr(event, "get_user_id", None)
+    value = get_user_id() if callable(get_user_id) else None
     if value is not None:
         return str(value)
     for attr in ("user_id", "user_openid", "author"):
@@ -49,9 +50,8 @@ def event_is_private(event: Event) -> bool:
 
 
 def event_is_tome(event: Event) -> bool:
-    return (
-        bool(event.is_tome()) if hasattr(event, "is_tome") else bool(getattr(event, "to_me", False))
-    )
+    is_tome = getattr(event, "is_tome", None)
+    return bool(is_tome()) if callable(is_tome) else bool(getattr(event, "to_me", False))
 
 
 def event_group_id(event: Event) -> str | None:
@@ -74,9 +74,10 @@ def event_user_name(event: Event, user_id: str = "") -> str:
 
 
 def extract_message_target(event: Any) -> dict[str, Any]:
+    get_session_id = getattr(event, "get_session_id", None)
     target = {
         "user_id": getattr(event, "user_id", None),
-        "session_id": event.get_session_id() if hasattr(event, "get_session_id") else None,
+        "session_id": get_session_id() if callable(get_session_id) else None,
     }
     author = getattr(event, "author", None)
     user_openid = getattr(event, "user_openid", None) or getattr(author, "user_openid", None)

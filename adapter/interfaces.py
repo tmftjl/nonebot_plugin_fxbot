@@ -5,8 +5,11 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
+from nonebot.exception import IgnoredException
+from nonebot.log import logger
 
-class PlatformError(RuntimeError):
+
+class PlatformError(IgnoredException):
     """平台调用失败。"""
 
 
@@ -29,6 +32,10 @@ class PlatformAdapter(ABC):
     @abstractmethod
     def build_message(self, bot: Any, segments: list[Any]) -> Any:
         """构造平台消息对象。"""
+
+    def message_segment_class(self) -> type | None:
+        """返回平台消息段类型（供平台扩展使用）。"""
+        return None
 
     @abstractmethod
     async def send_message_to_target(self, bot: Any, target: dict[str, Any], message: Any) -> Any:
@@ -59,7 +66,7 @@ class PlatformAdapter(ABC):
         nickname: str = "FxBot",
     ) -> bool:
         """发送转发消息。"""
-        return False
+        return await self._unsupported("转发消息")
 
     # 消息解析
     async def get_replied_message(self, bot: Any, message_id: int) -> Any:
@@ -109,6 +116,7 @@ class PlatformAdapter(ABC):
 
     # 平台查询与消息管理
     async def _unsupported(self, capability: str) -> Any:
+        logger.info(f"[adapter] 当前适配器不支持能力: {capability}")
         raise UnsupportedCapability(capability)
 
     async def delete_message(self, bot: Any, message_id: int) -> Any:

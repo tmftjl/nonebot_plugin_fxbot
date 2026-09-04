@@ -7,17 +7,17 @@ from pathlib import Path
 from re import Match, Pattern
 from typing import Any
 
-from nonebot.adapters import Bot, Event
-
-from .bot import current_bot
-from .events import event_message_type, extract_message_target
+from .events import extract_message_target
 from .interfaces import PlatformAdapter
 from .registry import adapter_name, get_platform_adapter, register_adapter
 
 MessageAdapter = PlatformAdapter
 register_message_adapter = register_adapter
-get_message_adapter = lambda bot: get_platform_adapter(bot)
 require_message_adapter = get_platform_adapter
+
+
+def get_message_adapter(bot: Any) -> MessageAdapter:
+    return get_platform_adapter(bot)
 
 
 async def fetch_image_bytes(src: str | bytes) -> bytes | None:
@@ -46,7 +46,7 @@ async def fetch_image_bytes(src: str | bytes) -> bytes | None:
         return None
 
 
-async def image_sources_from_event_or_reply(bot: Bot, event: Event) -> list[str | bytes]:
+async def image_sources_from_event_or_reply(bot: Any, event: Any) -> list[str | bytes]:
     message = event_message(event)
     sources = extract_raw_image_sources(message)
     if sources:
@@ -65,34 +65,22 @@ async def image_sources_from_event_or_reply(bot: Bot, event: Event) -> list[str 
     return extract_raw_image_sources(replied)
 
 
-def get_onebot_v11_message_segment_class():
-    """获取 OneBot V11 MessageSegment 类。"""
-    from .onebot11 import OneBotV11MessageAdapter
-
-    return OneBotV11MessageAdapter.message_segment_class()
-
-
-def build_message_segment(bot: Bot, seg_type: str, data: Any = None) -> Any:
+def build_message_segment(bot: Any, seg_type: str, data: Any = None) -> Any:
     """根据适配器构造消息段。"""
     return require_message_adapter(bot).build_segment(bot, seg_type, data)
 
 
-def build_message(bot: Bot, *segments: Any) -> Any:
+def build_message(bot: Any, *segments: Any) -> Any:
     """根据适配器构造消息对象。"""
     filtered = [segment for segment in segments if segment is not None]
-    adapter = get_message_adapter(bot)
-    if adapter:
-        return adapter.build_message(bot, filtered)
-    return "".join(str(segment) for segment in filtered)
+    return get_message_adapter(bot).build_message(bot, filtered)
 
 
 def event_message(event: Any) -> Any:
     """提取事件消息对象。"""
-    if hasattr(event, "get_message"):
-        try:
-            return event.get_message()
-        except Exception:
-            pass
+    get_message = getattr(event, "get_message", None)
+    if callable(get_message):
+        return get_message()
     return getattr(event, "message", None)
 
 
@@ -100,9 +88,11 @@ def iter_message_segments(message: Any) -> list[Any]:
     """遍历消息段。"""
     if message is None:
         return []
+    if isinstance(message, (str, bytes)):
+        return [message]
     try:
         return list(message)
-    except Exception:
+    except TypeError:
         return []
 
 
@@ -280,14 +270,14 @@ def extract_first_text_match(
 
 def extract_image_sources(message: Any) -> list[str]:
     """从消息对象中提取图片来源。"""
-    if isinstance(message, str) and is_onebot_v11_string_available():
-        from nonebot.adapters.onebot.v11 import Message
-
-        try:
-            message = Message(message)
-        except Exception:
-            pass
-    return _generic_adapter().extract_image_sources(message)
+    sources: list[str] = []
+    for segment in iter_message_segments(message):
+        if segment_type(segment) != "image":
+            continue
+        source = segment_data(segment).get("url") or segment_data(segment).get("file")
+        if isinstance(source, str) and source and not source.startswith("base64://"):
+            sources.append(source)
+    return sources
 
 
 def extract_raw_image_sources(message: Any) -> list[str | bytes]:
@@ -311,39 +301,38 @@ def extract_raw_image_sources(message: Any) -> list[str | bytes]:
 
 def extract_reply_message_id(message: Any) -> int | None:
     """从消息对象中提取回复消息 ID。"""
-    if isinstance(message, str) and is_onebot_v11_string_available():
-        from nonebot.adapters.onebot.v11 import Message
-
+    for segment in iter_message_segments(message):
+        if segment_type(segment) != "reply":
+            continue
         try:
-            message = Message(message)
-        except Exception:
-            pass
-    return _generic_adapter().extract_reply_message_id(message)
+            return int(segment_data(segment).get("id"))
+        except (TypeError, ValueError):
+            return None
+    return None
 
 
-async def get_replied_message(bot: Bot, message_id: int) -> Any:
+async def get_replied_message(bot: Any, message_id: int) -> Any:
     """通过适配器 API 获取被回复消息。"""
-    adapter = get_message_adapter(bot) or _generic_adapter()
-    return await adapter.get_replied_message(bot, message_id)
+    return await get_message_adapter(bot).get_replied_message(bot, message_id)
 
 
-async def send_ark_message(bot: Bot, event: Any, ark_data: dict[str, Any]) -> Any:
+async def send_ark_message(bot: Any, event: Any, ark_data: dict[str, Any]) -> Any:
     """发送 QQ ARK 消息。"""
-    return await bot.send(event, message={"type": "ark", "data": ark_data})
+    return await get_message_adapter(bot).send_event(bot, event, {"type": "ark", "data": ark_data})
 
 
-async def send_text_to_target(bot: Bot, target: dict[str, Any], text: str) -> Any:
+async def send_text_to_target(bot: Any, target: dict[str, Any], text: str) -> Any:
     """根据保存的目标信息发送文本消息。"""
     return await require_message_adapter(bot).send_text_to_target(bot, target, text)
 
 
-async def send_message_to_target(bot: Bot, target: dict[str, Any], message: Any) -> Any:
+async def send_message_to_target(bot: Any, target: dict[str, Any], message: Any) -> Any:
     """根据保存的目标信息发送消息。"""
     return await require_message_adapter(bot).send_message_to_target(bot, target, message)
 
 
 async def send_forward_messages(
-    bot: Bot, event: Event, messages: list[Any], *, nickname: str = "FxBot"
+    bot: Any, event: Any, messages: list[Any], *, nickname: str = "FxBot"
 ) -> bool:
     """通过当前适配器发送一组转发消息。"""
     adapter = get_message_adapter(bot)
@@ -353,7 +342,7 @@ async def send_forward_messages(
 
 
 async def send_forward_texts(
-    bot: Bot, event: Event, texts: list[str], *, nickname: str = "FxBot"
+    bot: Any, event: Any, texts: list[str], *, nickname: str = "FxBot"
 ) -> bool:
     """尝试把多段文本作为 OneBot V11 合并转发发送。"""
     messages = [build_message(bot, build_message_segment(bot, "text", text)) for text in texts]
@@ -375,36 +364,22 @@ def _image_bytes(data: Any) -> bytes:
     return buffer.getvalue()
 
 
-def is_onebot_v11_string_available() -> bool:
-    """判断能否把 CQ 字符串解析成 OneBot V11 Message。"""
-    import importlib.util
-
-    return importlib.util.find_spec("nonebot.adapters.onebot.v11") is not None
-
-
 class _GenericMessageAdapter(MessageAdapter):
-    """只提供通用解析能力的兜底适配器。"""
+    """仅供明确选择的非平台消息场景使用，不参与平台适配器兜底。"""
 
-    def match(self, bot: Bot) -> bool:
+    def match(self, bot: Any) -> bool:
         return False
 
-    def build_segment(self, bot: Bot, seg_type: str, data: Any = None) -> Any:
+    def build_segment(self, bot: Any, seg_type: str, data: Any = None) -> Any:
         if seg_type == "text":
             return str(data)
-        raise ValueError(f"未支持的适配器：{adapter_name(bot)}")
+        raise ValueError(f"不支持的消息段类型: {seg_type} ({adapter_name(bot)})")
 
-    def build_message(self, bot: Bot, segments: list[Any]) -> Any:
+    def build_message(self, bot: Any, segments: list[Any]) -> Any:
         return "".join(str(segment) for segment in segments)
 
-    async def send_message_to_target(self, bot: Bot, target: dict[str, Any], message: Any) -> Any:
-        raise RuntimeError("无法识别消息目标")
-
-
-_generic = _GenericMessageAdapter()
-
-
-def _generic_adapter() -> MessageAdapter:
-    return _generic
+    async def send_message_to_target(self, bot: Any, target: dict[str, Any], message: Any) -> Any:
+        raise RuntimeError("当前适配器不支持目标消息发送")
 
 
 __all__ = [
@@ -417,14 +392,9 @@ __all__ = [
     "extract_raw_image_sources",
     "extract_message_target",
     "extract_reply_message_id",
-    "first_mention_target",
     "get_message_adapter",
-    "get_onebot_v11_message_segment_class",
     "get_replied_message",
-    "is_mention_segment",
     "is_text_segment",
-    "mention_target",
-    "mention_targets",
     "move_non_text_segments_to_end",
     "register_message_adapter",
     "send_forward_messages",

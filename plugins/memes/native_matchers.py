@@ -8,11 +8,11 @@ import re
 import shlex
 from datetime import datetime, timedelta, timezone
 from itertools import chain
-from typing import Any, Optional
+from typing import Optional
 
 from dateutil.relativedelta import relativedelta
 from nonebot import get_driver
-from nonebot.adapters import Bot, Event, Message, MessageSegment
+from nonebot.adapters import Event, Message, MessageSegment
 from nonebot.log import logger
 from nonebot.matcher import Matcher
 from nonebot.params import CommandArg
@@ -49,34 +49,6 @@ from .request import (
     render_meme_list,
 )
 from .utils import add_timezone, download_url
-
-try:
-    from nonebot.adapters.onebot.v11 import Bot as V11Bot
-    from nonebot.adapters.onebot.v11 import Message as V11Message
-    from nonebot.adapters.onebot.v11 import MessageSegment as V11MessageSegment
-except Exception:  # pragma: no cover
-    V11Bot = None  # type: ignore[assignment]
-    V11Message = None  # type: ignore[assignment]
-    V11MessageSegment = None  # type: ignore[assignment]
-
-try:
-    from nonebot.adapters.onebot.v12 import Bot as V12Bot
-    from nonebot.adapters.onebot.v12 import Message as V12Message
-    from nonebot.adapters.onebot.v12 import MessageSegment as V12MessageSegment
-except Exception:  # pragma: no cover
-    V12Bot = None  # type: ignore[assignment]
-    V12Message = None  # type: ignore[assignment]
-    V12MessageSegment = None  # type: ignore[assignment]
-
-try:
-    from nonebot.adapters.qq import Bot as QQOfficialBot
-    from nonebot.adapters.qq import Message as QQOfficialMessage
-    from nonebot.adapters.qq import MessageSegment as QQOfficialMessageSegment
-except Exception:  # pragma: no cover
-    QQOfficialBot = None  # type: ignore[assignment]
-    QQOfficialMessage = None  # type: ignore[assignment]
-    QQOfficialMessageSegment = None  # type: ignore[assignment]
-
 
 MEME_TRIGGER_KEY = "_memes_trigger"
 MEME_MSG_KEY = "_memes_msg"
@@ -292,7 +264,6 @@ def _reprioritize_protected_mentions(
 
 
 async def extract_inputs(
-    bot: Bot,
     event: Event,
     matcher: Matcher,
     session: Uninfo,
@@ -335,15 +306,10 @@ async def extract_inputs(
     for seg in msg:
         seg_type = getattr(seg, "type", None)
 
-        if selfBot._client().adapter.is_mention_segment(segment):
+        if selfBot.is_mention_segment(seg):
             if has_actual_image:
                 continue
-            target = (
-                seg.data.get("qq")
-                or seg.data.get("user_id")
-                or seg.data.get("id")
-                or seg.data.get("target")
-            )
+            target = selfBot.mention_target(seg)
             if not target:
                 continue
             avatar = await _avatar_bytes_of(matcher, session, interface, str(target))
@@ -443,29 +409,13 @@ async def normalize_meme_params(
     return texts
 
 
-async def _send_image(matcher: Matcher, bot: Bot, event: Event, img: bytes, text: str):
-    if V11Bot is not None and isinstance(bot, V11Bot):
-        assert V11Message is not None and V11MessageSegment is not None
-        b64 = base64.b64encode(img).decode()
-        await matcher.finish(V11Message(text) + V11MessageSegment.image(f"base64://{b64}"))
-
-    if V12Bot is not None and isinstance(bot, V12Bot):
-        assert V12Message is not None and V12MessageSegment is not None
-        resp = await selfBot.upload_file(type="data", name="memes", data=img)
-        file_id = resp["file_id"]
-        await matcher.finish(V12Message(text) + V12MessageSegment.image(file_id))
-
-    if QQOfficialBot is not None and isinstance(bot, QQOfficialBot):
-        assert QQOfficialMessage is not None and QQOfficialMessageSegment is not None
-        msg = QQOfficialMessage()
-        if text:
-            msg += QQOfficialMessageSegment.text(text)
-        msg += QQOfficialMessageSegment.file_image(img)
-        await matcher.finish(msg)
-
-    if not text:
-        text = "已生成图片，但当前适配器不支持发送图片"
-    await matcher.finish(text)
+async def _send_image(matcher: Matcher, img: bytes, text: str):
+    await matcher.finish(
+        selfBot.build_message(
+            selfBot.build_segment("text", text) if text else None,
+            selfBot.build_segment("image", img),
+        )
+    )
 
 
 def _first_mention_id(arg: Message) -> Optional[str]:
@@ -632,7 +582,7 @@ meme_msg_matcher = P.on_message(
 
 
 @help_cmd.handle()
-async def _help(bot: Bot, event: Event, matcher: Matcher, session: Uninfo):
+async def _help(event: Event, matcher: Matcher, session: Uninfo):
     user_key = get_user_id(session)
     memes = sorted(
         meme_manager.get_memes(),
@@ -688,11 +638,11 @@ async def _help(bot: Bot, event: Event, matcher: Matcher, session: Uninfo):
         "目前支持的表情列表："
     )
 
-    await _send_image(matcher, bot, event, img, text)
+    await _send_image(matcher, img, text)
 
 
 @info_cmd.handle()
-async def _info(bot: Bot, event: Event, matcher: Matcher, arg: Message = CommandArg()):
+async def _info(event: Event, matcher: Matcher, arg: Message = CommandArg()):
     meme_name = arg.extract_plain_text().strip()
     if not meme_name:
         matcher.block = False
@@ -735,7 +685,7 @@ async def _info(bot: Bot, event: Event, matcher: Matcher, arg: Message = Command
         + "\n表情预览："
     )
     img = await generate_meme_preview(meme.key)
-    await _send_image(matcher, bot, event, img, info + "\n")
+    await _send_image(matcher, img, info + "\n")
 
 
 @search_cmd.handle()
@@ -836,7 +786,6 @@ def _parse_statistics_text(text: str) -> tuple[str, Optional[str]]:
 
 
 async def _do_statistics(
-    bot: Bot,
     event: Event,
     matcher: Matcher,
     session: Uninfo,
@@ -952,30 +901,28 @@ async def _do_statistics(
                 meme_counts["/".join(m.keywords)] = count
         output = await plot_meme_and_duration_counts(meme_counts, duration_counts, title)
 
-    await _send_image(matcher, bot, event, output, "")
+    await _send_image(matcher, output, "")
 
 
 @statistics_cmd.handle()
 async def _statistics(
-    bot: Bot,
     event: Event,
     matcher: Matcher,
     session: Uninfo,
     arg: Message = CommandArg(),
 ):
     id_type = SessionIdType.GROUP if session.scene.is_group else SessionIdType.USER
-    await _do_statistics(bot, event, matcher, session, id_type, arg)
+    await _do_statistics(event, matcher, session, id_type, arg)
 
 
 @global_statistics_cmd.handle()
 async def _global_statistics(
-    bot: Bot,
     event: Event,
     matcher: Matcher,
     session: Uninfo,
     arg: Message = CommandArg(),
 ):
-    await _do_statistics(bot, event, matcher, session, id_type=SessionIdType.GLOBAL, arg=arg)
+    await _do_statistics(event, matcher, session, id_type=SessionIdType.GLOBAL, arg=arg)
 
 
 @block_cmd.handle()
@@ -1050,16 +997,13 @@ async def _refresh(matcher: Matcher):
 
 @random_cmd.handle()
 async def _random(
-    bot: Bot,
     event: Event,
     matcher: Matcher,
     session: Uninfo,
     interface: QryItrface,
     arg: Message = CommandArg(),
 ):
-    base_texts, base_images, _ = await extract_inputs(
-        bot, event, matcher, session, interface, None, arg
-    )
+    base_texts, base_images, _ = await extract_inputs(event, matcher, session, interface, None, arg)
 
     candidates: list[MemeInfo] = []
     user_key = get_user_id(session)
@@ -1084,7 +1028,7 @@ async def _random(
         await matcher.finish("没有找到符合条件的表情")
 
     meme = random.choice(candidates)
-    texts, images, _ = await extract_inputs(bot, event, matcher, session, interface, meme, arg)
+    texts, images, _ = await extract_inputs(event, matcher, session, interface, meme, arg)
     texts = await normalize_meme_params(matcher, meme, texts, images)
 
     try:
@@ -1098,12 +1042,11 @@ async def _random(
         text = f"随机表情：{meme.key} ({'/'.join(meme.keywords)})\n"
     if random.random() < cfg_notice_prob():
         text += "注意避免群聊刷屏哦~群管可启用禁用表情\n"
-    await _send_image(matcher, bot, event, result, text)
+    await _send_image(matcher, result, text)
 
 
 @meme_msg_matcher.handle()
 async def _meme(
-    bot: Bot,
     event: Event,
     state: T_State,
     matcher: Matcher,
@@ -1122,7 +1065,7 @@ async def _meme(
     if not meme_manager.check(user_key, meme.key):
         await matcher.finish("表情已被禁用")
 
-    texts, images, _ = await extract_inputs(bot, event, matcher, session, interface, meme, msg)
+    texts, images, _ = await extract_inputs(event, matcher, session, interface, meme, msg)
     texts = await normalize_meme_params(matcher, meme, texts, images)
 
     try:
@@ -1134,7 +1077,7 @@ async def _meme(
     text = ""
     if random.random() < cfg_notice_prob():
         text += "注意避免群聊刷屏哦~群管可启用禁用表情\n"
-    await _send_image(matcher, bot, event, result, text)
+    await _send_image(matcher, result, text)
 
 
 driver = get_driver()

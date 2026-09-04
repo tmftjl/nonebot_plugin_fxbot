@@ -4,9 +4,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from .interfaces import PlatformAdapter, PlatformError, UnsupportedCapability
+from nonebot.log import logger
+
+from .interfaces import PlatformAdapter, PlatformError
 
 _adapters: list[PlatformAdapter] = []
+
+
+def get_registered_adapters() -> tuple[PlatformAdapter, ...]:
+    return tuple(_adapters)
 
 
 def adapter_name(bot: Any) -> str:
@@ -20,7 +26,8 @@ def adapter_name(bot: Any) -> str:
 
 def register_adapter(adapter: PlatformAdapter | type[PlatformAdapter]):
     instance = adapter() if isinstance(adapter, type) else adapter
-    _adapters.append(instance)
+    if not any(type(item) is type(instance) for item in _adapters):
+        _adapters.append(instance)
     return adapter
 
 
@@ -28,4 +35,6 @@ def get_platform_adapter(bot: Any) -> PlatformAdapter:
     for adapter in _adapters:
         if adapter.match(bot):
             return adapter
-    raise PlatformError(f"未注册的平台适配器: {getattr(bot, 'type', type(bot).__name__)}")
+    name = getattr(bot, "type", type(bot).__name__)
+    logger.info(f"[adapter] 未注册的平台适配器，忽略事件: {name}")
+    raise PlatformError(f"未注册的平台适配器: {name}")

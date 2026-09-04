@@ -8,10 +8,10 @@ from collections.abc import Callable
 from typing import Any
 
 from nonebot import logger
-from nonebot.adapters import Bot, Event
+from nonebot.adapters import Event
 from nonebot.matcher import Matcher
 
-from ...adapter import build_message, build_message_segment
+from ...adapter import selfBot
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
 from ...utils.http import get_shared_async_client
@@ -54,16 +54,16 @@ def _build_api_regex() -> re.Pattern[str] | None:
     return re.compile(rf"^(?:#|＃|/)?(?:来张|看看|随机)\s*({joined})$", re.I)
 
 
-def _build_picture(bot: Bot, url: str, response_text: str | None = None):
+def _build_picture(url: str, response_text: str | None = None):
     """构造图片回复消息。"""
     parts: list[Any] = []
     if response_text:
-        parts.append(build_message_segment(bot, "text", response_text))
-    parts.append(build_message_segment(bot, "image", url))
-    return build_message(bot, *parts)
+        parts.append(selfBot.build_segment("text", response_text))
+    parts.append(selfBot.build_segment("image", url))
+    return selfBot.build_message(*parts)
 
 
-def _create_api_handler(bot: Bot, command: dict[str, Any]) -> Callable[[], Any]:
+def _create_api_handler(command: dict[str, Any]) -> Callable[[], Any]:
     """根据配置创建 API 图库处理器。"""
     url = str(command["url"]).strip()
     method = str(command["method"]).strip().lower()
@@ -77,12 +77,12 @@ def _create_api_handler(bot: Bot, command: dict[str, Any]) -> Callable[[], Any]:
         return response.text.replace("\\", "/").strip()
 
     if method == "direct":
-        return lambda: _build_picture(bot, url, response_text)
+        return lambda: _build_picture(url, response_text)
 
     if method == "get_text":
 
         async def _handle_get_text():
-            return _build_picture(bot, await _fetch_text(), response_text)
+            return _build_picture(await _fetch_text(), response_text)
 
         return _handle_get_text
 
@@ -92,7 +92,7 @@ def _create_api_handler(bot: Bot, command: dict[str, Any]) -> Callable[[], Any]:
             match = re.search(regex_pattern, await _fetch_text())
             if not match:
                 return None
-            return _build_picture(bot, match.group(0), response_text)
+            return _build_picture(match.group(0), response_text)
 
         return _handle_get_text_regex
 
@@ -100,23 +100,23 @@ def _create_api_handler(bot: Bot, command: dict[str, Any]) -> Callable[[], Any]:
     return lambda: None
 
 
-def _api_handlers(bot: Bot) -> list[tuple[str, Callable[[], Any]]]:
+def _api_handlers() -> list[tuple[str, Callable[[], Any]]]:
     """加载 API 图库处理器。"""
     handlers: list[tuple[str, Callable[[], Any]]] = []
     for command in load_all_commands():
         name = str(command["name"]).strip()
         if name:
-            handlers.append((name, _create_api_handler(bot, command)))
+            handlers.append((name, _create_api_handler(command)))
     return handlers
 
 
-def _pick_face_image(name: str, bot: Bot):
+def _pick_face_image(name: str):
     """优先使用本地图库，缺失时退回备用 API。"""
     path = random_local_image(name)
     if path is not None:
-        return build_message_segment(bot, "image", path)
+        return selfBot.build_segment("image", path)
     fallback = str(load_cfg()["fallback_api"])
-    return build_message_segment(bot, "image", fallback.format(name=name))
+    return selfBot.build_segment("image", fallback.format(name=name))
 
 
 api_cmd = P.on_regex(
@@ -158,7 +158,7 @@ async def _handle_list(matcher: Matcher) -> None:
 
 
 @api_cmd.handle()
-async def _handle_api_picture(matcher: Matcher, bot: Bot, event: Event) -> None:
+async def _handle_api_picture(matcher: Matcher, event: Event) -> None:
     """发送 API 图库图片。"""
     if not bool(load_cfg()["random_picture_open"]):
         await matcher.finish()
@@ -169,7 +169,7 @@ async def _handle_api_picture(matcher: Matcher, bot: Bot, event: Event) -> None:
         match = api_regex.match(text)
         if match:
             target = match.group(1)
-            for name, handler in _api_handlers(bot):
+            for name, handler in _api_handlers():
                 if name.lower() == target.lower():
                     try:
                         result = handler()
@@ -185,7 +185,7 @@ async def _handle_api_picture(matcher: Matcher, bot: Bot, event: Event) -> None:
 
 
 @picture_cmd.handle()
-async def _handle_picture(matcher: Matcher, bot: Bot, event: Event) -> None:
+async def _handle_picture(matcher: Matcher, event: Event) -> None:
     """发送随机本地图库图片。"""
     if not bool(load_cfg()["random_picture_open"]):
         return
@@ -194,4 +194,4 @@ async def _handle_picture(matcher: Matcher, bot: Bot, event: Event) -> None:
     match = re.match(r"^(?:#|＃|/)?(?:来张|看看|随机)\s*(\S+)", text)
     name = match.group(1) if match else ""
     if name in face_list():
-        await matcher.finish(build_message(bot, _pick_face_image(name, bot)))
+        await matcher.finish(selfBot.build_message(_pick_face_image(name)))

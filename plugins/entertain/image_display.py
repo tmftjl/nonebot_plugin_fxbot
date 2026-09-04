@@ -9,7 +9,7 @@ from nonebot import get_driver, logger
 from nonebot.adapters import Event
 from nonebot.matcher import Matcher
 
-from ...adapter import get_onebot_v11_message_segment_class
+from ...adapter import selfBot
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
 from ...utils.http import get_shared_async_client
@@ -63,7 +63,11 @@ def enable_image_summary() -> bool:
     """启用 OneBot V11 图片外显补丁。"""
     global _original_image, _patched
 
-    message_segment = get_onebot_v11_message_segment_class()
+    try:
+        message_segment = selfBot.message_segment_class()
+    except RuntimeError:
+        logger.debug("[NapCat] 当前没有唯一 Bot，跳过图片外显初始化")
+        return False
     if message_segment is None:
         logger.debug("[NapCat] OneBot V11 未安装，跳过图片外显补丁")
         return False
@@ -88,7 +92,10 @@ def disable_image_summary() -> bool:
     """关闭 OneBot V11 图片外显补丁。"""
     global _patched
 
-    message_segment = get_onebot_v11_message_segment_class()
+    try:
+        message_segment = selfBot.message_segment_class()
+    except RuntimeError:
+        return False
     if message_segment is None or _original_image is None:
         return False
     if _patched:
@@ -133,7 +140,3 @@ async def _init_image_display() -> None:
         await _fetch_hitokoto(str(cfg["api"]))
     if cfg["enabled"]:
         enable_image_summary()
-
-
-if cfg_image_display()["enabled"]:
-    enable_image_summary()

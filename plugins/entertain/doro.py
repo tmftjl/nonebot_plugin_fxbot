@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 from nonebot import logger
-from nonebot.adapters import Bot
 from nonebot.matcher import Matcher
 
-from ...adapter import build_message, build_message_segment
+from ...adapter import selfBot
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
 from ...utils.http import get_shared_async_client
@@ -32,7 +31,7 @@ doro_cmd = P.on_regex(
 
 
 @doro_cmd.handle()
-async def _handle_doro(matcher: Matcher, bot: Bot) -> None:
+async def _handle_doro(matcher: Matcher) -> None:
     """抽取 Doro 结局。"""
     url = str(cfg_api_urls()["doro_api"]).strip()
     if not url:
@@ -47,7 +46,7 @@ async def _handle_doro(matcher: Matcher, bot: Bot) -> None:
         await matcher.finish("获取 doro 结局失败，请稍后重试")
 
     text = f"今日doro结局：\n\n{data.get('title', '')}\n\n{data.get('description', '')}\n"
-    parts = [build_message_segment(bot, "text", text)]
+    parts = [selfBot.build_segment("text", text)]
     if image := data.get("image"):
-        parts.append(build_message_segment(bot, "image", str(image)))
-    await matcher.finish(build_message(bot, *parts))
+        parts.append(selfBot.build_segment("image", str(image)))
+    await matcher.finish(selfBot.build_message(*parts))

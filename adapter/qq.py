@@ -7,9 +7,9 @@ from pathlib import Path
 from typing import Any
 
 from nonebot.adapters import Bot
+from nonebot.adapters.qq import Bot as QQBot
 
-from .events import event_is_group
-from .interfaces import PlatformAdapter, UnsupportedCapability
+from .interfaces import PlatformAdapter
 from .message_utils import _image_bytes
 
 
@@ -17,7 +17,7 @@ class QQOfficialMessageAdapter(PlatformAdapter):
     """QQ 官方消息适配器。"""
 
     def match(self, bot: Bot) -> bool:
-        return "qq" in type(getattr(bot, "adapter", bot)).__module__.lower()
+        return isinstance(bot, QQBot)
 
     def is_mention_segment(self, segment):
         return getattr(segment, "type", "") in {"mention", "mention_user"}
@@ -90,9 +90,6 @@ class QQOfficialMessageAdapter(PlatformAdapter):
     async def send_private_message(self, bot, user_id, message):
         return await bot.send_to_c2c(openid=str(user_id), message=message)
 
-    async def send_event(self, bot, event, message):
-        return await bot.send(event, message)
-
     async def send_forward_messages(
         self, bot: Bot, event: Any, messages: list[Any], *, nickname: str = "FxBot"
     ) -> bool:
@@ -100,5 +97,5 @@ class QQOfficialMessageAdapter(PlatformAdapter):
         if not messages:
             return False
         for message in messages:
-            await bot.send(event, message)
+            await self.send_event(bot, event, message)
         return True
