@@ -45,10 +45,20 @@ def _uid(event: Any) -> str:
 
 async def _send_like(bot: Bot, user_id: str, times: int = MAX_LIKE_TIMES) -> bool:
     """调用 OneBot 点赞接口。"""
-    if not hasattr(bot, "send_like"):
-        return False
     await selfBot.like(user_id, max(1, min(times, MAX_LIKE_TIMES)))
     return True
+
+
+async def _send_likes_until_stopped(bot: Bot, user_id: str) -> int:
+    """每次发送最多十个赞，直到接口拒绝或当前适配器不支持。"""
+    count = 0
+    while True:
+        try:
+            await selfBot.like(user_id, MAX_LIKE_TIMES)
+        except Exception:
+            break
+        count += MAX_LIKE_TIMES
+    return count
 
 
 @like_cmd.handle()
@@ -57,13 +67,10 @@ async def _handle_like(matcher: Matcher, bot: Bot, event: Event) -> None:
     user_id = _uid(event)
     if not user_id:
         await matcher.finish("无法获取用户 ID")
-    try:
-        ok = await _send_like(bot, user_id)
-    except Exception:
-        ok = False
-    await matcher.finish(
-        f"已为你点赞 {MAX_LIKE_TIMES} 次" if ok else "当前适配器不支持点赞或今日已达上限"
-    )
+    count = await _send_likes_until_stopped(bot, user_id)
+    if count == 0:
+        return
+    await matcher.finish(f"已为你点赞 {count} 次，记得回我哟！")
 
 
 @tool(
@@ -86,4 +93,4 @@ async def like_tool(
         ok = await _send_like(rt.require_bot(), user_id, times)
     except Exception as exc:
         return {"success": False, "message": str(exc)}
-    return {"success": ok, "message": "点赞完成" if ok else "当前适配器不支持点赞"}
+    return {"success": ok, "message": "点赞完成" if ok else "点赞未完成"}
