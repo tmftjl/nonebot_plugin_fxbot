@@ -2,6 +2,7 @@ __pycache__/
 temp/
 .agents/
 .claude/
+.codex/
 
 # Python
 *.py[cod]
