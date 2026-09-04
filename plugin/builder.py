@@ -13,7 +13,7 @@ from nonebot.permission import SUPERUSER, Permission
 from nonebot.rule import Rule
 
 from ..adapter.message_utils import move_non_text_segments_to_end
-from ..message_policy import should_process_fxbot_message
+from ..permission.message_policy import should_process_fxbot_message
 from ..permission import PermLevel, PermScene, permission_for_cmd, permission_for_plugin
 from ..permission.helpers import upsert_command_defaults, upsert_plugin_defaults
 

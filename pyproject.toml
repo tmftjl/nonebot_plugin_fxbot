@@ -26,6 +26,20 @@ dependencies = [
     "bilibili-api-python>=17.4.1,<18.0.0",
 ]
 
+[project.entry-points."nonebot.plugins"]
+nonebot_plugin_fxbot = "nonebot_plugin_fxbot"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["nonebot_plugin_fxbot*"]
+
+[tool.setuptools.package-data]
+nonebot_plugin_fxbot = ["resources/**/*"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py310"
