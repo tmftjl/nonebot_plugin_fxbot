@@ -240,13 +240,7 @@ async def _build_session(bot: Bot, event: Event) -> Session:
     user_id = event_user_id(event)
     group_id = event_group_id(event)
     sender = getattr(event, "sender", None)
-    author = getattr(event, "author", None)
-    name = str(
-        getattr(sender, "nickname", None)
-        or getattr(author, "username", None)
-        or getattr(author, "member_openid", None)
-        or user_id
-    )
+    name = event_user_name(event, user_id)
     nick = event_user_name(event, name)
     client = PlatformBot(bot)
     avatar = client.user_avatar(user_id)

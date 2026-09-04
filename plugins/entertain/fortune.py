@@ -12,12 +12,11 @@ from pathlib import Path
 from typing import Any
 
 from nonebot import get_driver
-from nonebot.adapters import Event
 from nonebot.matcher import Matcher
 from PIL import Image, ImageDraw, ImageOps
 
 from ...adapter import selfBot
-from ...adapter.events import event_user_name
+from ...adapter.uninfo import Uninfo
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
 from ...utils.fonts import get_shared_font_path, load_font
@@ -94,21 +93,6 @@ async def _on_startup() -> None:
 async def _on_shutdown() -> None:
     """关闭时保存运势数据。"""
     _save_user_fortunes()
-
-
-def _uid(event: Event) -> str:
-    """提取用户 ID。"""
-    if hasattr(event, "get_user_id"):
-        try:
-            return str(event.get_user_id())
-        except Exception:
-            pass
-    return str(getattr(event, "user_id", "") or "")
-
-
-def _nickname(event: Event, user_id: str) -> str:
-    """提取用户昵称。"""
-    return event_user_name(event, f"用户{user_id}") or f"用户{user_id}"
 
 
 async def _get_background_image() -> Image.Image | None:
@@ -270,9 +254,9 @@ fortune_cmd = P.on_regex(
 
 
 @fortune_cmd.handle()
-async def _handle_fortune(matcher: Matcher, event: Event) -> None:
+async def _handle_fortune(matcher: Matcher, session: Uninfo) -> None:
     """发送今日运势图片。"""
-    user_id = _uid(event)
+    user_id = session.user.id
     if not user_id:
         await matcher.finish("无法获取用户 ID")
     try:
@@ -280,5 +264,5 @@ async def _handle_fortune(matcher: Matcher, event: Event) -> None:
     except Exception as exc:
         await matcher.finish(f"生成失败：{exc}")
     background = await _get_background_image()
-    image = _generate_fortune_canvas(_nickname(event, user_id), data, background=background)
+    image = _generate_fortune_canvas(session.user.nick or session.user.name or f"用户{user_id}", data, background=background)
     await matcher.finish(selfBot.build_message(selfBot.build_segment("image", image)))

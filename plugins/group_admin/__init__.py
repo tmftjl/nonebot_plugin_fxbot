@@ -12,6 +12,7 @@ from nonebot.matcher import Matcher
 from nonebot.params import RegexGroup
 
 from ...adapter import selfBot
+from ...adapter.uninfo import Uninfo
 from ...chat.tools import ToolContext, ToolRuntime, tool
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
@@ -40,35 +41,6 @@ def _failure(guard: ServiceResult, exc: Exception) -> ServiceResult:
     if guard.identity_unknown:
         return ServiceResult(False, "神秘力量限制，该对象不可执行该操作")
     return ServiceResult(False, f"操作失败: {exc}")
-
-
-def _gid(event: Any) -> str | None:
-    """提取群 ID。"""
-    value = next(
-        (
-            getattr(event, field, None)
-            for field in ("group_id", "group_openid")
-            if getattr(event, field, None)
-        ),
-        None,
-    )
-    if value is None and hasattr(event, "get_group_id"):
-        try:
-            value = event.get_group_id()
-        except Exception:
-            value = None
-    text = str(value or "").strip()
-    return text or None
-
-
-def _uid(event: Any) -> str:
-    """提取用户 ID。"""
-    if hasattr(event, "get_user_id"):
-        try:
-            return str(event.get_user_id())
-        except Exception:
-            pass
-    return str(getattr(event, "user_id", None) or getattr(event, "user_openid", None) or "")
 
 
 def _plain_text(event: Any) -> str:
@@ -340,10 +312,10 @@ mute_cmd = P.on_regex(
 
 @mute_cmd.handle()
 async def _handle_mute(
-    matcher: Matcher, bot: Bot, event: Event, groups: tuple = RegexGroup()
+    matcher: Matcher, bot: Bot, event: Event, session: Uninfo, groups: tuple = RegexGroup()
 ) -> None:
     """处理禁言命令。"""
-    group_id = _gid(event)
+    group_id = session.scene.id if session.scene.is_group else None
     if not group_id:
         await matcher.finish("请在群聊中使用")
     qq_text = str(groups[0] or "").strip() if groups else ""
@@ -361,7 +333,7 @@ async def _handle_mute(
             target_name = await selfBot.get_group_member_name(group_id, target_id, event)
         except Exception:
             target_name = ""
-        result = await _mute_member(bot, group_id, target_id, duration, operator_id=_uid(event))
+        result = await _mute_member(bot, group_id, target_id, duration, operator_id=session.user.id)
         if result.success:
             success_count += 1
             if target_name:
@@ -398,10 +370,10 @@ unmute_cmd = P.on_regex(
 
 @unmute_cmd.handle()
 async def _handle_unmute(
-    matcher: Matcher, bot: Bot, event: Event, groups: tuple = RegexGroup()
+    matcher: Matcher, bot: Bot, event: Event, session: Uninfo, groups: tuple = RegexGroup()
 ) -> None:
     """处理解禁命令。"""
-    group_id = _gid(event)
+    group_id = session.scene.id if session.scene.is_group else None
     if not group_id:
         await matcher.finish("请在群聊中使用")
     target_ids = _extract_target_ids(event, str(groups[0] or "").strip() if groups else "")
@@ -415,7 +387,7 @@ async def _handle_unmute(
             target_name = await selfBot.get_group_member_name(group_id, target_id, event)
         except Exception:
             target_name = ""
-        result = await _mute_member(bot, group_id, target_id, 0, operator_id=_uid(event))
+        result = await _mute_member(bot, group_id, target_id, 0, operator_id=session.user.id)
         if result.success:
             success_count += 1
             if target_name:
@@ -446,15 +418,15 @@ kick_cmd = P.on_regex(
 
 
 @kick_cmd.handle()
-async def _handle_kick(matcher: Matcher, bot: Bot, event: Event) -> None:
+async def _handle_kick(matcher: Matcher, bot: Bot, event: Event, session: Uninfo) -> None:
     """处理踢人命令。"""
-    group_id = _gid(event)
+    group_id = session.scene.id if session.scene.is_group else None
     if not group_id:
         await matcher.finish("请在群聊中使用")
     target_id = _extract_target_id(event)
     if target_id is None:
         await matcher.finish("请 @ 目标成员或提供 QQ 号")
-    result = await _kick_member(bot, group_id, target_id, operator_id=_uid(event))
+    result = await _kick_member(bot, group_id, target_id, operator_id=session.user.id)
     await matcher.finish(("✅ " if result.success else "❌ ") + result.message)
 
 
@@ -470,9 +442,9 @@ title_cmd = P.on_regex(
 
 
 @title_cmd.handle()
-async def _handle_title(matcher: Matcher, bot: Bot, event: Event) -> None:
+async def _handle_title(matcher: Matcher, bot: Bot, event: Event, session: Uninfo) -> None:
     """处理设置头衔命令。"""
-    group_id = _gid(event)
+    group_id = session.scene.id if session.scene.is_group else None
     if not group_id:
         await matcher.finish("请在群聊中使用")
     text = re.sub(r"^[#＃]设置头衔\s*", "", _plain_text(event)).strip()
@@ -482,7 +454,7 @@ async def _handle_title(matcher: Matcher, bot: Bot, event: Event) -> None:
     title = re.sub(r"^\d{5,}\s*", "", text).strip()
     if not title:
         await matcher.finish("请提供头衔内容")
-    result = await _set_title(bot, group_id, target_id, title, operator_id=_uid(event))
+    result = await _set_title(bot, group_id, target_id, title, operator_id=session.user.id)
     await matcher.finish(("✅ " if result.success else "❌ ") + result.message)
 
 
@@ -498,15 +470,15 @@ ban_kick_cmd = P.on_regex(
 
 
 @ban_kick_cmd.handle()
-async def _handle_ban_kick(matcher: Matcher, bot: Bot, event: Event) -> None:
+async def _handle_ban_kick(matcher: Matcher, bot: Bot, event: Event, session: Uninfo) -> None:
     """处理拉黑踢命令。"""
-    group_id = _gid(event)
+    group_id = session.scene.id if session.scene.is_group else None
     if not group_id:
         await matcher.finish("请在群聊中使用")
     target_id = _extract_target_id(event)
     if target_id is None:
         await matcher.finish("请 @ 目标成员或提供 QQ 号")
-    result = await _kick_member(bot, group_id, target_id, operator_id=_uid(event), reject_add=True)
+    result = await _kick_member(bot, group_id, target_id, operator_id=session.user.id, reject_add=True)
     await matcher.finish(("✅ " if result.success else "❌ ") + result.message)
 
 
@@ -532,22 +504,22 @@ mute_all_off_cmd = P.on_regex(
 
 
 @mute_all_on_cmd.handle()
-async def _handle_mute_all_on(matcher: Matcher, bot: Bot, event: Event) -> None:
+async def _handle_mute_all_on(matcher: Matcher, bot: Bot, event: Event, session: Uninfo) -> None:
     """处理全体禁言命令。"""
-    group_id = _gid(event)
+    group_id = session.scene.id if session.scene.is_group else None
     if not group_id:
         await matcher.finish("请在群聊中使用")
-    result = await _mute_all(bot, group_id, operator_id=_uid(event), enable=True)
+    result = await _mute_all(bot, group_id, operator_id=session.user.id, enable=True)
     await matcher.finish(("✅ " if result.success else "❌ ") + result.message)
 
 
 @mute_all_off_cmd.handle()
-async def _handle_mute_all_off(matcher: Matcher, bot: Bot, event: Event) -> None:
+async def _handle_mute_all_off(matcher: Matcher, bot: Bot, event: Event, session: Uninfo) -> None:
     """处理全体解禁命令。"""
-    group_id = _gid(event)
+    group_id = session.scene.id if session.scene.is_group else None
     if not group_id:
         await matcher.finish("请在群聊中使用")
-    result = await _mute_all(bot, group_id, operator_id=_uid(event), enable=False)
+    result = await _mute_all(bot, group_id, operator_id=session.user.id, enable=False)
     await matcher.finish(("✅ " if result.success else "❌ ") + result.message)
 
 
@@ -573,9 +545,9 @@ unmute_all_cmd = P.on_regex(
 
 
 @mute_list_cmd.handle()
-async def _handle_mute_list(matcher: Matcher, bot: Bot, event: Event) -> None:
+async def _handle_mute_list(matcher: Matcher, bot: Bot, event: Event, session: Uninfo) -> None:
     """处理禁言列表命令。"""
-    group_id = _gid(event)
+    group_id = session.scene.id if session.scene.is_group else None
     if not group_id:
         await matcher.finish("请在群聊中使用")
     members = await selfBot.get_muted_members(group_id)
@@ -598,12 +570,12 @@ async def _handle_mute_list(matcher: Matcher, bot: Bot, event: Event) -> None:
 
 
 @unmute_all_cmd.handle()
-async def _handle_unmute_all(matcher: Matcher, bot: Bot, event: Event) -> None:
+async def _handle_unmute_all(matcher: Matcher, bot: Bot, event: Event, session: Uninfo) -> None:
     """处理解除全部禁言命令。"""
-    group_id = _gid(event)
+    group_id = session.scene.id if session.scene.is_group else None
     if not group_id:
         await matcher.finish("请在群聊中使用")
-    guard = await _guard(bot, group_id, _uid(event), op_name="解除全部禁言")
+    guard = await _guard(bot, group_id, session.user.id, op_name="解除全部禁言")
     if not guard.success:
         await matcher.finish("❌ " + guard.message)
     members = await selfBot.get_muted_members(group_id)
@@ -633,11 +605,11 @@ self_mute_cmd = P.on_regex(
 
 @self_mute_cmd.handle()
 async def _handle_self_mute(
-    matcher: Matcher, bot: Bot, event: Event, groups: tuple = RegexGroup()
+    matcher: Matcher, bot: Bot, event: Event, session: Uninfo, groups: tuple = RegexGroup()
 ) -> None:
     """处理自禁言命令。"""
-    group_id = _gid(event)
-    user_id = _uid(event)
+    group_id = session.scene.id if session.scene.is_group else None
+    user_id = session.user.id
     if not group_id:
         await matcher.finish("请在群聊中使用")
     duration = _parse_duration(str(groups[1] if groups and len(groups) > 1 else ""), 600)
@@ -670,9 +642,9 @@ remove_title_cmd = P.on_regex(
 
 
 @apply_title_cmd.handle()
-async def _handle_apply_title(matcher: Matcher, bot: Bot, event: Event) -> None:
+async def _handle_apply_title(matcher: Matcher, bot: Bot, event: Event, session: Uninfo) -> None:
     """处理申请头衔命令。"""
-    group_id = _gid(event)
+    group_id = session.scene.id if session.scene.is_group else None
     if not group_id:
         await matcher.finish("请在群聊中使用")
     title = re.sub(r"^[#＃]申请头衔\s*", "", _plain_text(event)).strip()
@@ -682,20 +654,20 @@ async def _handle_apply_title(matcher: Matcher, bot: Bot, event: Event) -> None:
         await matcher.finish(
             f"❌ 头衔过长（当前等效 {_title_width(title)} 字符），最多 6 个中文字或 12 个英文字母"
         )
-    result = await _set_title(bot, group_id, _uid(event), title, operator_id=_uid(event))
+    result = await _set_title(bot, group_id, session.user.id, title, operator_id=session.user.id)
     if not result.success:
         await matcher.finish("❌ " + result.message)
     await matcher.finish("✅ " + result.message)
 
 
 @remove_title_cmd.handle()
-async def _handle_remove_title(matcher: Matcher, bot: Bot, event: Event) -> None:
+async def _handle_remove_title(matcher: Matcher, bot: Bot, event: Event, session: Uninfo) -> None:
     """处理删除头衔命令。"""
-    group_id = _gid(event)
+    group_id = session.scene.id if session.scene.is_group else None
     if not group_id:
         await matcher.finish("请在群聊中使用")
-    target_id = _extract_target_id(event) or _uid(event)
-    result = await _set_title(bot, group_id, target_id, "", operator_id=_uid(event))
+    target_id = _extract_target_id(event) or session.user.id
+    result = await _set_title(bot, group_id, target_id, "", operator_id=session.user.id)
     await matcher.finish(("✅ " if result.success else "❌ ") + result.message)
 
 
@@ -761,67 +733,67 @@ unset_essence_cmd = P.on_regex(
 
 
 @set_admin_cmd.handle()
-async def _handle_set_admin(matcher: Matcher, bot: Bot, event: Event) -> None:
+async def _handle_set_admin(matcher: Matcher, bot: Bot, event: Event, session: Uninfo) -> None:
     """处理设置管理员命令。"""
-    group_id = _gid(event)
+    group_id = session.scene.id if session.scene.is_group else None
     if not group_id:
         await matcher.finish("请在群聊中使用")
     target_id = _extract_target_id(event)
     if target_id is None:
         await matcher.finish("请 @ 目标成员或提供 QQ 号")
-    result = await _set_admin(bot, group_id, target_id, operator_id=_uid(event), enable=True)
+    result = await _set_admin(bot, group_id, target_id, operator_id=session.user.id, enable=True)
     await matcher.finish(("✅ " if result.success else "❌ ") + result.message)
 
 
 @unset_admin_cmd.handle()
-async def _handle_unset_admin(matcher: Matcher, bot: Bot, event: Event) -> None:
+async def _handle_unset_admin(matcher: Matcher, bot: Bot, event: Event, session: Uninfo) -> None:
     """处理取消管理员命令。"""
-    group_id = _gid(event)
+    group_id = session.scene.id if session.scene.is_group else None
     if not group_id:
         await matcher.finish("请在群聊中使用")
     target_id = _extract_target_id(event)
     if target_id is None:
         await matcher.finish("请 @ 目标成员或提供 QQ 号")
-    result = await _set_admin(bot, group_id, target_id, operator_id=_uid(event), enable=False)
+    result = await _set_admin(bot, group_id, target_id, operator_id=session.user.id, enable=False)
     await matcher.finish(("✅ " if result.success else "❌ ") + result.message)
 
 
 @recall_msg_cmd.handle()
-async def _handle_recall_msg(matcher: Matcher, bot: Bot, event: Event) -> None:
+async def _handle_recall_msg(matcher: Matcher, bot: Bot, event: Event, session: Uninfo) -> None:
     """处理撤回消息命令。"""
-    group_id = _gid(event)
+    group_id = session.scene.id if session.scene.is_group else None
     if not group_id:
         await matcher.finish("请在群聊中使用")
     message_id = _reply_message_id(event)
     if message_id is None:
         await matcher.finish("请回复要撤回的消息后再使用该命令")
-    result = await _recall_message(bot, group_id, message_id, operator_id=_uid(event))
+    result = await _recall_message(bot, group_id, message_id, operator_id=session.user.id)
     await matcher.finish(("✅ " if result.success else "❌ ") + result.message)
 
 
 @set_essence_cmd.handle()
-async def _handle_set_essence(matcher: Matcher, bot: Bot, event: Event) -> None:
+async def _handle_set_essence(matcher: Matcher, bot: Bot, event: Event, session: Uninfo) -> None:
     """处理设置精华命令。"""
-    group_id = _gid(event)
+    group_id = session.scene.id if session.scene.is_group else None
     if not group_id:
         await matcher.finish("请在群聊中使用")
     message_id = _reply_message_id(event)
     if message_id is None:
         await matcher.finish("请回复目标消息后再使用")
-    result = await _set_essence(bot, group_id, message_id, operator_id=_uid(event), enable=True)
+    result = await _set_essence(bot, group_id, message_id, operator_id=session.user.id, enable=True)
     await matcher.finish(("✅ " if result.success else "❌ ") + result.message)
 
 
 @unset_essence_cmd.handle()
-async def _handle_unset_essence(matcher: Matcher, bot: Bot, event: Event) -> None:
+async def _handle_unset_essence(matcher: Matcher, bot: Bot, event: Event, session: Uninfo) -> None:
     """处理取消精华命令。"""
-    group_id = _gid(event)
+    group_id = session.scene.id if session.scene.is_group else None
     if not group_id:
         await matcher.finish("请在群聊中使用")
     message_id = _reply_message_id(event)
     if message_id is None:
         await matcher.finish("请回复目标消息后再使用")
-    result = await _set_essence(bot, group_id, message_id, operator_id=_uid(event), enable=False)
+    result = await _set_essence(bot, group_id, message_id, operator_id=session.user.id, enable=False)
     await matcher.finish(("✅ " if result.success else "❌ ") + result.message)
 
 

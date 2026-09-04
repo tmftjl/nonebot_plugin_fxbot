@@ -9,7 +9,7 @@ from ...adapter import selfBot
 from nonebot.matcher import Matcher
 
 from ...adapter import extract_message_target
-from ...adapter.events import event_group_id, event_user_id
+from ...adapter.uninfo import Uninfo
 from ...permission import PermLevel, PermScene
 from . import P
 from .client import (
@@ -92,12 +92,11 @@ def _command_argument(event: Event, command_pattern: str) -> str:
     return str(match.group("argument") or "").strip() if match else ""
 
 
-def _event_context(event: Event) -> tuple[str, str]:
+def _event_context(session: Uninfo) -> tuple[str, str]:
     """返回当前群聊或私聊的订阅标识。"""
-    group_id = event_group_id(event)
-    if group_id is not None:
-        return "group", str(group_id)
-    return "private", event_user_id(event)
+    if session.scene.is_group:
+        return "group", session.scene.id
+    return "private", session.user.id
 
 
 def _room_status(room: LiveRoomSnapshot) -> str:
@@ -133,9 +132,11 @@ def _uid_argument(event: Event) -> int:
     return int(match.group(1))
 
 
-async def _save_subscription(matcher: Matcher, event: Event, room: LiveRoomSnapshot) -> None:
+async def _save_subscription(
+    matcher: Matcher, event: Event, session: Uninfo, room: LiveRoomSnapshot
+) -> None:
     """保存当前会话订阅并返回操作结果。"""
-    sub_type, sub_key = _event_context(event)
+    sub_type, sub_key = _event_context(session)
     if not sub_key:
         await matcher.finish("无法识别当前会话，订阅失败")
     created = add_room(
@@ -143,7 +144,7 @@ async def _save_subscription(matcher: Matcher, event: Event, room: LiveRoomSnaps
         sub_key,
         extract_message_target(event),
         room,
-        event_user_id(event),
+        session.user.id,
     )
     set_room_state(room.room_id, room.is_live)
     location = "本群" if sub_type == "group" else "当前私聊"
@@ -153,7 +154,7 @@ async def _save_subscription(matcher: Matcher, event: Event, room: LiveRoomSnaps
 
 
 @subscribe.handle()
-async def _handle_subscribe(matcher: Matcher, event: Event) -> None:
+async def _handle_subscribe(matcher: Matcher, event: Event, session: Uninfo) -> None:
     """订阅当前会话的直播间。"""
     try:
         room = await _fetch_argument_room(
@@ -163,22 +164,22 @@ async def _handle_subscribe(matcher: Matcher, event: Event) -> None:
     except BilibiliLiveError as exc:
         await matcher.finish(str(exc))
 
-    await _save_subscription(matcher, event, room)
+    await _save_subscription(matcher, event, session, room)
 
 
 @subscribe_uid.handle()
-async def _handle_subscribe_uid(matcher: Matcher, event: Event) -> None:
+async def _handle_subscribe_uid(matcher: Matcher, event: Event, session: Uninfo) -> None:
     """根据主播 UID 订阅当前会话。"""
     try:
         room = await fetch_room_by_uid(_uid_argument(event))
     except BilibiliLiveError as exc:
         await matcher.finish(str(exc))
 
-    await _save_subscription(matcher, event, room)
+    await _save_subscription(matcher, event, session, room)
 
 
 @unsubscribe.handle()
-async def _handle_unsubscribe(matcher: Matcher, event: Event) -> None:
+async def _handle_unsubscribe(matcher: Matcher, event: Event, session: Uninfo) -> None:
     """取消当前会话的直播间订阅。"""
     try:
         room = await _fetch_argument_room(
@@ -188,7 +189,7 @@ async def _handle_unsubscribe(matcher: Matcher, event: Event) -> None:
     except BilibiliLiveError as exc:
         await matcher.finish(str(exc))
 
-    sub_type, sub_key = _event_context(event)
+    sub_type, sub_key = _event_context(session)
     if not sub_key:
         await matcher.finish("无法识别当前会话，取消订阅失败")
     location = "本群" if sub_type == "group" else "当前私聊"
@@ -198,9 +199,9 @@ async def _handle_unsubscribe(matcher: Matcher, event: Event) -> None:
 
 
 @subscription_list.handle()
-async def _handle_subscription_list(matcher: Matcher, event: Event) -> None:
+async def _handle_subscription_list(matcher: Matcher, session: Uninfo) -> None:
     """列出当前会话的全部直播订阅。"""
-    sub_type, sub_key = _event_context(event)
+    sub_type, sub_key = _event_context(session)
     if not sub_key:
         await matcher.finish("无法识别当前会话")
     subscription = get_subscription(sub_type, sub_key)

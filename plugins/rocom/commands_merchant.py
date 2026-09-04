@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 from nonebot.adapters import Event
-from ...adapter import selfBot
 from nonebot.matcher import Matcher
 
 from ...adapter import extract_message_target, selfBot
-from ...adapter.events import event_group_id, event_user_id
+from ...adapter.uninfo import Uninfo
 from ...permission import PermLevel, PermScene
 from . import P
 from .client import fetch_merchant_snapshot
@@ -55,17 +54,16 @@ merchant_status = P.on_regex(
 )
 
 
-def _event_context(event: Event) -> tuple[str, str]:
+def _event_context(session: Uninfo) -> tuple[str, str]:
     """根据事件判断订阅类型和标识键。
 
     返回 (sub_type, sub_key):
         - 群聊: ("group", str(group_id))
         - 私聊: ("private", user_id)
     """
-    group_id = event_group_id(event)
-    if group_id is not None:
-        return ("group", str(group_id))
-    return ("private", event_user_id(event))
+    if session.scene.is_group:
+        return ("group", session.scene.id)
+    return ("private", session.user.id)
 
 
 @merchant_query.handle()
@@ -80,20 +78,22 @@ async def _handle_query(matcher: Matcher) -> None:
 
 
 @merchant_subscribe.handle()
-async def _handle_subscribe(matcher: Matcher, event: Event) -> None:  # noqa: ARG001
+async def _handle_subscribe(
+    matcher: Matcher, event: Event, session: Uninfo
+) -> None:
     """订阅远行商人推送（群聊或私聊）。"""
-    sub_type, sub_key = _event_context(event)
+    sub_type, sub_key = _event_context(session)
     if not sub_key:
         await matcher.finish("无法识别当前会话，订阅失败")
-    upsert_subscription(sub_type, sub_key, extract_message_target(event), event_user_id(event))
+    upsert_subscription(sub_type, sub_key, extract_message_target(event), session.user.id)
     location = "本群" if sub_type == "group" else "私聊"
     await matcher.finish(f"已开启远行商人推送（{location}），将在远行商人数据更新时推送")
 
 
 @merchant_unsubscribe.handle()
-async def _handle_unsubscribe(matcher: Matcher, event: Event) -> None:
+async def _handle_unsubscribe(matcher: Matcher, session: Uninfo) -> None:
     """取消远行商人推送（群聊或私聊）。"""
-    sub_type, sub_key = _event_context(event)
+    sub_type, sub_key = _event_context(session)
     if not sub_key:
         await matcher.finish("无法识别当前会话，取消订阅失败")
     removed = remove_subscription(sub_type, sub_key)
@@ -105,9 +105,9 @@ async def _handle_unsubscribe(matcher: Matcher, event: Event) -> None:
 
 
 @merchant_status.handle()
-async def _handle_status(matcher: Matcher, event: Event) -> None:
+async def _handle_status(matcher: Matcher, session: Uninfo) -> None:
     """查看远行商人推送订阅状态（群聊或私聊）。"""
-    sub_type, sub_key = _event_context(event)
+    sub_type, sub_key = _event_context(session)
     if not sub_key:
         await matcher.finish("无法识别当前会话")
     sub = get_subscription(sub_type, sub_key)

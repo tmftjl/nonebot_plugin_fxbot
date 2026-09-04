@@ -15,6 +15,7 @@ from PIL import Image
 
 from ...adapter import build_message, build_message_segment, selfBot
 from ...adapter.events import event_group_id, event_user_id
+from ...adapter.uninfo import Uninfo
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
 from ...utils.http import get_shared_async_client
@@ -35,17 +36,9 @@ def _cfg_get(key: str) -> Any:
     return cfg_box()[key]
 
 
-def _uid(event: Event) -> str:
-    """提取用户 ID。"""
-    return event_user_id(event)
-
-
-def _gid(event: Event) -> str | None:
-    """提取群 ID。"""
-    return event_group_id(event)
-
-
-def _extract_target_id(event: Event, fallback: str = "", self_id: str = "") -> str:
+def _extract_target_id(
+    event: Event, fallback: str = "", self_id: str = "", default_user_id: str = ""
+) -> str:
     """提取开盒目标。"""
     target = selfBot.first_mention_target(event.get_message(), {self_id})
     if target:
@@ -55,7 +48,7 @@ def _extract_target_id(event: Event, fallback: str = "", self_id: str = "") -> s
     match = re.search(r"\d{5,}", fallback)
     if match and match.group(0) != self_id:
         return match.group(0)
-    return _uid(event)
+    return default_user_id or event_user_id(event)
 
 
 async def _is_admin(bot: Bot, group_id: str, user_id: str) -> bool:
@@ -81,17 +74,21 @@ box_matcher = P.on_regex(
 @box_matcher.handle()
 async def _handle_box(
     matcher: Matcher,
-    bot: Bot,
     event: Event,
+    bot: Bot,
+    session: Uninfo,
     groups: tuple = RegexGroup(),
 ) -> None:
     """处理开盒命令。"""
-    group_id = _gid(event)
+    group_id = session.scene.id if session.scene.is_group else None
     target_id = _extract_target_id(
-        event, str(groups[0] if groups else ""), str(getattr(bot, "self_id", ""))
+        event,
+        str(groups[0] if groups else ""),
+        str(getattr(bot, "self_id", "")),
+        session.user.id,
     )
 
-    if _cfg_get("only_admin") and group_id and not await _is_admin(bot, group_id, _uid(event)):
+    if _cfg_get("only_admin") and group_id and not await _is_admin(bot, group_id, session.user.id):
         await matcher.finish("仅限管理员可用")
     blacklist = {str(item) for item in (_cfg_get("box_blacklist") or [])}
     if str(target_id) in blacklist:
@@ -321,7 +318,7 @@ async def _handle_increase_box(bot: Bot, event: Event) -> None:
     notice_type = str(getattr(event, "notice_type", "") or "")
     if notice_type != "group_increase" and "increase" not in type(event).__name__.lower():
         return
-    group_id = _gid(event)
+    group_id = event_group_id(event)
     if not group_id:
         return
     groups = {str(item) for item in (_cfg_get("auto_box_groups") or [])}

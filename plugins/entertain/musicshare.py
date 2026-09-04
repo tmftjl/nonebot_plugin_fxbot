@@ -22,6 +22,7 @@ from nonebot.typing import T_State
 from PIL import Image, ImageDraw
 
 from ...adapter import build_message, build_message_segment, selfBot
+from ...adapter.uninfo import Uninfo, get_session
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
 from ...utils.fonts import (
@@ -133,16 +134,6 @@ def _load_login_sessions() -> dict[str, dict[str, Any]]:
 _LOGIN_SESSIONS: dict[str, dict[str, Any]] = _load_login_sessions()
 
 
-def _uid(event: Event) -> str:
-    """提取用户 ID。"""
-    if hasattr(event, "get_user_id"):
-        try:
-            return str(event.get_user_id())
-        except Exception:
-            pass
-    return str(getattr(event, "user_id", "") or "")
-
-
 def _normalize_platform(alias: str | None) -> Platform:
     """归一化音乐平台名称。"""
     if not alias:
@@ -151,13 +142,13 @@ def _normalize_platform(alias: str | None) -> Platform:
     return "qq" if alias.lower() == "qq" else "netease"
 
 
-async def _has_active_select_session(event: Event, state: T_State) -> bool:
+async def _has_active_select_session(bot: Bot, event: Event, state: T_State) -> bool:
     """仅在当前用户有未过期点歌结果时匹配 #序号。"""
     matched = re.fullmatch(r"[#＃](\d+)", event.get_plaintext().strip())
     if not matched:
         return False
 
-    user_id = _uid(event)
+    user_id = (await get_session(bot, event)).user.id
     if not user_id:
         return False
     item = _music_cache.get(user_id)
@@ -954,10 +945,10 @@ select_matcher = P.on_regex(
 
 @login_matcher.handle()
 async def _handle_login(
-    matcher: Matcher, bot: Bot, event: Event, groups: tuple = RegexGroup()
+    matcher: Matcher, bot: Bot, event: Event, session: Uninfo, groups: tuple = RegexGroup()
 ) -> None:
     """创建 music-api 登录二维码。"""
-    user_id = _uid(event)
+    user_id = session.user.id
     if not user_id:
         await matcher.finish("无法获取用户 ID")
     platform = _normalize_platform(str(groups[0] if groups else "") or None)
@@ -996,9 +987,11 @@ async def _handle_login(
 
 
 @login_poll_matcher.handle()
-async def _handle_login_poll(matcher: Matcher, event: Event, groups: tuple = RegexGroup()) -> None:
+async def _handle_login_poll(
+    matcher: Matcher, event: Event, session: Uninfo, groups: tuple = RegexGroup()
+) -> None:
     """手动检查 music-api 登录状态。"""
-    user_id = _uid(event)
+    user_id = session.user.id
     if not user_id:
         await matcher.finish("无法获取用户 ID")
     platform = _normalize_platform(str(groups[0] if groups else "") or None)
@@ -1056,7 +1049,7 @@ async def _handle_login_poll(matcher: Matcher, event: Event, groups: tuple = Reg
 
 @search_matcher.handle()
 async def _handle_search(
-    matcher: Matcher, bot: Bot, event: Event, groups: tuple = RegexGroup()
+    matcher: Matcher, bot: Bot, event: Event, session: Uninfo, groups: tuple = RegexGroup()
 ) -> None:
     """搜索歌曲。"""
     alias = str(groups[0] or "") if groups else ""
@@ -1064,7 +1057,7 @@ async def _handle_search(
     if not keyword:
         await matcher.finish("请提供关键词，例如：#点歌 晴天")
     platform = _normalize_platform(alias or None)
-    user_id = _uid(event)
+    user_id = session.user.id
     if not user_id:
         await matcher.finish("无法获取用户 ID")
 
@@ -1084,9 +1077,11 @@ async def _handle_search(
 
 
 @select_matcher.handle()
-async def _handle_select(matcher: Matcher, bot: Bot, event: Event, state: T_State) -> None:
+async def _handle_select(
+    matcher: Matcher, bot: Bot, event: Event, session: Uninfo, state: T_State
+) -> None:
     """播放搜索结果中的歌曲。"""
-    user_id = _uid(event)
+    user_id = session.user.id
     item = _music_cache.get(user_id)
     if item is None:
         await matcher.skip()

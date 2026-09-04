@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from nonebot.adapters import Bot, Event
+from nonebot.adapters import Bot
 from nonebot.matcher import Matcher
 
 from ...adapter import selfBot
+from ...adapter.uninfo import Uninfo
 from ...chat.tools import ToolContext, ToolRuntime, tool
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
@@ -33,16 +34,6 @@ like_cmd = P.on_regex(
 )
 
 
-def _uid(event: Any) -> str:
-    """提取用户 ID。"""
-    if hasattr(event, "get_user_id"):
-        try:
-            return str(event.get_user_id())
-        except Exception:
-            pass
-    return str(getattr(event, "user_id", "") or "")
-
-
 async def _send_like(bot: Bot, user_id: str, times: int = MAX_LIKE_TIMES) -> bool:
     """调用 OneBot 点赞接口。"""
     await selfBot.like(user_id, max(1, min(times, MAX_LIKE_TIMES)))
@@ -62,9 +53,9 @@ async def _send_likes_until_stopped(bot: Bot, user_id: str) -> int:
 
 
 @like_cmd.handle()
-async def _handle_like(matcher: Matcher, bot: Bot, event: Event) -> None:
+async def _handle_like(matcher: Matcher, bot: Bot, session: Uninfo) -> None:
     """处理点赞命令。"""
-    user_id = _uid(event)
+    user_id = session.user.id
     if not user_id:
         await matcher.finish("无法获取用户 ID")
     count = await _send_likes_until_stopped(bot, user_id)

@@ -15,6 +15,7 @@ from nonebot.adapters import Bot, Event
 from nonebot.matcher import Matcher
 
 from ...adapter import build_message, build_message_segment, selfBot
+from ...adapter.uninfo import Uninfo
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
 from ...utils.http import get_shared_async_client
@@ -52,18 +53,6 @@ def _save_store(data: dict[str, dict[str, Any]]) -> None:
     """保存欢迎语存储。"""
     WELCOME_FILE.parent.mkdir(parents=True, exist_ok=True)
     WELCOME_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def _group_key(event: Event) -> str | None:
-    """提取群 ID。"""
-    value = getattr(event, "group_id", None)
-    if value is None and hasattr(event, "get_group_id"):
-        try:
-            value = event.get_group_id()
-        except Exception:
-            value = None
-    text = str(value or "").strip()
-    return text or None
 
 
 def _group_img_dir(group_key: str) -> Path:
@@ -260,9 +249,11 @@ disable_welcome_cmd = P.on_regex(
 
 
 @set_welcome_cmd.handle()
-async def _handle_set_welcome(matcher: Matcher, bot: Bot, event: Event) -> None:
+async def _handle_set_welcome(
+    matcher: Matcher, bot: Bot, event: Event, session: Uninfo
+) -> None:
     """设置欢迎语。"""
-    group_key = _group_key(event)
+    group_key = session.scene.id if session.scene.is_group else None
     if not group_key:
         await matcher.finish("请在群聊中使用该命令")
     try:
@@ -282,9 +273,11 @@ async def _handle_set_welcome(matcher: Matcher, bot: Bot, event: Event) -> None:
 
 
 @show_welcome_cmd.handle()
-async def _handle_show_welcome(matcher: Matcher, bot: Bot, event: Event) -> None:
+async def _handle_show_welcome(
+    matcher: Matcher, bot: Bot, event: Event, session: Uninfo
+) -> None:
     """查看欢迎语。"""
-    group_key = _group_key(event)
+    group_key = session.scene.id if session.scene.is_group else None
     if not group_key:
         await matcher.finish("请在群聊中使用该命令")
     record = _load_store().get(group_key)
@@ -300,9 +293,9 @@ async def _handle_show_welcome(matcher: Matcher, bot: Bot, event: Event) -> None
 
 
 @enable_welcome_cmd.handle()
-async def _handle_enable_welcome(matcher: Matcher, event: Event) -> None:
+async def _handle_enable_welcome(matcher: Matcher, session: Uninfo) -> None:
     """开启欢迎语。"""
-    group_key = _group_key(event)
+    group_key = session.scene.id if session.scene.is_group else None
     if not group_key:
         await matcher.finish("请在群聊中使用该命令")
     store = _load_store()
@@ -314,9 +307,9 @@ async def _handle_enable_welcome(matcher: Matcher, event: Event) -> None:
 
 
 @disable_welcome_cmd.handle()
-async def _handle_disable_welcome(matcher: Matcher, event: Event) -> None:
+async def _handle_disable_welcome(matcher: Matcher, session: Uninfo) -> None:
     """关闭欢迎语。"""
-    group_key = _group_key(event)
+    group_key = session.scene.id if session.scene.is_group else None
     if not group_key:
         await matcher.finish("请在群聊中使用该命令")
     store = _load_store()

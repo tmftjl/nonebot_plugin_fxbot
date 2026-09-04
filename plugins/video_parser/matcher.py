@@ -15,6 +15,7 @@ from nonebot.rule import Rule
 from nonebot.typing import T_State
 
 from ...adapter.events import event_group_id
+from ...adapter.uninfo import Uninfo
 from ...permission import PermLevel, PermScene
 from . import P
 from .config import is_global_enabled, set_global_enabled
@@ -160,10 +161,10 @@ async def _handle_video(matcher: Matcher, event: Event, state: T_State) -> None:
 
 @group_toggle_cmd.handle()
 async def _handle_group_toggle(
-    matcher: Matcher, event: Event, groups: tuple = RegexGroup()
+    matcher: Matcher, session: Uninfo, groups: tuple = RegexGroup()
 ) -> None:
     """处理本群解析开关。"""
-    group_id = event_group_id(event)
+    group_id = session.scene.id if session.scene.is_group else None
     if not group_id:
         await matcher.finish("请在群聊中使用")
     enabled = str(groups[0]) == "开启"

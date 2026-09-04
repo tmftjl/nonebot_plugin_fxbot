@@ -15,6 +15,7 @@ from nonebot.matcher import Matcher
 from nonebot.params import RegexGroup
 
 from ...adapter import selfBot
+from ...adapter.uninfo import Uninfo
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
 from ...utils.paths import data_dir
@@ -35,39 +36,6 @@ DATA_DIR = data_dir("group_admin") / "banned_words"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 _compiled_cache: dict[str, list[tuple[re.Pattern[str], dict[str, Any]]]] = {}
 _config_cache: dict[str, dict[str, Any]] = {}
-
-
-def _gid(event: Event) -> str | None:
-    """提取群 ID。"""
-    value = next(
-        (
-            getattr(event, field, None)
-            for field in ("group_id", "group_openid")
-            if getattr(event, field, None)
-        ),
-        None,
-    )
-    if value is None and hasattr(event, "get_group_id"):
-        try:
-            value = event.get_group_id()
-        except Exception:
-            value = None
-    text = str(value or "").strip()
-    return text or None
-
-
-def _uid(event: Event) -> str | None:
-    """提取用户 ID。"""
-    if hasattr(event, "get_user_id"):
-        try:
-            return str(event.get_user_id())
-        except Exception:
-            pass
-    try:
-        value = getattr(event, "user_id", None) or getattr(event, "user_openid", None)
-        return str(value) if value is not None else None
-    except Exception:
-        return None
 
 
 def _plain_text(event: Event) -> str:
@@ -315,10 +283,12 @@ banword_mute_time = P.on_regex(
 
 
 @banword_add.handle()
-async def _handle_banword_add(matcher: Matcher, event: Event, groups: tuple = RegexGroup()) -> None:
+async def _handle_banword_add(
+    matcher: Matcher, event: Event, session: Uninfo, groups: tuple = RegexGroup()
+) -> None:
     """添加违禁词。"""
-    group_id = _gid(event)
-    user_id = _uid(event) or 0
+    group_id = session.scene.id if session.scene.is_group else None
+    user_id = session.user.id or "0"
     if group_id is None:
         await matcher.finish("请在群聊中使用")
     match_cn = str(groups[0] or "精确")
@@ -340,9 +310,11 @@ async def _handle_banword_add(matcher: Matcher, event: Event, groups: tuple = Re
 
 
 @banword_del.handle()
-async def _handle_banword_del(matcher: Matcher, event: Event, groups: tuple = RegexGroup()) -> None:
+async def _handle_banword_del(
+    matcher: Matcher, event: Event, session: Uninfo, groups: tuple = RegexGroup()
+) -> None:
     """删除违禁词。"""
-    group_id = _gid(event)
+    group_id = session.scene.id if session.scene.is_group else None
     if group_id is None:
         await matcher.finish("请在群聊中使用")
     word = str(groups[0] or "").strip()
@@ -356,9 +328,9 @@ async def _handle_banword_del(matcher: Matcher, event: Event, groups: tuple = Re
 
 
 @banword_clear.handle()
-async def _handle_banword_clear(matcher: Matcher, event: Event) -> None:
+async def _handle_banword_clear(matcher: Matcher, session: Uninfo) -> None:
     """清空违禁词。"""
-    group_id = _gid(event)
+    group_id = session.scene.id if session.scene.is_group else None
     if group_id is None:
         await matcher.finish("请在群聊中使用")
     await BannedWordsManager.clear_words(group_id)
@@ -366,9 +338,9 @@ async def _handle_banword_clear(matcher: Matcher, event: Event) -> None:
 
 
 @banword_list.handle()
-async def _handle_banword_list(matcher: Matcher, event: Event) -> None:
+async def _handle_banword_list(matcher: Matcher, session: Uninfo) -> None:
     """列出违禁词。"""
-    group_id = _gid(event)
+    group_id = session.scene.id if session.scene.is_group else None
     if group_id is None:
         await matcher.finish("请在群聊中使用")
     data = BannedWordsManager.load_group_data(group_id)
@@ -393,9 +365,9 @@ async def _handle_banword_list(matcher: Matcher, event: Event) -> None:
 
 
 @banword_on.handle()
-async def _handle_banword_on(matcher: Matcher, event: Event) -> None:
+async def _handle_banword_on(matcher: Matcher, session: Uninfo) -> None:
     """开启违禁词检测。"""
-    group_id = _gid(event)
+    group_id = session.scene.id if session.scene.is_group else None
     if group_id is None:
         await matcher.finish("请在群聊中使用")
     await BannedWordsManager.set_enabled(group_id, True)
@@ -403,9 +375,9 @@ async def _handle_banword_on(matcher: Matcher, event: Event) -> None:
 
 
 @banword_off.handle()
-async def _handle_banword_off(matcher: Matcher, event: Event) -> None:
+async def _handle_banword_off(matcher: Matcher, session: Uninfo) -> None:
     """关闭违禁词检测。"""
-    group_id = _gid(event)
+    group_id = session.scene.id if session.scene.is_group else None
     if group_id is None:
         await matcher.finish("请在群聊中使用")
     await BannedWordsManager.set_enabled(group_id, False)
@@ -414,10 +386,10 @@ async def _handle_banword_off(matcher: Matcher, event: Event) -> None:
 
 @banword_mute_time.handle()
 async def _handle_banword_mute_time(
-    matcher: Matcher, event: Event, groups: tuple = RegexGroup()
+    matcher: Matcher, session: Uninfo, groups: tuple = RegexGroup()
 ) -> None:
     """设置违禁词禁言时长。"""
-    group_id = _gid(event)
+    group_id = session.scene.id if session.scene.is_group else None
     if group_id is None:
         await matcher.finish("请在群聊中使用")
     seconds = int(groups[0] or 300)
@@ -436,14 +408,14 @@ banword_interceptor = P.on_message(
 )
 
 
-async def _is_admin(bot: Bot, event: Event) -> bool:
+async def _is_admin(bot: Bot, event: Event, session: Uninfo) -> bool:
     """判断消息发送者是否为管理员。"""
     sender = getattr(event, "sender", None)
     role = str(getattr(sender, "role", "") or "")
     if role in {"owner", "admin"}:
         return True
-    group_id = _gid(event)
-    user_id = _uid(event)
+    group_id = session.scene.id if session.scene.is_group else None
+    user_id = session.user.id
     if group_id is None or user_id is None:
         return False
     try:
@@ -454,16 +426,16 @@ async def _is_admin(bot: Bot, event: Event) -> bool:
 
 
 @banword_interceptor.handle()
-async def _handle_banword_interceptor(bot: Bot, event: Event) -> None:
+async def _handle_banword_interceptor(bot: Bot, event: Event, session: Uninfo) -> None:
     """拦截违禁词消息。"""
-    group_id = _gid(event)
-    user_id = _uid(event)
+    group_id = session.scene.id if session.scene.is_group else None
+    user_id = session.user.id
     if group_id is None or user_id is None:
         return
     config = BannedWordsManager.load_group_config(group_id)
     if not config.get("enabled", True):
         return
-    if await _is_admin(bot, event) or is_superuser_id(user_id):
+    if await _is_admin(bot, event, session) or is_superuser_id(user_id):
         return
     text = _plain_text(event)
     if not text:
