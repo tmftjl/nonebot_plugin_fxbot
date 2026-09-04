@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import time
 from typing import Any
 
 from nonebot.adapters import Bot
@@ -100,8 +101,27 @@ class OneBotV11MessageAdapter(PlatformAdapter):
             bot, "get_group_member_info", group_id=int(group_id), user_id=int(user_id)
         )
 
+    async def get_group_member_role(self, bot, group_id, user_id):
+        member = await self.get_group_member(bot, group_id, user_id)
+        return str(member.get("role") or "member")
+
     async def get_group_members(self, bot, group_id):
         return await self._api(bot, "get_group_member_list", group_id=int(group_id))
+
+    async def get_muted_members(self, bot, group_id):
+        now = int(time.time())
+        members = await self.get_group_members(bot, group_id)
+        return [
+            {
+                "user_id": str(member.get("user_id")),
+                "nickname": member.get("card") or member.get("nickname") or member.get("user_id"),
+                "role": member.get("role", "member"),
+                "remaining": until - now,
+                "mute_until": until,
+            }
+            for member in members or []
+            if (until := int(member.get("shut_up_timestamp", 0) or 0)) > now
+        ]
 
     async def get_group_list(self, bot):
         return await self._api(bot, "get_group_list")

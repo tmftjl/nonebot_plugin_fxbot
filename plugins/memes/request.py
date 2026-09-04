@@ -100,6 +100,8 @@ async def send_request(
                 raise OpenImageFailed(message)
             else:
                 raise MemeGeneratorException(message)
+        else:
+            resp.raise_for_status()
 
 
 class MemeKeyWithProperties(BaseModel):

@@ -5,7 +5,7 @@ from __future__ import annotations
 import secrets
 import string
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select

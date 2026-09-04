@@ -8,7 +8,7 @@ from nonebot.adapters import Bot, Event
 from nonebot.exception import IgnoredException
 from nonebot.message import event_preprocessor
 
-from ..adapter import selfBot
+from ..adapter import bind_bot, selfBot
 from ..adapter.events import event_is_group, event_is_tome
 from ..adapter.message_utils import event_message
 from ..config import get_manager as get_config_manager
@@ -30,6 +30,7 @@ def _ignored_mention_bot_ids() -> set[str]:
 
 @event_preprocessor
 async def _ignore_configured_bot_mentions(bot: Bot, event: Event) -> None:
+    bind_bot(bot)
     if not should_process_fxbot_message(bot, event):
         return
     ignored_ids = _ignored_mention_bot_ids()

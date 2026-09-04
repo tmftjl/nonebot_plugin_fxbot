@@ -80,7 +80,10 @@ def event_message(event: Any) -> Any:
     """提取事件消息对象。"""
     get_message = getattr(event, "get_message", None)
     if callable(get_message):
-        return get_message()
+        try:
+            return get_message()
+        except (AttributeError, ValueError):
+            return None
     return getattr(event, "message", None)
 
 

@@ -12,7 +12,8 @@ from nonebot.message import event_preprocessor
 from nonebot.permission import SUPERUSER, Permission
 from nonebot.rule import Rule
 
-from ..adapter.message_utils import move_non_text_segments_to_end
+from ..adapter import bind_bot
+from ..adapter.message_utils import move_non_text_segments_to_end, event_message
 from ..permission.message_policy import should_process_fxbot_message
 from ..permission import PermLevel, PermScene, permission_for_cmd, permission_for_plugin
 from ..permission.helpers import upsert_command_defaults, upsert_plugin_defaults
@@ -24,7 +25,10 @@ _COMMAND_DISPLAY_NAMES: dict[str, dict[str, str]] = {}
 @event_preprocessor
 async def _normalize_message_segments(bot: Bot, event: Event) -> None:
     """统一将文本段前置，避免 @、图片等非文本段打断命令匹配。"""
+    bind_bot(bot)
     if not should_process_fxbot_message(bot, event):
+        return
+    if event_message(event) is None:
         return
     move_non_text_segments_to_end(event)
 

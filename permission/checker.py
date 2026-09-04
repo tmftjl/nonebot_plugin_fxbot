@@ -57,10 +57,19 @@ def _is_superuser(user_id: str | None) -> bool:
 
 
 def _has_group_role(event: Any, role: str) -> bool:
-    """判断 OneBot 群身份。"""
-    return (
-        _is_group_event(event) and str(getattr(getattr(event, "sender", None), "role", "")) == role
-    )
+    """判断统一事件中的群身份。"""
+    if not _is_group_event(event):
+        return False
+    for member in (getattr(event, "sender", None), getattr(event, "author", None)):
+        value = member.get("role") if isinstance(member, dict) else getattr(member, "role", None)
+        value = value or (
+            member.get("member_role")
+            if isinstance(member, dict)
+            else getattr(member, "member_role", None)
+        )
+        if str(value or "") == role:
+            return True
+    return False
 
 
 def _bot_admins(config: dict[str, Any]) -> set[str]:

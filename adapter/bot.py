@@ -117,8 +117,15 @@ class PlatformAdapter(ABC):
     async def get_group_member(self, bot: Any, group_id: str, user_id: str) -> Any:
         return await self._unsupported("获取成员信息")
 
+    async def get_group_member_role(self, bot: Any, group_id: str, user_id: str) -> str | None:
+        member = await self.get_group_member(bot, group_id, user_id)
+        return str(member.get("role") or member.get("member_role") or "") or None
+
     async def get_group_members(self, bot: Any, group_id: str) -> Any:
         return await self._unsupported("获取群成员列表")
+
+    async def get_muted_members(self, bot: Any, group_id: str) -> list[dict[str, Any]]:
+        return await self._unsupported("获取禁言列表")
 
     async def get_group_list(self, bot: Any) -> Any:
         return await self._unsupported("获取群列表")
@@ -142,6 +149,12 @@ class PlatformAdapter(ABC):
 
     async def whole_ban(self, bot: Any, group_id: str, enable: bool) -> Any:
         return await self._unsupported("全体禁言")
+
+    async def get_group_mute_setting(self, bot: Any, group_id: str) -> Any:
+        return await self._unsupported("获取群禁言状态")
+
+    async def set_group_members_mute(self, bot: Any, group_id: str, members: list[Any]) -> Any:
+        return await self._unsupported("设置群成员禁言")
 
     async def set_admin(self, bot: Any, group_id: str, user_id: str, enable: bool) -> Any:
         return await self._unsupported("管理员")
@@ -240,8 +253,14 @@ class PlatformBot:
     async def get_group_member(self, group_id: str, user_id: str):
         return await self.adapter.get_group_member(self.raw, str(group_id), str(user_id))
 
+    async def get_group_member_role(self, group_id: str, user_id: str):
+        return await self.adapter.get_group_member_role(self.raw, str(group_id), str(user_id))
+
     async def get_group_members(self, group_id: str):
         return await self.adapter.get_group_members(self.raw, str(group_id))
+
+    async def get_muted_members(self, group_id: str):
+        return await self.adapter.get_muted_members(self.raw, str(group_id))
 
     async def get_group_list(self):
         return await self.adapter.get_group_list(self.raw)
@@ -263,6 +282,12 @@ class PlatformBot:
 
     async def whole_ban(self, group_id: str, enable: bool):
         return await self.adapter.whole_ban(self.raw, str(group_id), enable)
+
+    async def get_group_mute_setting(self, group_id: str):
+        return await self.adapter.get_group_mute_setting(self.raw, str(group_id))
+
+    async def set_group_members_mute(self, group_id: str, members: list[Any]):
+        return await self.adapter.set_group_members_mute(self.raw, str(group_id), members)
 
     async def set_admin(self, group_id: str, user_id: str, enable: bool):
         return await self.adapter.set_admin(self.raw, str(group_id), str(user_id), enable)
@@ -307,6 +332,12 @@ def current_bot() -> PlatformBot:
     client = _current.get()
     if client is not None:
         return client
+    try:
+        from nonebot.internal.matcher import current_bot as nonebot_current_bot
+
+        return PlatformBot(nonebot_current_bot.get())
+    except LookupError:
+        pass
     raise RuntimeError("当前事件未绑定 Bot；请仅在事件处理上下文中使用 selfBot")
 
 
