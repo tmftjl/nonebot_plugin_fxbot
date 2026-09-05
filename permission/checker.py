@@ -9,7 +9,7 @@ from nonebot.adapters import Bot, Event
 from nonebot.permission import Permission
 
 from ..adapter import event_group_id, event_is_group, event_is_private
-from .policy import PolicyChain
+from .policy import BlacklistPolicy, PolicyChain
 from .storage import get_storage
 from .types import Decision, PermContext, PermLevel
 
@@ -110,6 +110,7 @@ class PermissionChecker:
 
     def __init__(self) -> None:
         self._chain = PolicyChain()
+        self._blacklist_policy = BlacklistPolicy()
 
     async def _build_context(self, event: Any, config: dict[str, Any]) -> PermContext:
         """构建权限上下文。"""
@@ -158,6 +159,14 @@ class PermissionChecker:
 
         if self._disabled_by_switch(layers):
             return False
+
+        # 黑名单优先于主人身份，避免 SUPERUSER 绕过显式封禁。
+        for layer in layers:
+            if not isinstance(layer, dict):
+                continue
+            result = await self._blacklist_policy.evaluate(layer, context)
+            if result.decision == Decision.DENY:
+                return False
 
         if context.user_level == PermLevel.SUPERUSER:
             return True
