@@ -5,7 +5,7 @@ from __future__ import annotations
 from nonebot.matcher import Matcher
 
 from ...adapter import selfBot
-from ...adapter.uninfo import Uninfo
+from ...adapter import Uninfo
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
 from ...utils.http import get_shared_async_client

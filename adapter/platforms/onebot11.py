@@ -9,9 +9,9 @@ from typing import Any
 from nonebot.adapters import Bot
 from nonebot.adapters.onebot.v11 import Bot as OneBotV11Bot
 
-from .events import event_is_group, event_is_private
-from .bot import PlatformAdapter
-from .message_utils import _image_bytes
+from ..core.bot import PlatformAdapter
+from ..core.events import event_is_group, event_is_private
+from ..core.message import _image_bytes
 
 
 class OneBotV11MessageAdapter(PlatformAdapter):

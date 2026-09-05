@@ -7,8 +7,8 @@ from pathlib import Path
 from re import Match, Pattern
 from typing import Any
 
-from .events import extract_message_target
 from .bot import PlatformAdapter
+from .events import extract_message_target
 from .registry import adapter_name, get_platform_adapter, register_adapter
 
 MessageAdapter = PlatformAdapter
@@ -33,7 +33,7 @@ async def fetch_image_bytes(src: str | bytes) -> bytes | None:
             return None
     if value.startswith(("http://", "https://")):
         try:
-            from ..utils.http import get_shared_async_client
+            from ...utils.http import get_shared_async_client
 
             response = await (await get_shared_async_client()).get(value, follow_redirects=True)
             response.raise_for_status()

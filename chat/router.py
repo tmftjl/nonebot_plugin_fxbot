@@ -9,7 +9,7 @@ from nonebot.adapters import Bot, Event
 from nonebot.matcher import Matcher
 from nonebot.rule import Rule
 
-from ..adapter.events import event_group_id, event_is_tome
+from ..adapter import event_group_id, event_is_tome
 from ..config import get_manager as get_config_manager
 from ..permission.message_policy import should_process_fxbot_message
 from .message_adapter import adapt_message_event

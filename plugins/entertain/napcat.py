@@ -8,7 +8,7 @@ from nonebot.adapters import Bot
 from nonebot.matcher import Matcher
 
 from ...adapter import selfBot
-from ...adapter.uninfo import Uninfo
+from ...adapter import Uninfo
 from ...chat.tools import ToolContext, ToolRuntime, tool
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin

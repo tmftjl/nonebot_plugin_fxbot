@@ -9,7 +9,7 @@ from ...adapter import selfBot
 from nonebot.matcher import Matcher
 
 from ...adapter import extract_message_target
-from ...adapter.uninfo import Uninfo
+from ...adapter import Uninfo
 from ...permission import PermLevel, PermScene
 from . import P
 from .client import (

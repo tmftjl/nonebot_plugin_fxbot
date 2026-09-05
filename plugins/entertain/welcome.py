@@ -15,7 +15,7 @@ from nonebot.adapters import Bot, Event
 from nonebot.matcher import Matcher
 
 from ...adapter import build_message, build_message_segment, selfBot
-from ...adapter.uninfo import Uninfo
+from ...adapter import Uninfo
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
 from ...utils.http import get_shared_async_client

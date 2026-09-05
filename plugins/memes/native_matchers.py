@@ -21,7 +21,7 @@ from nonebot.typing import T_State
 from pypinyin import Style, pinyin
 
 from ...adapter import selfBot
-from ...adapter.uninfo import QryItrface, Uninfo
+from ...adapter import QryItrface, Uninfo
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
 from ...utils.paths import cache_dir

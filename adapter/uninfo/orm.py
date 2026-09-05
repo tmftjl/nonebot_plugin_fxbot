@@ -1,339 +1,19 @@
-"""本项目内置的会话信息兼容层。"""
+"""统一会话信息持久化。"""
 
 from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import asdict, dataclass, field
-from datetime import datetime, timedelta
-from enum import Enum, IntEnum
-from typing import Annotated, Any
 
 from nonebot import get_bots
-from nonebot.adapters import Bot, Event
-from nonebot.params import Depends
+from nonebot.adapters import Bot
 from sqlalchemy import JSON, Column, UniqueConstraint, exc
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import Field, SQLModel, select
 
-from ..db import with_session
-from .bot import PlatformBot
-from .events import event_group_id, event_user_id, event_user_name
-from .registry import adapter_name
-
-
-class SupportScope(str, Enum):
-    """平台范围。"""
-
-    qq_client = "QQClient"
-    qq_api = "QQAPI"
-    unknown = "Unknown"
-
-
-class SceneType(IntEnum):
-    """会话场景类型。"""
-
-    PRIVATE = 0
-    GROUP = 1
-    GUILD = 2
-    CHANNEL_TEXT = 3
-    CHANNEL_CATEGORY = 4
-    CHANNEL_VOICE = 5
-
-
-@dataclass
-class Scene:
-    """对话场景。"""
-
-    id: str
-    type: SceneType
-    name: str | None = None
-    avatar: str | None = None
-    parent: "Scene | None" = None
-
-    @property
-    def is_private(self) -> bool:
-        return self.type == SceneType.PRIVATE
-
-    @property
-    def is_group(self) -> bool:
-        return self.type == SceneType.GROUP
-
-    @property
-    def is_guild(self) -> bool:
-        return self.type == SceneType.GUILD
-
-    @property
-    def is_channel(self) -> bool:
-        return self.type.value >= SceneType.CHANNEL_TEXT.value
-
-    def dump_json(self) -> str:
-        return json.dumps(asdict(self), ensure_ascii=False, default=_json_default)
-
-    @classmethod
-    def load(cls, data: dict[str, Any]) -> "Scene":
-        parent = cls.load(data["parent"]) if data.get("parent") else None
-        return cls(
-            id=str(data["id"]),
-            type=SceneType(data["type"]),
-            name=data.get("name"),
-            avatar=data.get("avatar"),
-            parent=parent,
-        )
-
-
-@dataclass
-class User:
-    """用户信息。"""
-
-    id: str
-    name: str | None = None
-    nick: str | None = None
-    avatar: str | None = None
-    gender: str = "unknown"
-
-    def dump_json(self) -> str:
-        return json.dumps(asdict(self), ensure_ascii=False, default=_json_default)
-
-    @classmethod
-    def load(cls, data: dict[str, Any]) -> "User":
-        return cls(
-            id=str(data["id"]),
-            name=data.get("name"),
-            nick=data.get("nick"),
-            avatar=data.get("avatar"),
-            gender=str(data.get("gender") or "unknown"),
-        )
-
-
-@dataclass
-class Role:
-    """成员角色。"""
-
-    id: str
-    level: int = 0
-    name: str | None = None
-
-    @classmethod
-    def load(cls, data: dict[str, Any]) -> "Role":
-        return cls(id=str(data["id"]), level=int(data.get("level") or 0), name=data.get("name"))
-
-
-@dataclass
-class MuteInfo:
-    """禁言信息。"""
-
-    muted: bool
-    duration: timedelta
-    start_at: datetime | None = None
-
-    @classmethod
-    def load(cls, data: dict[str, Any]) -> "MuteInfo":
-        duration = data.get("duration")
-        if not isinstance(duration, timedelta):
-            duration = timedelta(seconds=float(duration or 0))
-        start_at = data.get("start_at")
-        if start_at and not isinstance(start_at, datetime):
-            start_at = datetime.fromisoformat(str(start_at))
-        return cls(bool(data.get("muted")), duration, start_at)
-
-
-@dataclass
-class Member:
-    """成员信息。"""
-
-    user: User
-    nick: str | None = None
-    mute: MuteInfo | None = None
-    joined_at: datetime | None = None
-    roles: list[Role] = field(default_factory=list)
-
-    @property
-    def id(self) -> str:
-        return self.user.id
-
-    @property
-    def role(self) -> Role | None:
-        return max(self.roles, key=lambda role: role.level) if self.roles else None
-
-    def dump_json(self) -> str:
-        return json.dumps(asdict(self), ensure_ascii=False, default=_json_default)
-
-    @classmethod
-    def load(cls, data: dict[str, Any]) -> "Member":
-        return cls(
-            user=User.load(data["user"]),
-            nick=data.get("nick"),
-            mute=MuteInfo.load(data["mute"]) if data.get("mute") else None,
-            joined_at=_load_datetime(data.get("joined_at")),
-            roles=[Role.load(role) for role in data.get("roles") or []],
-        )
-
-
-@dataclass
-class Session:
-    """会话信息。"""
-
-    self_id: str
-    adapter: str
-    scope: str
-    scene: Scene
-    user: User
-    member: Member | None = None
-
-    @property
-    def id(self) -> str:
-        if self.scene.is_private:
-            return self.scene_path
-        return f"{self.scene_path}_{self.user.id}"
-
-    @property
-    def scene_path(self) -> str:
-        if self.scene.is_private:
-            return f"{self.scene.parent.id}_{self.user.id}" if self.scene.parent else self.user.id
-        if self.scene.is_group:
-            return self.scene.id
-        return f"{self.scene.parent.id}_{self.scene.id}" if self.scene.parent else self.scene.id
-
-    @property
-    def basic(self) -> dict[str, str]:
-        scope = self.scope.value if isinstance(self.scope, SupportScope) else str(self.scope)
-        return {"self_id": self.self_id, "adapter": self.adapter, "scope": scope}
-
-
-def _json_default(value: Any) -> Any:
-    if isinstance(value, datetime):
-        return value.isoformat()
-    if isinstance(value, timedelta):
-        return value.total_seconds()
-    if isinstance(value, IntEnum):
-        return int(value)
-    return value
-
-
-def _load_datetime(value: Any) -> datetime | None:
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        return value
-    try:
-        return datetime.fromisoformat(str(value))
-    except Exception:
-        return None
-
-
-def _role_from_text(role: Any) -> Role:
-    text = str(role or "member")
-    if text == "owner":
-        return Role("OWNER", 100, "owner")
-    if text == "admin":
-        return Role("ADMINISTRATOR", 10, "admin")
-    return Role("MEMBER", 1, "member")
-
-
-def _scope_for_adapter(adapter: str) -> str:
-    return SupportScope.unknown.value
-
-
-def _get_field(source: Any, *names: str) -> Any:
-    for name in names:
-        value = source.get(name) if isinstance(source, dict) else getattr(source, name, None)
-        if value not in (None, ""):
-            return value
-    return None
-
-
-async def _build_session(bot: Bot, event: Event) -> Session:
-    adapter = adapter_name(bot)
-    user_id = event_user_id(event)
-    group_id = event_group_id(event)
-    sender = getattr(event, "sender", None)
-    author = getattr(event, "author", None)
-    name = event_user_name(event, user_id)
-    nick = event_user_name(event, name)
-    client = PlatformBot(bot)
-    avatar = client.user_avatar(user_id)
-    user = User(
-        id=user_id,
-        name=name,
-        nick=nick,
-        avatar=avatar,
-        gender=str(_get_field(sender, "sex", "gender") or "unknown"),
-    )
-
-    if group_id:
-        group_name = _get_field(event, "group_name", "guild_name")
-        scene = Scene(
-            id=group_id,
-            type=SceneType.GROUP,
-            name=str(group_name) if group_name else None,
-            avatar=client.group_avatar(group_id),
-        )
-        role = _role_from_text(_get_field(sender, "role", "member_role") or _get_field(author, "member_role"))
-        member = Member(user=user, nick=nick, roles=[role])
-    else:
-        scene = Scene(id=user_id, type=SceneType.PRIVATE, name=name, avatar=avatar)
-        member = None
-
-    return Session(
-        self_id=str(getattr(bot, "self_id", "")),
-        adapter=adapter,
-        scope=_scope_for_adapter(adapter),
-        scene=scene,
-        user=user,
-        member=member,
-    )
-
-
-async def get_session(bot: Bot, event: Event) -> Session:
-    """NoneBot 依赖注入入口：返回当前会话信息。"""
-    return await _build_session(bot, event)
-
-
-def UniSession() -> Session:
-    return Depends(get_session)
-
-
-Uninfo = Annotated[Session, UniSession()]
-
-
-class Interface:
-    """按用户 ID 查询基础用户信息。"""
-
-    def __init__(self, bot: Bot):
-        self.bot = bot
-
-    async def get_user(self, user_id: str) -> User | None:
-        client = PlatformBot(self.bot)
-        try:
-            info = await client.get_user(user_id)
-            name = str(info.get("nickname") or info.get("username") or user_id)
-            return User(
-                id=str(info.get("user_id") or info.get("id") or user_id),
-                name=name,
-                nick=name,
-                avatar=client.user_avatar(user_id),
-                gender=str(info.get("sex") or "unknown"),
-            )
-        except Exception:
-            return User(
-                id=str(user_id),
-                name=str(user_id),
-                nick=str(user_id),
-                avatar=client.user_avatar(user_id),
-            )
-
-
-def get_interface(bot: Bot) -> Interface:
-    """NoneBot 依赖注入入口：返回查询接口。"""
-    return Interface(bot)
-
-
-def QueryInterface() -> Interface:
-    return Depends(get_interface)
-
-
-QryItrface = Annotated[Interface, QueryInterface()]
+from ...db import with_session
+from ..core.registry import adapter_name
+from .model import Member, Scene, SceneType, Session, User
 
 
 class BotModel(SQLModel, table=True):
@@ -376,6 +56,43 @@ class SceneModel(SQLModel, table=True):
     scene_type: int = Field(nullable=False)
     scene_data: dict = Field(sa_column=Column(JSON, nullable=False))
 
+    async def to_scene(self) -> Scene:
+        parent_model = (
+            await get_scene_model(self.parent_scene_persist_id)
+            if self.parent_scene_persist_id
+            else None
+        )
+        return Scene.load(
+            {
+                **self.scene_data,
+                "id": self.scene_id,
+                "type": self.scene_type,
+                "parent": (
+                    {
+                        **parent_model.scene_data,
+                        "id": parent_model.scene_id,
+                        "type": parent_model.scene_type,
+                    }
+                    if parent_model
+                    else None
+                ),
+            }
+        )
+
+    async def query_scene(self) -> Scene | None:
+        bot_model = await get_bot_model(self.bot_persist_id)
+        bot = bot_model.get_bot()
+        if bot is None:
+            return None
+        from .interface import get_interface
+
+        scene = await self.to_scene()
+        return await get_interface(bot).query_scene(
+            SceneType(scene.type),
+            scene.id,
+            parent_scene_id=scene.parent.id if scene.parent else None,
+        )
+
 
 class UserModel(SQLModel, table=True):
     """持久化用户。"""
@@ -389,6 +106,18 @@ class UserModel(SQLModel, table=True):
     bot_persist_id: int = Field(nullable=False)
     user_id: str = Field(max_length=64, nullable=False)
     user_data: dict = Field(sa_column=Column(JSON, nullable=False))
+
+    async def to_user(self) -> User:
+        return User.load({**self.user_data, "id": self.user_id})
+
+    async def query_user(self) -> User | None:
+        bot_model = await get_bot_model(self.bot_persist_id)
+        bot = bot_model.get_bot()
+        if bot is None:
+            return None
+        from .interface import get_interface
+
+        return await get_interface(bot).query_user(self.user_id)
 
 
 class SessionModel(SQLModel, table=True):
@@ -409,6 +138,52 @@ class SessionModel(SQLModel, table=True):
     scene_persist_id: int = Field(nullable=False)
     user_persist_id: int = Field(nullable=False)
     member_data: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))
+
+    async def to_session(self) -> Session:
+        bot_model = await get_bot_model(self.bot_persist_id)
+        scene_model = await get_scene_model(self.scene_persist_id)
+        user_model = await get_user_model(self.user_persist_id)
+        return Session(
+            self_id=bot_model.self_id,
+            adapter=bot_model.adapter,
+            scope=bot_model.scope,
+            scene=await scene_model.to_scene(),
+            user=await user_model.to_user(),
+            member=Member.load(self.member_data) if self.member_data else None,
+        )
+
+    async def query_session(self) -> Session | None:
+        bot_model = await get_bot_model(self.bot_persist_id)
+        bot = bot_model.get_bot()
+        if bot is None:
+            return None
+        from .interface import get_interface
+
+        interface = get_interface(bot)
+        scene_model = await get_scene_model(self.scene_persist_id)
+        scene = await scene_model.to_scene()
+        fresh_scene = await interface.query_scene(
+            SceneType(scene.type),
+            scene.id,
+            parent_scene_id=scene.parent.id if scene.parent else None,
+        )
+        if fresh_scene is None:
+            return None
+        user_model = await get_user_model(self.user_persist_id)
+        fresh_user = await interface.query_user(user_model.user_id)
+        if fresh_user is None:
+            return None
+        member = await interface.query_member(
+            SceneType(scene_model.scene_type), scene_model.scene_id, user_model.user_id
+        )
+        return Session(
+            self_id=bot_model.self_id,
+            adapter=bot_model.adapter,
+            scope=bot_model.scope,
+            scene=fresh_scene,
+            user=fresh_user,
+            member=member,
+        )
 
 
 _insert_mutex: asyncio.Lock | None = None
@@ -567,6 +342,95 @@ class _UninfoStore:
                 assert persisted_id is not None
                 return persisted_id
 
+    @with_session
+    async def get_bot_model(self, db_session: AsyncSession, persist_id: int) -> BotModel:
+        return (
+            await db_session.execute(select(BotModel).where(BotModel.id == persist_id))
+        ).scalar_one()
+
+    @with_session
+    async def get_scene_model(self, db_session: AsyncSession, persist_id: int) -> SceneModel:
+        return (
+            await db_session.execute(select(SceneModel).where(SceneModel.id == persist_id))
+        ).scalar_one()
+
+    @with_session
+    async def get_user_model(self, db_session: AsyncSession, persist_id: int) -> UserModel:
+        return (
+            await db_session.execute(select(UserModel).where(UserModel.id == persist_id))
+        ).scalar_one()
+
+    @with_session
+    async def get_session_model(self, db_session: AsyncSession, persist_id: int) -> SessionModel:
+        return (
+            await db_session.execute(select(SessionModel).where(SessionModel.id == persist_id))
+        ).scalar_one()
+
+    @with_session
+    async def get_user_model_by_key(
+        self, db_session: AsyncSession, bot: Bot, user_id: str
+    ) -> UserModel | None:
+        bot_model = await self._get_bot_model_for_bot(db_session, bot)
+        if bot_model is None:
+            return None
+        return (
+            await db_session.execute(
+                select(UserModel)
+                .where(UserModel.bot_persist_id == bot_model.id)
+                .where(UserModel.user_id == str(user_id))
+            )
+        ).scalar_one_or_none()
+
+    @with_session
+    async def get_scene_model_by_key(
+        self, db_session: AsyncSession, bot: Bot, scene_type: SceneType, scene_id: str
+    ) -> SceneModel | None:
+        bot_model = await self._get_bot_model_for_bot(db_session, bot)
+        if bot_model is None:
+            return None
+        return (
+            await db_session.execute(
+                select(SceneModel)
+                .where(SceneModel.bot_persist_id == bot_model.id)
+                .where(SceneModel.scene_type == scene_type.value)
+                .where(SceneModel.scene_id == str(scene_id))
+            )
+        ).scalar_one_or_none()
+
+    @with_session
+    async def get_session_model_by_key(
+        self,
+        db_session: AsyncSession,
+        bot: Bot,
+        scene_type: SceneType,
+        scene_id: str,
+        user_id: str,
+    ) -> SessionModel | None:
+        bot_model = await self._get_bot_model_for_bot(db_session, bot)
+        if bot_model is None:
+            return None
+        statement = (
+            select(SessionModel)
+            .join(SceneModel, SceneModel.id == SessionModel.scene_persist_id)
+            .join(UserModel, UserModel.id == SessionModel.user_persist_id)
+            .where(SessionModel.bot_persist_id == bot_model.id)
+            .where(SceneModel.scene_type == scene_type.value)
+            .where(SceneModel.scene_id == str(scene_id))
+            .where(UserModel.user_id == str(user_id))
+        )
+        return (await db_session.execute(statement)).scalar_one_or_none()
+
+    async def _get_bot_model_for_bot(
+        self, db_session: AsyncSession, bot: Bot
+    ) -> BotModel | None:
+        return (
+            await db_session.execute(
+                select(BotModel)
+                .where(BotModel.self_id == str(getattr(bot, "self_id", "")))
+                .where(BotModel.adapter == adapter_name(bot))
+            )
+        ).scalar_one_or_none()
+
 
 _store = _UninfoStore()
 
@@ -589,3 +453,38 @@ async def get_session_persist_id(
     if db_session is not None:
         return await _store.get_session_persist_id(info_session, session=db_session)
     return await _store.get_session_persist_id(info_session)
+
+
+async def get_bot_model(persist_id: int) -> BotModel:
+    return await _store.get_bot_model(persist_id)
+
+
+async def get_scene_model(persist_id: int) -> SceneModel:
+    return await _store.get_scene_model(persist_id)
+
+
+async def get_user_model(persist_id: int) -> UserModel:
+    return await _store.get_user_model(persist_id)
+
+
+async def get_session_model(persist_id: int) -> SessionModel:
+    return await _store.get_session_model(persist_id)
+
+
+async def get_user_model_by_key(bot: Bot, user_id: str) -> UserModel | None:
+    return await _store.get_user_model_by_key(bot, user_id)
+
+
+async def get_scene_model_by_key(
+    bot: Bot, scene_type: SceneType, scene_id: str
+) -> SceneModel | None:
+    return await _store.get_scene_model_by_key(bot, scene_type, scene_id)
+
+
+async def get_session_model_by_key(
+    bot: Bot,
+    scene_type: SceneType,
+    scene_id: str,
+    user_id: str,
+) -> SessionModel | None:
+    return await _store.get_session_model_by_key(bot, scene_type, scene_id, user_id)

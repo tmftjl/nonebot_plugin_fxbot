@@ -16,7 +16,7 @@ from nonebot.matcher import Matcher
 from PIL import Image, ImageDraw, ImageOps
 
 from ...adapter import selfBot
-from ...adapter.uninfo import Uninfo
+from ...adapter import Uninfo
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
 from ...utils.fonts import get_shared_font_path, load_font

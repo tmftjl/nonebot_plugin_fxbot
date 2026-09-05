@@ -7,7 +7,7 @@ from sqlalchemy import ColumnElement
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from ...adapter.uninfo import (
+from ...adapter import (
     BotModel,
     SceneModel,
     Session,

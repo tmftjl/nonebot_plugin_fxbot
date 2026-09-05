@@ -1,6 +1,6 @@
 """适配器抽象层。"""
 
-from .bot import (
+from .core.bot import (
     PlatformAdapter,
     PlatformBot,
     PlatformError,
@@ -9,7 +9,7 @@ from .bot import (
     platform_bot,
     selfBot,
 )
-from .message_utils import (
+from .core.message import (
     MessageAdapter,
     build_message,
     build_message_segment,
@@ -31,9 +31,43 @@ from .message_utils import (
     send_message_to_target,
     send_text_to_target,
 )
-from .onebot11 import OneBotV11MessageAdapter
-from .qq import QQOfficialMessageAdapter
-from .registry import get_platform_adapter, register_adapter
+from .core.events import (
+    event_group_id,
+    event_is_group,
+    event_is_private,
+    event_is_tome,
+    event_message_type,
+    event_user_id,
+    event_user_name,
+)
+from .core.registry import get_platform_adapter, register_adapter
+from .platforms.onebot11 import OneBotV11MessageAdapter
+from .platforms.qq import QQOfficialMessageAdapter
+from .uninfo import (
+    BotModel,
+    Interface,
+    Member,
+    MuteInfo,
+    QryItrface,
+    QueryInterface,
+    Role,
+    Scene,
+    SceneModel,
+    SceneType,
+    Session,
+    SessionModel,
+    SupportScope,
+    UniSession,
+    Uninfo,
+    User,
+    UserModel,
+    get_bot_persist_id,
+    get_interface,
+    get_scene_persist_id,
+    get_session,
+    get_session_persist_id,
+    get_user_persist_id,
+)
 
 # Importing adapters is the SPI discovery hook.
 register_adapter(OneBotV11MessageAdapter)
@@ -46,6 +80,13 @@ __all__ = [
     "build_message",
     "build_message_segment",
     "event_message",
+    "event_group_id",
+    "event_is_group",
+    "event_is_private",
+    "event_is_tome",
+    "event_message_type",
+    "event_user_id",
+    "event_user_name",
     "extract_first_text_match",
     "extract_image_sources",
     "extract_raw_image_sources",
@@ -71,4 +112,27 @@ __all__ = [
     "platform_bot",
     "bind_bot",
     "selfBot",
+    "BotModel",
+    "Interface",
+    "Member",
+    "MuteInfo",
+    "QryItrface",
+    "QueryInterface",
+    "Role",
+    "Scene",
+    "SceneModel",
+    "SceneType",
+    "Session",
+    "SessionModel",
+    "SupportScope",
+    "UniSession",
+    "Uninfo",
+    "User",
+    "UserModel",
+    "get_bot_persist_id",
+    "get_interface",
+    "get_scene_persist_id",
+    "get_session",
+    "get_session_persist_id",
+    "get_user_persist_id",
 ]

@@ -8,7 +8,7 @@ from nonebot import get_driver
 from nonebot.adapters import Bot, Event
 from nonebot.permission import Permission
 
-from ..adapter.events import event_group_id, event_is_group, event_is_private
+from ..adapter import event_group_id, event_is_group, event_is_private
 from .policy import PolicyChain
 from .storage import get_storage
 from .types import Decision, PermContext, PermLevel

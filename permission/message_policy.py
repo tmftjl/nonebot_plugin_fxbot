@@ -9,8 +9,8 @@ from nonebot.exception import IgnoredException
 from nonebot.message import event_preprocessor
 
 from ..adapter import bind_bot, selfBot
-from ..adapter.events import event_is_group, event_is_tome
-from ..adapter.message_utils import event_message
+from ..adapter import event_is_group, event_is_tome
+from ..adapter import event_message
 from ..config import get_manager as get_config_manager
 
 

@@ -15,7 +15,7 @@ from nonebot.matcher import Matcher
 from nonebot.params import RegexGroup
 
 from ...adapter import selfBot
-from ...adapter.uninfo import Uninfo
+from ...adapter import Uninfo
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
 from ...utils.paths import data_dir

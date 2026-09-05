@@ -6,7 +6,7 @@ from nonebot.adapters import Event
 from nonebot.matcher import Matcher
 
 from ...adapter import extract_message_target, selfBot
-from ...adapter.uninfo import Uninfo
+from ...adapter import Uninfo
 from ...permission import PermLevel, PermScene
 from . import P
 from .client import fetch_merchant_snapshot

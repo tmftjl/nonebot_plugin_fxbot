@@ -14,8 +14,8 @@ from nonebot.adapters.qq import Message, MessageSegment
 from nonebot.adapters.qq.event import GroupMemberAddEvent
 from nonebot.adapters.qq.models import SetMemberMuteState
 
-from .bot import PlatformAdapter, UnsupportedCapability
-from .message_utils import _image_bytes
+from ..core.bot import PlatformAdapter, UnsupportedCapability
+from ..core.message import _image_bytes
 
 
 class QQOfficialMessageAdapter(PlatformAdapter):

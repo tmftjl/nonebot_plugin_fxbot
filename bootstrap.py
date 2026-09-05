@@ -67,7 +67,7 @@ async def init() -> None:
     _import_startup_module("membership.models")
     _import_startup_module("adapter.uninfo")
     _import_startup_module("adapter")
-    _import_startup_module("adapter.context")
+    _import_startup_module("adapter.core.context")
     _import_plugin_model_modules()
 
     try:

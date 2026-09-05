@@ -22,7 +22,7 @@ from nonebot.typing import T_State
 from PIL import Image, ImageDraw
 
 from ...adapter import build_message, build_message_segment, selfBot
-from ...adapter.uninfo import Uninfo, get_session
+from ...adapter import Uninfo, get_session
 from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
 from ...utils.fonts import (

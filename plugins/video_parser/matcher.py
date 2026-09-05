@@ -14,8 +14,8 @@ from nonebot.permission import SUPERUSER
 from nonebot.rule import Rule
 from nonebot.typing import T_State
 
-from ...adapter.events import event_group_id
-from ...adapter.uninfo import Uninfo
+from ...adapter import event_group_id
+from ...adapter import Uninfo
 from ...permission import PermLevel, PermScene
 from . import P
 from .config import is_global_enabled, set_global_enabled
