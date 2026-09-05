@@ -10,6 +10,7 @@ from typing import Any
 
 from nonebot.adapters import Bot
 from nonebot.adapters.qq import Bot as QQBot
+from nonebot.adapters.qq import Message, MessageSegment
 from nonebot.adapters.qq.event import GroupMemberAddEvent
 from nonebot.adapters.qq.models import SetMemberMuteState
 
@@ -45,8 +46,6 @@ class QQOfficialMessageAdapter(PlatformAdapter):
         return f"https://q.qlogo.cn/qqapp/{getattr(bot, 'self_id', '')}/{user_id}/100"
 
     def build_segment(self, bot: Bot, seg_type: str, data: Any = None) -> Any:
-        from nonebot.adapters.qq import MessageSegment
-
         if seg_type == "text":
             return MessageSegment.text(str(data))
         if seg_type == "at":
@@ -84,8 +83,6 @@ class QQOfficialMessageAdapter(PlatformAdapter):
         raise ValueError(f"不支持的消息段类型: {seg_type}")
 
     def build_message(self, bot: Bot, segments: list[Any]) -> Any:
-        from nonebot.adapters.qq import Message
-
         return Message(segments)
 
     async def send_message_to_target(self, bot: Bot, target: dict[str, Any], message: Any) -> Any:
@@ -102,6 +99,45 @@ class QQOfficialMessageAdapter(PlatformAdapter):
 
     async def send_private_message(self, bot, user_id, message):
         return await bot.send_to_c2c(openid=str(user_id), message=message)
+
+    async def send_event(self, bot: Bot, event: Any, message: Any) -> Any:
+        if isinstance(event, GroupMemberAddEvent):
+            result = await self._send_group_member_add_message(bot, event, message)
+            if result is not None:
+                return result
+        return await bot.send(event, message)
+
+    async def _send_group_member_add_message(
+        self, bot: Bot, event: GroupMemberAddEvent, message: Any
+    ) -> Any:
+        parts = self._split_group_member_add_message(event, message)
+        if parts is None:
+            return None
+        text, image_segments = parts
+        mention = f'<qqbot-at-user id="{event.member_openid}" />'
+        first_text = text.strip() or "欢迎欢迎"
+        result = await bot.send(event, MessageSegment.markdown(f"{mention} {first_text}"))
+        for image_segment in image_segments:
+            result = await bot.send(event, Message([image_segment]))
+        return result
+
+    def _split_group_member_add_message(
+        self, event: GroupMemberAddEvent, message: Any
+    ) -> tuple[str, list[Any]] | None:
+        msg = Message(message)
+        if not msg or msg[0].type != "mention_user":
+            return None
+        data = getattr(msg[0], "data", {}) or {}
+        if str(data.get("user_id") or "") != str(event.member_openid):
+            return None
+        text_parts: list[str] = []
+        image_segments: list[Any] = []
+        for segment in msg[1:]:
+            if segment.type == "text":
+                text_parts.append(str((getattr(segment, "data", {}) or {}).get("text") or ""))
+            elif segment.type in {"image", "file_image"}:
+                image_segments.append(segment)
+        return "".join(text_parts), image_segments
 
     async def get_group_info(self, bot, group_id):
         return await bot.get_group_info(group_id=str(group_id))
