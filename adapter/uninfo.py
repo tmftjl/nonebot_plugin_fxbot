@@ -235,11 +235,20 @@ def _scope_for_adapter(adapter: str) -> str:
     return SupportScope.unknown.value
 
 
+def _get_field(source: Any, *names: str) -> Any:
+    for name in names:
+        value = source.get(name) if isinstance(source, dict) else getattr(source, name, None)
+        if value not in (None, ""):
+            return value
+    return None
+
+
 async def _build_session(bot: Bot, event: Event) -> Session:
     adapter = adapter_name(bot)
     user_id = event_user_id(event)
     group_id = event_group_id(event)
     sender = getattr(event, "sender", None)
+    author = getattr(event, "author", None)
     name = event_user_name(event, user_id)
     nick = event_user_name(event, name)
     client = PlatformBot(bot)
@@ -249,34 +258,19 @@ async def _build_session(bot: Bot, event: Event) -> Session:
         name=name,
         nick=nick,
         avatar=avatar,
-        gender=str(getattr(sender, "sex", "unknown") or "unknown"),
+        gender=str(_get_field(sender, "sex", "gender") or "unknown"),
     )
 
     if group_id:
-        group_name = None
-        try:
-            group = await client.get_group_info(group_id)
-            group_name = str(group.get("group_name") or group.get("name") or "")
-        except Exception:
-            group_name = None
+        group_name = _get_field(event, "group_name", "guild_name")
         scene = Scene(
             id=group_id,
             type=SceneType.GROUP,
-            name=group_name,
+            name=str(group_name) if group_name else None,
             avatar=client.group_avatar(group_id),
         )
-        role = _role_from_text(getattr(sender, "role", None))
-        join_time = None
-        card = nick
-        try:
-            member_info = await client.get_group_member(group_id, user_id)
-            card = str(member_info.get("card") or member_info.get("nickname") or nick)
-            role = _role_from_text(member_info.get("role"))
-            join_raw = member_info.get("join_time")
-            join_time = datetime.fromtimestamp(join_raw) if join_raw else None
-        except Exception:
-            pass
-        member = Member(user=user, nick=card, joined_at=join_time, roles=[role])
+        role = _role_from_text(_get_field(sender, "role", "member_role") or _get_field(author, "member_role"))
+        member = Member(user=user, nick=nick, roles=[role])
     else:
         scene = Scene(id=user_id, type=SceneType.PRIVATE, name=name, avatar=avatar)
         member = None

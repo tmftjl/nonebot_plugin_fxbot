@@ -20,7 +20,7 @@ def event_user_id(event: Event) -> str:
         value = None
     if value is not None:
         return str(value)
-    for attr in ("user_id", "user_openid", "author"):
+    for attr in ("user_id", "user_openid", "member_openid", "operator_id", "author"):
         value = getattr(event, attr, None)
         for key in ("user_openid", "member_openid", "id"):
             nested = getattr(value, key, None)
