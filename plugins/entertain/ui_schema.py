@@ -95,8 +95,8 @@ def get_ui_schema() -> dict[str, Any]:
                         "label": "QQ 音质档位",
                         "component": "InputNumber",
                         "default": DEFAULTS["music"]["qq_quality"],
-                        "helpMessage": "QQ 音乐播放质量档位 (1=m4a, 2=128kbps, 3=320kbps, 4=flac, 5=ape)。",
-                        "componentProps": {"min": 1, "max": 5},
+                        "helpMessage": "QQ 音乐播放质量档位 (1=m4a, 2=128kbps, 3=320kbps, 4=flac)。",
+                        "componentProps": {"min": 1, "max": 4},
                     },
                     {
                         "field": "netease_quality",

@@ -14,6 +14,7 @@ from typing import Any, Literal
 
 from nonebot import logger
 from nonebot.adapters import Bot, Event
+from nonebot.adapters.qq import Bot as QQBot
 from nonebot.exception import FinishedException
 from nonebot.matcher import Matcher
 from nonebot.params import RegexGroup
@@ -608,11 +609,11 @@ def _start_login_watcher(
     )
 
 
-def _quality_for_api(platform: Platform) -> str:
+def _quality_for_api(platform: Platform, *, qqbot: bool = False) -> str:
     """转换本地 music-api 音质参数。"""
     config = cfg_music()
     if platform == "qq":
-        qualities = ["m4a", "128", "320", "flac", "ape"]
+        qualities = ["m4a", "128", "320", "flac"]
         value = config["qq_quality"]
     else:
         qualities = [
@@ -627,6 +628,8 @@ def _quality_for_api(platform: Platform) -> str:
         ]
         value = config["netease_quality"]
     level = int(value)
+    if qqbot:
+        level //= 3
     level = max(1, min(level, len(qualities)))
     return qualities[level - 1]
 
@@ -698,14 +701,20 @@ def _format_play_error(data: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
     return message, reason, detail
 
 
-async def _get_song_url_api(platform: Platform, song: Song, auth: str | None = None) -> str | None:
+async def _get_song_url_api(
+    platform: Platform,
+    song: Song,
+    auth: str | None = None,
+    *,
+    qqbot: bool = False,
+) -> str | None:
     """通过本地 music-api 获取播放链接。"""
     token = auth or song.auth
     if not token:
         raise MusicLoginRequired()
     params: dict[str, Any] = {
         "provider": platform,
-        "quality": _quality_for_api(platform),
+        "quality": _quality_for_api(platform, qqbot=qqbot),
         "auth": token,
     }
     if song.search_id is not None:
@@ -746,14 +755,18 @@ async def _search_songs_with_pool(user_id: str, platform: Platform, keyword: str
             await _remove_auth_account(owner, platform, auth)
 
 
-async def _get_song_url_with_pool(user_id: str, platform: Platform, song: Song) -> str | None:
+async def _get_song_url_with_pool(
+    user_id: str, platform: Platform, song: Song, *, bot: Bot | None = None
+) -> str | None:
     """用登录账号池获取播放链接。"""
     tried: set[str] = set()
     last_play_error: MusicPlayUnavailable | None = None
     if song.auth:
         tried.add(song.auth)
         try:
-            url = await _get_song_url_api(platform, song, auth=song.auth)
+            url = await _get_song_url_api(
+                platform, song, auth=song.auth, qqbot=isinstance(bot, QQBot)
+            )
             if url:
                 return url
         except MusicLoginRequired:
@@ -779,7 +792,9 @@ async def _get_song_url_with_pool(user_id: str, platform: Platform, song: Song) 
         tried.add(auth)
         fallback_song = replace(song, search_id=None, auth=auth, auth_owner=owner)
         try:
-            url = await _get_song_url_api(platform, fallback_song, auth=auth)
+            url = await _get_song_url_api(
+                platform, fallback_song, auth=auth, qqbot=isinstance(bot, QQBot)
+            )
             if url:
                 return url
         except MusicLoginRequired:
@@ -1096,7 +1111,7 @@ async def _handle_select(
     song = songs[index]
 
     try:
-        audio_url = await _get_song_url_with_pool(user_id, platform, song)
+        audio_url = await _get_song_url_with_pool(user_id, platform, song, bot=bot)
     except MusicLoginRequired:
         await matcher.finish(_login_hint(platform))
     except MusicPlayUnavailable as exc:

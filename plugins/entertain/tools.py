@@ -95,11 +95,11 @@ async def play_music_tool(
         if not songs:
             raise ToolError(f"未找到歌曲：{song_name}", code="song_not_found")
         song = songs[0]
-        audio_url = await _get_song_url_with_pool(ctx.user_id, platform, song)
+        bot = rt.require_bot()
+        audio_url = await _get_song_url_with_pool(ctx.user_id, platform, song, bot=bot)
         if not audio_url:
             raise ToolError(f"无法获取歌曲播放链接：{song.song}", code="url_unavailable")
 
-        bot = rt.require_bot()
         segment = build_message_segment(bot, "record", audio_url)
         if ctx.group_id:
             await selfBot.send_group_message(ctx.group_id, segment)
