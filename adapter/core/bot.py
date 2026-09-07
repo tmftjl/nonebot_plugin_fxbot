@@ -109,7 +109,9 @@ class PlatformAdapter(ABC):
         logger.info(f"[adapter] 当前适配器不支持能力: {capability}")
         raise UnsupportedCapability(capability)
 
-    async def delete_message(self, bot: Any, message_id: int) -> Any:
+    async def delete_message(
+        self, bot: Any, message_id: int | str, *, group_id: str | None = None
+    ) -> Any:
         return await self._unsupported("撤回消息")
 
     async def get_message(self, bot: Any, message_id: int) -> Any:
@@ -260,8 +262,8 @@ class PlatformBot:
     def extract_reply_message_id(self, message: Any) -> int | None:
         return self.adapter.extract_reply_message_id(message)
 
-    async def delete_message(self, message_id: int):
-        return await self.adapter.delete_message(self.raw, message_id)
+    async def delete_message(self, message_id: int | str, *, group_id: str | None = None):
+        return await self.adapter.delete_message(self.raw, message_id, group_id=group_id)
 
     async def get_message(self, message_id: int):
         return await self.adapter.get_message(self.raw, message_id)

@@ -449,10 +449,10 @@ async def _handle_banword_interceptor(bot: Bot, event: Event, session: Uninfo) -
     mute_seconds = int(config.get("mute_seconds", 300) or 300)
     logger.warning(f"[banwords] 违禁词拦截 [{group_id}] {user_id}: {word} ({penalty_type})")
 
-    message_id = getattr(event, "message_id", None)
+    message_id = getattr(event, "message_id", None) or getattr(event, "id", None)
     if message_id is not None:
         try:
-            await selfBot.delete_message(message_id)
+            await selfBot.delete_message(message_id, group_id=group_id)
         except Exception:
             logger.opt(exception=True).warning("[banwords] 撤回消息失败")
     if penalty_type == "mute":

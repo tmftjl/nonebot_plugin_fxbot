@@ -97,7 +97,7 @@ class OneBotV11MessageAdapter(PlatformAdapter):
             return await method(**kwargs)
         return await bot.call_api(name, **kwargs)
 
-    async def delete_message(self, bot, message_id):
+    async def delete_message(self, bot, message_id, *, group_id=None):
         return await self._api(bot, "delete_msg", message_id=message_id)
 
     async def get_message(self, bot, message_id):

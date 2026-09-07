@@ -7,6 +7,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+from nonebot import logger
 from nonebot.adapters import Bot, Event
 from nonebot.matcher import Matcher
 from nonebot.params import RegexGroup
@@ -244,7 +245,7 @@ async def _recall_message(
     if not guard.success:
         return guard
     try:
-        await selfBot.delete_message(message_id)
+        await selfBot.delete_message(message_id, group_id=group_id)
         return ServiceResult(True, "已撤回")
     except Exception as exc:
         return ServiceResult(False, f"操作失败: {exc}")
@@ -766,7 +767,12 @@ async def _handle_recall_msg(matcher: Matcher, bot: Bot, event: Event, session: 
         await matcher.finish("请在群聊中使用")
     message_id = _reply_message_id(event)
     if message_id is None:
-        await matcher.finish("请回复要撤回的消息后再使用该命令")
+        if getattr(event, "reply", None) is not None:
+            logger.info(
+                f"[group_admin] 引用消息未提供 message_id，跳过撤回: "
+                f"group={group_id} event={getattr(event, 'id', None)}"
+            )
+            return
     result = await _recall_message(bot, group_id, message_id, operator_id=session.user.id)
     await matcher.finish(("✅ " if result.success else "❌ ") + result.message)
 
