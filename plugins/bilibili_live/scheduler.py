@@ -18,6 +18,7 @@ from ...adapter import build_message, build_message_segment, send_message_to_tar
 
 _startup_hook_registered = False
 _background_task: asyncio.Task[None] | None = None
+_calibration_task: asyncio.Task[None] | None = None
 CHECK_INTERVAL_SECONDS = 60
 MAX_CONCURRENCY = 4
 
@@ -141,9 +142,10 @@ async def _startup_calibrate() -> None:
 
 
 async def _startup_task() -> None:
-    """启动时校准状态并创建后台检查任务。"""
-    global _background_task
-    await _startup_calibrate()
+    """创建后台任务，不阻塞 NoneBot 启动流程。"""
+    global _background_task, _calibration_task
+    if _calibration_task is None or _calibration_task.done():
+        _calibration_task = asyncio.create_task(_startup_calibrate())
     if _background_task is None or _background_task.done():
         _background_task = asyncio.create_task(_background_loop())
         logger.info(f"[bilibili_live] 后台检查任务已启动：每 {CHECK_INTERVAL_SECONDS} 秒检查一次")
@@ -151,16 +153,23 @@ async def _startup_task() -> None:
 
 async def _shutdown_task() -> None:
     """关闭插件后台检查任务。"""
-    global _background_task
+    global _background_task, _calibration_task
     task = _background_task
     _background_task = None
-    if task is None or task.done():
-        return
-    task.cancel()
-    try:
-        await task
-    except asyncio.CancelledError:
-        pass
+    if task is not None and not task.done():
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+    calibration_task = _calibration_task
+    _calibration_task = None
+    if calibration_task is not None and not calibration_task.done():
+        calibration_task.cancel()
+        try:
+            await calibration_task
+        except asyncio.CancelledError:
+            pass
 
 
 def setup_bilibili_live_tasks() -> None:
