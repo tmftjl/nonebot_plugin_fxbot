@@ -130,15 +130,14 @@ async def _download_file_httpx(url: str, *, file_path: Path, headers: dict[str, 
     total = 0
     async with httpx.AsyncClient(
         timeout=_timeout(), proxy=_proxy(), follow_redirects=True, verify=False
-    ) as client:
-        async with client.stream("GET", url, headers=headers) as response:
-            response.raise_for_status()
-            _check_content_length(response.headers.get("Content-Length"), max_bytes)
-            with file_path.open("wb") as file:
-                async for chunk in response.aiter_bytes(1024 * 1024):
-                    total += len(chunk)
-                    _check_total_size(total, max_bytes)
-                    file.write(chunk)
+    ) as client, client.stream("GET", url, headers=headers) as response:
+        response.raise_for_status()
+        _check_content_length(response.headers.get("Content-Length"), max_bytes)
+        with file_path.open("wb") as file:
+            async for chunk in response.aiter_bytes(1024 * 1024):
+                total += len(chunk)
+                _check_total_size(total, max_bytes)
+                file.write(chunk)
     return _ensure_downloaded(file_path)
 
 
@@ -260,7 +259,7 @@ async def _download_image(
             return await download_file(
                 candidate, suffix=".jpg", headers=headers, directory=directory
             )
-        except Exception:
+        except DownloadError:
             continue
     return None
 

@@ -50,7 +50,7 @@ async def parse(url: str) -> VideoResult:
     av = re.search(
         r"(?:bilibili\.com(?:/video)?/)?av(?P<avid>\d{6,})(?:.*?[?&]p=(?P<page>\d{1,3}))?",
         url,
-        re.I,
+        re.IGNORECASE,
     )
     if av:
         page_num = max(1, int(av.group("page") or 1))
@@ -373,7 +373,7 @@ async def load_credential() -> Any | None:
         credential = Credential.from_cookies(cookies)
         if await credential.check_valid():
             return credential
-    except Exception:
+    except Exception:  # noqa: BLE001 - 可选登录凭据失效时回退为未登录
         return None
     return None
 

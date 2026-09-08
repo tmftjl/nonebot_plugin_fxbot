@@ -81,7 +81,7 @@ async def redirect_url(url: str, *, headers: dict[str, str] | None = None) -> st
 
 def extract_json(html: str, pattern: str, *, undefined_to_null: bool = False) -> Any:
     """从 HTML 中提取脚本 JSON。"""
-    matched = re.search(pattern, html, re.S)
+    matched = re.search(pattern, html, re.DOTALL)
     if not matched:
         raise ParseError("页面中没有找到视频数据")
     raw = matched.group(1).strip().rstrip(";")

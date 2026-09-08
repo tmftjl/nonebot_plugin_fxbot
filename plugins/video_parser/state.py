@@ -16,7 +16,7 @@ def _load() -> dict[str, list[str]]:
         return {"disabled_groups": []}
     try:
         data = json.loads(STATE_PATH.read_text(encoding="utf-8"))
-    except Exception:
+    except (OSError, UnicodeError, TypeError, json.JSONDecodeError):
         return {"disabled_groups": []}
     if not isinstance(data, dict):
         return {"disabled_groups": []}

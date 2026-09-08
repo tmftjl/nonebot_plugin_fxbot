@@ -54,7 +54,7 @@ async def parse(url: str) -> VideoResult:
     discovery_url = f"https://www.xiaohongshu.com/discovery/item/{query}"
     try:
         return await _parse_explore(explore_url, note_id)
-    except Exception:
+    except Exception:  # noqa: BLE001 - explore 页面失败时回退 discovery 页面
         return await _parse_discovery(discovery_url)
 
 

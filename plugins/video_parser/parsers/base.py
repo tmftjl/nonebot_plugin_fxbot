@@ -50,7 +50,7 @@ def find_url(text: str) -> str | None:
     bv = re.search(r"\bBV[0-9A-Za-z]{10}\b", text)
     if bv:
         return bv.group(0)
-    av = re.search(r"\bav\d{6,}\b", text, re.I)
+    av = re.search(r"\bav\d{6,}\b", text, re.IGNORECASE)
     if av:
         return av.group(0)
     return None
@@ -97,7 +97,7 @@ def _match_enabled_platform(url: str) -> str | None:
         or "b23.tv" in lower
         or "bili2233.cn" in lower
         or re.fullmatch(r"BV[0-9A-Za-z]{10}", url)
-        or re.fullmatch(r"av\d{6,}", url, re.I)
+        or re.fullmatch(r"av\d{6,}", url, re.IGNORECASE)
     ):
         return "bilibili"
     return None

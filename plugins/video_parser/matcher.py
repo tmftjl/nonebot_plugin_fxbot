@@ -45,7 +45,7 @@ def _sent_message_id(sent: object) -> int | str | None:
     return sent if isinstance(sent, (int, str)) else None
 
 
-async def _recall_processing_message(sent: object, event: Event) -> None:
+async def _recall_processing_message(sent: object, group_id: str | None) -> None:
     """解析成功后撤回处理中提示，且不让撤回失败影响结果。"""
     message_id = _sent_message_id(sent)
     if message_id is None:
@@ -54,7 +54,7 @@ async def _recall_processing_message(sent: object, event: Event) -> None:
         )
         return
     try:
-        await selfBot.delete_message(message_id, group_id=event_group_id(event))
+        await selfBot.delete_message(message_id, group_id=group_id)
     except Exception as exc:  # noqa: BLE001 - 撤回失败不能影响已发送的解析结果
         logger.warning(f"[video_parser] 撤回处理中提示失败: {type(exc).__name__}: {exc}")
 
@@ -70,7 +70,7 @@ def _find_card_url(event: Event) -> str | None:
     """按原插件逻辑从 JSON 卡片 meta 字段提取跳转链接。"""
     try:
         message = event.get_message()
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         return None
     for segment in message:
         data = getattr(segment, "data", {}) or {}
@@ -154,7 +154,9 @@ bili_login_cmd = P.on_regex(
 
 
 @video_matcher.handle()
-async def _handle_video(matcher: Matcher, event: Event, state: T_State) -> None:
+async def _handle_video(
+    matcher: Matcher, event: Event, session: Uninfo, state: T_State
+) -> None:
     """处理视频解析。"""
     url = str(state.get(STATE_URL_KEY) or "")
     if not can_parse_url(url):
@@ -172,14 +174,14 @@ async def _handle_video(matcher: Matcher, event: Event, state: T_State) -> None:
             await send_image_result(matcher, event, result, image_paths)
         else:
             raise ParseError("解析结果没有可发送的媒体")
-        await _recall_processing_message(processing_message, event)
+        await _recall_processing_message(processing_message, session.scene.id)
     except (ParseError, DownloadError) as exc:
         await matcher.finish(f"解析失败：{exc}")
     except httpx.HTTPStatusError as exc:
         await matcher.finish(f"解析失败：平台接口返回 {exc.response.status_code}")
     except MatcherException:
         raise
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - 将未预期解析错误转换为用户提示
         await matcher.finish(f"解析失败：{type(exc).__name__}: {exc}")
     finally:
         cleanup_download_dir(download_dir)
