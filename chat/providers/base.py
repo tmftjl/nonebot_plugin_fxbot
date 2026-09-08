@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import abc
-import asyncio
 import json
-from collections.abc import AsyncGenerator
+import asyncio
 from typing import Any
+from collections.abc import AsyncGenerator
 
 from nonebot import logger
 

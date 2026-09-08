@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import math
 from io import BytesIO
-from pathlib import Path
 from typing import Any
+from pathlib import Path
 
 from PIL import Image, ImageDraw
 
@@ -302,17 +302,13 @@ async def render_pokedex_image(pet: dict[str, Any], pet_id: str) -> bytes:
     """按照 RocomUID 图鉴布局生成图片。"""
     level_skills = [item for item in pet.get("level_skill_list") or [] if isinstance(item, dict)]
     blood_skills = [item for item in pet.get("blood_skill_list") or [] if isinstance(item, dict)]
-    machine_skills = [
-        item for item in pet.get("machine_skill_list") or [] if isinstance(item, dict)
-    ]
+    machine_skills = [item for item in pet.get("machine_skill_list") or [] if isinstance(item, dict)]
     feature = pet.get("feature") or {}
     feature_name = str(feature.get("name") or "")
     feature_lines = _wrap_text(str(feature.get("desc") or ""), SKILL_32, FEATURE_TEXT_MAX_WIDTH)
     desc_lines = _wrap_text(str(pet.get("description") or ""), SKILL_32, INFO_TEXT_MAX_WIDTH)
 
-    info_body_height = (
-        len(desc_lines) * TEXT_LINE_HEIGHT + (TEXT_LINE_HEIGHT if pet.get("egg_group") else 0) + 15
-    )
+    info_body_height = len(desc_lines) * TEXT_LINE_HEIGHT + (TEXT_LINE_HEIGHT if pet.get("egg_group") else 0) + 15
     feature_line_count = len(feature_lines) or 1
     feature_body_height = max(
         FEATURE_ICON_SIZE + FEATURE_BOTTOM_PADDING,

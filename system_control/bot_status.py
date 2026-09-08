@@ -3,31 +3,31 @@
 
 from __future__ import annotations
 
-import asyncio
-import base64
 import json
-import platform
-import socket
 import time
-from collections import defaultdict
+import base64
+import socket
+import asyncio
+import platform
+from typing import Any, Dict, List, Tuple, Optional
+from pathlib import Path
 from datetime import datetime
 from functools import wraps
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from collections import defaultdict
 from urllib.parse import quote
 
 import psutil
-from nonebot import get_driver, logger
+from nonebot import logger, get_driver
 from nonebot.adapters import Bot, Event
 from playwright.async_api import Browser, async_playwright
 from playwright.async_api._generated import Playwright as PlaywrightType
 
-from ..adapter import build_message, build_message_segment
 from ..config import get_manager
+from ..adapter import build_message, build_message_segment
+from .registry import P
 from ..permission import PermLevel, PermScene
 from ..utils.http import get_shared_async_client
 from ..utils.paths import data_dir
-from .registry import P
 from .status_monitor import get_monitor
 
 # ========== 背景图片配置 ==========
@@ -144,9 +144,7 @@ async def _collect_bot_info() -> List[Dict[str, Any]]:
             # 获取群列表和好友列表
             group_list = await bot.get_group_list()
             friend_list = await bot.get_friend_list()
-            total_members = sum(
-                g.get("member_count", 0) or g.get("max_member_count", 0) for g in group_list
-            )
+            total_members = sum(g.get("member_count", 0) or g.get("max_member_count", 0) for g in group_list)
             count_contacts = {
                 "好友": len(friend_list),
                 "群聊": len(group_list),
@@ -180,9 +178,7 @@ async def _collect_hardware_info() -> List[Dict[str, Any]]:
         # CPU
         monitor = get_monitor()
         monitor_data = monitor.get_current_data()
-        cpu_percent = (
-            monitor_data.cpu_history[-1][1] if monitor_data and monitor_data.cpu_history else 0.0
-        )
+        cpu_percent = monitor_data.cpu_history[-1][1] if monitor_data and monitor_data.cpu_history else 0.0
         cpu_count = psutil.cpu_count()
         cpu_freq = psutil.cpu_freq()
         cpu_freq_str = f"{cpu_freq.current:.0f}MHz" if cpu_freq else "N/A"
@@ -436,9 +432,7 @@ async def _collect_system_info() -> List[Dict[str, Any]]:
         # Shell
         import os
 
-        shell = os.environ.get(
-            "SHELL", "PowerShell / CMD" if platform.system() == "Windows" else "Unknown"
-        )
+        shell = os.environ.get("SHELL", "PowerShell / CMD" if platform.system() == "Windows" else "Unknown")
         info_items.append({"first": "Shell", "tail": shell})
 
         # Display
@@ -455,9 +449,7 @@ async def _collect_system_info() -> List[Dict[str, Any]]:
         cpu_count = psutil.cpu_count()
         cpu_freq = psutil.cpu_freq()
         cpu_info = (
-            f"{cpu_name} ({cpu_count}) @ {cpu_freq.max / 1000:.2f} GHz"
-            if cpu_freq
-            else f"{cpu_name} ({cpu_count})"
+            f"{cpu_name} ({cpu_count}) @ {cpu_freq.max / 1000:.2f} GHz" if cpu_freq else f"{cpu_name} ({cpu_count})"
         )
         info_items.append({"first": "CPU", "tail": cpu_info})
 
@@ -646,16 +638,10 @@ def _render_bot_info(bot_info_list: List[Dict[str, Any]]) -> str:
     html_parts = []
     for bot in bot_info_list:
         contacts_html = "".join(
-            [
-                f"<span>{label}: {value}</span>"
-                for label, value in bot.get("count_contacts", {}).items()
-            ]
+            [f"<span>{label}: {value}</span>" for label, value in bot.get("count_contacts", {}).items()]
         )
         messages_html = "".join(
-            [
-                f"<span>{label}: {value}</span>"
-                for label, value in bot.get("message_count", {}).items()
-            ]
+            [f"<span>{label}: {value}</span>" for label, value in bot.get("message_count", {}).items()]
         )
 
         html_parts.append(f"""
@@ -782,9 +768,7 @@ def _render_network(network: Dict[str, Any], chart_data_json: str) -> str:
         test_items = []
         for test in website_tests:
             color = "#46971d" if test["success"] else "#d73403"
-            test_items.append(
-                f'{test["name"]}：<span style="color:{color};">{test["delay"]}</span>'
-            )
+            test_items.append(f'{test["name"]}：<span style="color:{color};">{test["delay"]}</span>')
         website_tests_html = f'<div class="speed"><p>延迟</p><p>{" | ".join(test_items)}</p></div>'
 
     return f"""
@@ -880,10 +864,7 @@ def _render_system_info(system_info: List[Dict[str, Any]]) -> str:
         return ""
 
     items_html = "".join(
-        [
-            f'<div class="speed"><p>{item["first"]}</p><p>{item["tail"]}</p></div>'
-            for item in system_info
-        ]
+        [f'<div class="speed"><p>{item["first"]}</p><p>{item["tail"]}</p></div>' for item in system_info]
     )
 
     return f"""
@@ -1292,9 +1273,7 @@ def _classify_chat(event: Any) -> Optional[Tuple[str, str]]:
     # QQ 官方适配器
     if group_target := (getattr(event, "group_openid", None) or getattr(event, "group_code", None)):
         return ("group", str(group_target))
-    if private_target := (
-        getattr(event, "user_openid", None) or _get_nested(event, "author.user_openid")
-    ):
+    if private_target := (getattr(event, "user_openid", None) or _get_nested(event, "author.user_openid")):
         return ("private", str(private_target))
 
     return None
@@ -1353,7 +1332,7 @@ async def _hook_bot_methods(bot: Bot):
             result = await original_handle_event(event)
 
             # 统计接收消息
-            if classified := _classify_chat(event):
+            if _classify_chat(event):
                 try:
                     await _ensure_today_cache()
                     async with _MESSAGE_CACHE_LOCK:

@@ -1,6 +1,6 @@
 from nonebot import get_driver
 
-from .config import cfg_protected_memes, cfg_whitelist_ids, save_protection_config
+from .config import cfg_whitelist_ids, cfg_protected_memes, save_protection_config
 
 
 class ProtectionManager:

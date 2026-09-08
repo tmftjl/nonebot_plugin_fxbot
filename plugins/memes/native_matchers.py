@@ -1,54 +1,53 @@
 from __future__ import annotations
 
-import asyncio
-import base64
-import hashlib
-import random
 import re
 import shlex
-from datetime import datetime, timedelta, timezone
-from itertools import chain
+import base64
+import random
+import asyncio
+import hashlib
 from typing import Optional
+from datetime import datetime, timezone, timedelta
+from itertools import chain
 
-from dateutil.relativedelta import relativedelta
 from nonebot import get_driver
-from nonebot.adapters import Event, Message, MessageSegment
-from nonebot.log import logger
-from nonebot.matcher import Matcher
-from nonebot.params import CommandArg
-from nonebot.rule import Rule
-from nonebot.typing import T_State
 from pypinyin import Style, pinyin
+from nonebot.log import logger
+from nonebot.rule import Rule
+from nonebot.params import CommandArg
+from nonebot.typing import T_State
+from nonebot.matcher import Matcher
+from nonebot.adapters import Event, Message, MessageSegment
+from dateutil.relativedelta import relativedelta
 
-from ...adapter import selfBot
-from ...adapter import QryItrface, Uninfo
-from ...permission import PermLevel, PermScene
-from ...plugin import Plugin
-from ...utils.paths import cache_dir
+from .plot import plot_duration_counts, plot_meme_and_duration_counts
+from .utils import add_timezone, download_url
 from .config import (
-    cfg_command_prefixes,
     cfg_notice_prob,
+    cfg_command_prefixes,
     cfg_random_meme_show_info,
 )
-from .exception import MemeGeneratorException
 from .manager import MemeMode, meme_manager
-from .plot import plot_duration_counts, plot_meme_and_duration_counts
-from .protection import protection_manager
-from .recorder import (
-    SessionIdType,
-    get_meme_generation_keys,
-    get_meme_generation_records,
-    get_meme_generation_times,
-    record_meme_generation,
-)
 from .request import (
     MemeInfo,
     MemeKeyWithProperties,
     generate_meme,
-    generate_meme_preview,
     render_meme_list,
+    generate_meme_preview,
 )
-from .utils import add_timezone, download_url
+from ...plugin import Plugin
+from .recorder import (
+    SessionIdType,
+    record_meme_generation,
+    get_meme_generation_keys,
+    get_meme_generation_times,
+    get_meme_generation_records,
+)
+from ...adapter import Uninfo, QryItrface, selfBot
+from .exception import MemeGeneratorException
+from .protection import protection_manager
+from ...permission import PermLevel, PermScene
+from ...utils.paths import cache_dir
 
 MEME_TRIGGER_KEY = "_memes_trigger"
 MEME_MSG_KEY = "_memes_msg"
@@ -75,9 +74,7 @@ def _is_superuser(session: Uninfo) -> bool:
 
 
 def _can_edit(session: Uninfo) -> bool:
-    return session.scene.is_private or bool(
-        session.member and session.member.role and session.member.role.level > 1
-    )
+    return session.scene.is_private or bool(session.member and session.member.role and session.member.role.level > 1)
 
 
 def _split_text(text: str) -> list[str]:
@@ -184,9 +181,7 @@ async def find_meme(matcher: Matcher, meme_name: str) -> MemeInfo:
             return meme
 
     chosen = found_memes[0]
-    logger.warning(
-        f"[memes] 表情别名重复，已默认选择首个结果: {meme_name} -> {chosen.key}，候选数={found_num}"
-    )
+    logger.warning(f"[memes] 表情别名重复，已默认选择首个结果: {meme_name} -> {chosen.key}，候选数={found_num}")
     return chosen
 
 
@@ -207,9 +202,7 @@ async def _download_image_from_segment(seg: MessageSegment) -> Optional[bytes]:
     return None
 
 
-async def _avatar_bytes_of(
-    matcher: Matcher, session: Uninfo, interface: QryItrface, user_id: str
-) -> Optional[bytes]:
+async def _avatar_bytes_of(matcher: Matcher, session: Uninfo, interface: QryItrface, user_id: str) -> Optional[bytes]:
     try:
         user = await interface.get_user(user_id)
     except NotImplementedError:
@@ -372,10 +365,7 @@ def _num_desc(min_num: int, max_num: int) -> str:
 
 def _can_fill_default_texts(meme: MemeInfo, texts: list[str]) -> bool:
     """判断默认文案是否足够补齐缺失文本。"""
-    return (
-        len(texts) < meme.params_type.min_texts
-        and len(meme.params_type.default_texts) >= meme.params_type.min_texts
-    )
+    return len(texts) < meme.params_type.min_texts and len(meme.params_type.default_texts) >= meme.params_type.min_texts
 
 
 async def normalize_meme_params(
@@ -388,23 +378,17 @@ async def normalize_meme_params(
     params = meme.params_type
 
     if len(images) < params.min_images or len(images) > params.max_images:
-        await matcher.finish(
-            f"图片数量不符，图片数量应为 {_num_desc(params.min_images, params.max_images)}"
-        )
+        await matcher.finish(f"图片数量不符，图片数量应为 {_num_desc(params.min_images, params.max_images)}")
 
     if len(texts) > params.max_texts:
-        await matcher.finish(
-            f"文字数量不符，文字数量应为 {_num_desc(params.min_texts, params.max_texts)}"
-        )
+        await matcher.finish(f"文字数量不符，文字数量应为 {_num_desc(params.min_texts, params.max_texts)}")
 
     if len(texts) < params.min_texts:
         if _can_fill_default_texts(meme, texts):
             default_texts = list(params.default_texts)
             texts = texts + default_texts[len(texts) : params.min_texts]
         else:
-            await matcher.finish(
-                f"文字数量不符，文字数量应为 {_num_desc(params.min_texts, params.max_texts)}"
-            )
+            await matcher.finish(f"文字数量不符，文字数量应为 {_num_desc(params.min_texts, params.max_texts)}")
 
     return texts
 
@@ -666,11 +650,7 @@ async def _info(event: Event, matcher: Matcher, arg: Message = CommandArg()):
     if args_type := meme.params_type.args_type:
         for option in args_type.parser_options:
             opt = option.option()
-            alias_text = (
-                " ".join(opt.requires)
-                + (" " if opt.requires else "")
-                + "│".join(sorted(opt.aliases, key=len))
-            )
+            alias_text = " ".join(opt.requires) + (" " if opt.requires else "") + "│".join(sorted(opt.aliases, key=len))
             args_info += f"\n  * {alias_text}{opt.separators[0]}{opt.help_text}"
 
     info = (
@@ -699,8 +679,7 @@ async def _search(matcher: Matcher, arg: Message = CommandArg()):
     if not memes:
         await matcher.finish("未找到相关表情")
     await matcher.finish(
-        f"找到 {len(memes)} 个相关表情：\n"
-        + "\n".join(f"* {m.key} ({'/'.join(m.keywords)})" for m in memes)
+        f"找到 {len(memes)} 个相关表情：\n" + "\n".join(f"* {m.key} ({'/'.join(m.keywords)})" for m in memes)
     )
 
 
@@ -816,9 +795,7 @@ async def _do_statistics(
         fmt = "%m/%d"
         humanized = "7天"
     elif typ == "week":
-        start = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(
-            days=now.weekday()
-        )
+        start = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=now.weekday())
         td = timedelta(days=1)
         fmt = "%a"
         humanized = "本周"
@@ -844,9 +821,7 @@ async def _do_statistics(
         humanized = "本年"
 
     if meme:
-        meme_times = await get_meme_generation_times(
-            session, id_type, meme_key=meme.key, time_start=start
-        )
+        meme_times = await get_meme_generation_times(session, id_type, meme_key=meme.key, time_start=start)
         meme_keys = [meme.key] * len(meme_times)
     else:
         meme_records = await get_meme_generation_records(session, id_type, time_start=start)
@@ -888,10 +863,7 @@ async def _do_statistics(
     key_counts = dict(sorted(key_counts.items(), key=lambda item: item[1]))
 
     if meme:
-        title = (
-            f"表情“{'/'.join(meme.keywords)}”{humanized}调用统计"
-            f"（总调用次数为 {key_counts.get(meme.key, 0)}）"
-        )
+        title = f"表情“{'/'.join(meme.keywords)}”{humanized}调用统计（总调用次数为 {key_counts.get(meme.key, 0)}）"
         output = await plot_duration_counts(duration_counts, title)
     else:
         title = f"{humanized}表情调用统计（总调用次数为 {sum(key_counts.values())}）"

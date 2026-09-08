@@ -21,11 +21,7 @@ def _load() -> dict[str, list[str]]:
     if not isinstance(data, dict):
         return {"disabled_groups": []}
     groups = data.get("disabled_groups")
-    return (
-        {"disabled_groups": [str(item) for item in groups]}
-        if isinstance(groups, list)
-        else {"disabled_groups": []}
-    )
+    return {"disabled_groups": [str(item) for item in groups]} if isinstance(groups, list) else {"disabled_groups": []}
 
 
 def _save(data: dict[str, list[str]]) -> None:

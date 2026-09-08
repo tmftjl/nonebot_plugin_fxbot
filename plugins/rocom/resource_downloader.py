@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-import asyncio
 import os
 import re
+import asyncio
 from pathlib import Path
 from urllib.parse import unquote, urljoin
 
-from nonebot import get_driver, logger
+from nonebot import logger, get_driver
 
+from .config import cfg_resources
 from ...utils.http import get_shared_async_client
 from ...utils.paths import data_dir
-from .config import cfg_resources
 
 RESOURCE_DIR = data_dir("rocom") / "resources"
 
@@ -66,9 +66,7 @@ async def ensure_rocom_resources(force: bool = False) -> None:
         logger.info(f"[rocom] 使用资源站 {tag} {base_url} 下载运行时资源")
         total = 0
         for endpoint, target in ENDPOINTS.items():
-            changed = await _download_endpoint(
-                client, base_url, endpoint, target, int(cfg.get("concurrency") or 12)
-            )
+            changed = await _download_endpoint(client, base_url, endpoint, target, int(cfg.get("concurrency") or 12))
             total += changed
             logger.info(f"[rocom] 资源 {endpoint} 检查完成，更新 {changed} 个文件")
         logger.info(f"[rocom] 运行时资源检查完成，更新 {total} 个文件")
@@ -103,9 +101,7 @@ async def _probe(client, tag: str, base_url: str) -> tuple[str, str] | None:
     return None
 
 
-async def _download_endpoint(
-    client, base_url: str, endpoint: str, target: Path, concurrency: int
-) -> int:
+async def _download_endpoint(client, base_url: str, endpoint: str, target: Path, concurrency: int) -> int:
     """递归下载目录索引中的文件。"""
     url = f"{base_url.rstrip('/')}/RocomUID/{endpoint.strip('/')}/"
     target.mkdir(parents=True, exist_ok=True)

@@ -10,18 +10,18 @@
 
 from __future__ import annotations
 
-import asyncio
 import time
+import asyncio
+from typing import Any, Deque, Optional
 from collections import deque
 from dataclasses import dataclass
-from typing import Any, Deque, Optional
 
 try:
     import psutil
 except ImportError:
     psutil = None  # type: ignore
 
-from nonebot import get_driver, logger
+from nonebot import logger, get_driver
 
 
 @dataclass

@@ -1,7 +1,7 @@
 """运行时配置辅助接口。"""
 
-from .manager import ConfigManager, get_manager
 from .proxy import ConfigProxy, deep_merge
+from .manager import ConfigManager, get_manager
 from .system_defaults import SYSTEM_DEFAULTS
 
 __all__ = [

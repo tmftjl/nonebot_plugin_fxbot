@@ -2,27 +2,27 @@
 
 from __future__ import annotations
 
-import asyncio
 import base64
-from collections.abc import Iterable
+import asyncio
 from io import BytesIO
+from collections.abc import Iterable
 
-from nonebot import logger
-from nonebot.adapters import Bot, Event
-from nonebot.matcher import Matcher
-from nonebot.params import RegexGroup
 from PIL import Image
+from nonebot import logger
+from nonebot.params import RegexGroup
+from nonebot.matcher import Matcher
+from nonebot.adapters import Bot, Event
 
+from .config import cfg_waves_analyze
+from ...plugin import Plugin
 from ...adapter import (
     build_message,
-    build_message_segment,
     fetch_image_bytes,
+    build_message_segment,
     image_sources_from_event_or_reply,
 )
 from ...permission import PermLevel, PermScene
-from ...plugin import Plugin
 from ...utils.http import get_shared_async_client
-from .config import cfg_waves_analyze
 
 P = Plugin(
     "useful",
@@ -46,14 +46,7 @@ waves_analyze_cmd = P.on_regex(
 
 def _build_command_str(raw_text: str) -> str:
     """清理评分服务不识别的多余字符。"""
-    return (
-        raw_text.replace("C", "")
-        .replace("c", "")
-        .replace("ost", "")
-        .replace("OST", "")
-        .replace("|", " ")
-        .strip()
-    )
+    return raw_text.replace("C", "").replace("c", "").replace("ost", "").replace("OST", "").replace("|", " ").strip()
 
 
 async def _encode_images_to_b64(images: Iterable[bytes]) -> list[str]:
@@ -93,9 +86,7 @@ async def _post_score(images_b64: list[str], command_str: str) -> tuple[bytes | 
         client = await get_shared_async_client()
         response = await client.post(api_url, headers=headers, json=payload, timeout=120.0)
         if response.status_code != 200:
-            logger.warning(
-                f"[waves_analyze] 评分服务状态异常: {response.status_code} {response.text[:200]}"
-            )
+            logger.warning(f"[waves_analyze] 评分服务状态异常: {response.status_code} {response.text[:200]}")
         response.raise_for_status()
         data = response.json()
     except Exception as exc:
@@ -112,9 +103,7 @@ async def _post_score(images_b64: list[str], command_str: str) -> tuple[bytes | 
 
 
 @waves_analyze_cmd.handle()
-async def _handle_waves_analyze(
-    matcher: Matcher, bot: Bot, event: Event, groups: tuple = RegexGroup()
-) -> None:
+async def _handle_waves_analyze(matcher: Matcher, bot: Bot, event: Event, groups: tuple = RegexGroup()) -> None:
     """处理鸣潮评分命令。"""
     command_str = str(groups[0] if groups else "").strip()
     if not command_str:
@@ -124,9 +113,7 @@ async def _handle_waves_analyze(
     if not image_sources:
         await matcher.finish("未获取到图片，请发送带图片的消息或回复/引用带图消息")
 
-    results = await asyncio.gather(
-        *[asyncio.create_task(fetch_image_bytes(source)) for source in image_sources]
-    )
+    results = await asyncio.gather(*[asyncio.create_task(fetch_image_bytes(source)) for source in image_sources])
     image_bytes = [item for item in results if item]
     if not image_bytes:
         await matcher.finish("未能读取到有效的图片数据")

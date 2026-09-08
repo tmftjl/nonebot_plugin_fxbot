@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import Depends, APIRouter
 from nonebot import get_bots
 
 from ..auth import bearer_auth

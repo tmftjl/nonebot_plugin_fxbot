@@ -2,18 +2,18 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
+from pathlib import Path
 
-from nonebot.matcher import Matcher
-from nonebot.params import RegexGroup
 from PIL import Image, ImageDraw
+from nonebot.params import RegexGroup
+from nonebot.matcher import Matcher
 
+from .config import HelpConfigRef, load_help_config, resolve_help_config
+from ...plugin import Plugin
 from ...adapter import selfBot
 from ...permission import PermLevel, PermScene
-from ...plugin import Plugin
-from ...utils.fonts import get_shared_font_path, load_font
-from .config import HelpConfigRef, load_help_config, resolve_help_config
+from ...utils.fonts import load_font, get_shared_font_path
 
 try:
     from .renderer import render_help_image
@@ -52,8 +52,7 @@ def _asset_path(config: dict[str, Any], field: str) -> Path | None:
 def _fallback_image(title: str, sub_title: str, groups_data: list[dict[str, Any]]) -> bytes:
     """帮助图兜底渲染。"""
     text = f"{title}\n{sub_title}\n\n" + "\n".join(
-        f"【{group.get('group', '')}】 "
-        + ", ".join(str(item.get("title", "")) for item in (group.get("list") or []))
+        f"【{group.get('group', '')}】 " + ", ".join(str(item.get("title", "")) for item in (group.get("list") or []))
         for group in groups_data
     )
     lines = text.split("\n")
@@ -103,9 +102,7 @@ async def _handle_help(matcher: Matcher, groups: tuple = RegexGroup()) -> None:
             Path(__file__).parent / "config.py",
         ]
         asset_files = [path for path in [background, icon] if path is not None]
-        mtimes = [
-            path.stat().st_mtime for path in [*code_files, cfg_path, *asset_files] if path.exists()
-        ]
+        mtimes = [path.stat().st_mtime for path in [*code_files, cfg_path, *asset_files] if path.exists()]
         cache_valid = cache_file.exists() and cache_file.stat().st_mtime >= max(mtimes, default=0)
     except Exception:
         cache_valid = False

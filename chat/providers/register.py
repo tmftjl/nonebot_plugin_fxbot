@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from .entities import ProviderMetadata, ProviderType
+from .entities import ProviderType, ProviderMetadata
 
 if TYPE_CHECKING:
     from .base import BaseProvider

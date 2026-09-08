@@ -6,9 +6,9 @@ from typing import Any
 
 from nonebot import logger
 
-from ...config import get_manager as get_config_manager
 from .base import BaseProvider, ChatProvider, EmbeddingProvider
-from .register import get_provider_class, provider_registry
+from ...config import get_manager as get_config_manager
+from .register import provider_registry, get_provider_class
 
 
 def _provider_configs() -> dict[str, dict[str, Any]]:
@@ -99,9 +99,7 @@ class ProviderManager:
         try:
             cls = get_provider_class(provider_type)
         except ValueError as exc:
-            raise ValueError(
-                f"Provider 类型 '{provider_type}' 未注册，请检查配置或可选 SDK 是否已安装"
-            ) from exc
+            raise ValueError(f"Provider 类型 '{provider_type}' 未注册，请检查配置或可选 SDK 是否已安装") from exc
 
         instance = cls(provider_id=name, config=config)
         logger.debug(f"[ProviderManager] 已加载: {name} (type={provider_type})")
@@ -123,11 +121,7 @@ class ProviderManager:
 
     def list_providers_by_type(self, provider_type: str = "chat") -> list[str]:
         """按能力类型列出配置中的 Provider 名称。"""
-        return [
-            name
-            for name, config in _provider_configs().items()
-            if str(config["provider_type"]) == provider_type
-        ]
+        return [name for name, config in _provider_configs().items() if str(config["provider_type"]) == provider_type]
 
     def get_api_config(self, name: str) -> dict[str, Any] | None:
         """获取指定 Provider 的配置。"""

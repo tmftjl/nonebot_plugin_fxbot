@@ -3,19 +3,19 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
-from datetime import datetime, timezone
 from typing import Any
+from datetime import datetime, timezone
+from dataclasses import dataclass
 
-from nonebot import get_bots, logger
+from nonebot import logger, get_bots
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..adapter import selfBot
-from ..config import get_manager as get_config_manager
 from ..db import with_session
 from .guard import membership_guard
 from .models import MembershipGroup, utc_now
+from ..config import get_manager as get_config_manager
 from .service import membership_service
+from ..adapter import selfBot
 
 
 @dataclass

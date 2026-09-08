@@ -1,24 +1,24 @@
-from dataclasses import dataclass
-from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Optional, Union
+from typing import Any, Union, Optional
+from datetime import datetime, timezone
+from dataclasses import dataclass
 
+from sqlmodel import select
 from sqlalchemy import ColumnElement
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlmodel import select
 
+from ...db import with_session
+from .utils import remove_timezone
+from .models import MemeGenerationRecord
 from ...adapter import (
-    BotModel,
-    SceneModel,
     Session,
+    BotModel,
+    UserModel,
+    SceneModel,
     SessionModel,
     SupportScope,
-    UserModel,
     get_session_persist_id,
 )
-from ...db import with_session
-from .models import MemeGenerationRecord
-from .utils import remove_timezone
 
 
 @dataclass
@@ -112,9 +112,7 @@ async def get_meme_generation_records(
     time_start: Optional[datetime] = None,
     time_stop: Optional[datetime] = None,
 ) -> list[MemeRecord]:
-    whereclause = filter_statement(
-        session, id_type, meme_key=meme_key, time_start=time_start, time_stop=time_stop
-    )
+    whereclause = filter_statement(session, id_type, meme_key=meme_key, time_start=time_start, time_stop=time_stop)
     statement = (
         select(MemeGenerationRecord.time, MemeGenerationRecord.meme_key)
         .where(*whereclause)
@@ -134,9 +132,7 @@ async def get_meme_generation_times(
     time_start: Optional[datetime] = None,
     time_stop: Optional[datetime] = None,
 ) -> list[datetime]:
-    whereclause = filter_statement(
-        session, id_type, meme_key=meme_key, time_start=time_start, time_stop=time_stop
-    )
+    whereclause = filter_statement(session, id_type, meme_key=meme_key, time_start=time_start, time_stop=time_stop)
     statement = (
         select(MemeGenerationRecord.time)
         .where(*whereclause)

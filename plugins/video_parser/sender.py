@@ -5,12 +5,12 @@ from __future__ import annotations
 import base64
 from pathlib import Path
 
-from nonebot.adapters import Event
 from nonebot.matcher import Matcher
+from nonebot.adapters import Event
 
-from ...adapter import selfBot
-from .config import cfg_general
 from .types import VideoResult
+from .config import cfg_general
+from ...adapter import selfBot
 
 
 def _summary(result: VideoResult) -> str:
@@ -21,9 +21,7 @@ def _summary(result: VideoResult) -> str:
     return "\n".join(lines)
 
 
-async def send_video_result(
-    matcher: Matcher, event: Event, result: VideoResult, video_path: Path
-) -> None:
+async def send_video_result(matcher: Matcher, event: Event, result: VideoResult, video_path: Path) -> None:
     """发送标题、可选封面和视频。"""
     text_seg = selfBot.build_segment("text", _summary(result))
     image_seg = (

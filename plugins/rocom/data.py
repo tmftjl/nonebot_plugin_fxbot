@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import re
-from difflib import SequenceMatcher
-from functools import lru_cache
-from pathlib import Path
+import json
 from typing import Any
+from difflib import SequenceMatcher
+from pathlib import Path
+from functools import lru_cache
 
 try:
     from rapidfuzz import fuzz, process
@@ -228,9 +228,7 @@ def _match_pet(pet: dict[str, Any], criteria: dict[str, str]) -> bool:
                 return False
         elif key == "特性":
             feature = pet.get("feature") or {}
-            if value not in str(feature.get("name") or "") and value not in str(
-                feature.get("desc") or ""
-            ):
+            if value not in str(feature.get("name") or "") and value not in str(feature.get("desc") or ""):
                 return False
         elif key == "技能":
             if not any(value in name for name in skill_names(pet)):

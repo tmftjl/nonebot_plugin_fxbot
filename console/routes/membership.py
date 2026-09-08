@@ -2,20 +2,18 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 from typing import Any
+from datetime import datetime, timezone, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import Depends, APIRouter, HTTPException
 from nonebot import get_bots
 
+from ..auth import bearer_auth
 from ...adapter import selfBot
 from ...membership.guard import membership_guard
 from ...membership.service import MembershipError, membership_service
-from ..auth import bearer_auth
 
-router = APIRouter(
-    prefix="/membership", tags=["fxbot-membership"], dependencies=[Depends(bearer_auth)]
-)
+router = APIRouter(prefix="/membership", tags=["fxbot-membership"], dependencies=[Depends(bearer_auth)])
 
 
 def _duration_unit(unit: str) -> str:
@@ -35,9 +33,7 @@ def _code_to_console(row: Any) -> dict[str, Any]:
     return {
         "code": row.code,
         "length": row.duration_value,
-        "unit": {"day": "天", "month": "月", "year": "年"}.get(
-            row.duration_unit, row.duration_unit
-        ),
+        "unit": {"day": "天", "month": "月", "year": "年"}.get(row.duration_unit, row.duration_unit),
         "max_use": row.max_use,
         "used_count": row.used_count,
         "generated_time": row.created_at.isoformat(),
@@ -99,9 +95,7 @@ async def generate_code_for_console(payload: dict[str, Any]) -> dict[str, Any]:
     """按控制台参数生成续费码。"""
     try:
         expire_days = int(payload.get("expire_days") or 0)
-        expires_at = (
-            datetime.now(timezone.utc) + timedelta(days=expire_days) if expire_days > 0 else None
-        )
+        expires_at = datetime.now(timezone.utc) + timedelta(days=expire_days) if expire_days > 0 else None
         row = await membership_service.generate_code(
             duration_value=int(payload.get("length")),
             duration_unit=_duration_unit(str(payload.get("unit"))),
@@ -135,8 +129,7 @@ async def extend_from_console(payload: dict[str, Any]) -> dict[str, Any]:
                 group_id,
                 duration_value=int(payload.get("length")),
                 duration_unit=_duration_unit(str(payload.get("unit"))),
-                operator_user_id=str(payload.get("renewer") or payload.get("renewed_by") or "")
-                or None,
+                operator_user_id=str(payload.get("renewer") or payload.get("renewed_by") or "") or None,
                 code="console",
             )
             row = result.group

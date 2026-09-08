@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from contextvars import ContextVar
 from typing import Any
+from contextvars import ContextVar
 
-from nonebot.exception import IgnoredException
 from nonebot.log import logger
+from nonebot.exception import IgnoredException
 
 
 class PlatformError(IgnoredException):
@@ -45,14 +45,10 @@ class PlatformAdapter(ABC):
         """向持久化目标发送消息。"""
 
     async def send_group_message(self, bot: Any, group_id: str, message: Any) -> Any:
-        return await self.send_message_to_target(
-            bot, {"group_id": group_id, "group_openid": group_id}, message
-        )
+        return await self.send_message_to_target(bot, {"group_id": group_id, "group_openid": group_id}, message)
 
     async def send_private_message(self, bot: Any, user_id: str, message: Any) -> Any:
-        return await self.send_message_to_target(
-            bot, {"user_id": user_id, "user_openid": user_id}, message
-        )
+        return await self.send_message_to_target(bot, {"user_id": user_id, "user_openid": user_id}, message)
 
     async def send_text_to_target(self, bot: Any, target: dict[str, Any], text: str) -> Any:
         message = self.build_message(bot, [self.build_segment(bot, "text", text)])
@@ -128,9 +124,7 @@ class PlatformAdapter(ABC):
     async def get_group_member(self, bot: Any, group_id: str, user_id: str) -> Any:
         return await self._unsupported("获取成员信息")
 
-    async def get_group_member_name(
-        self, bot: Any, group_id: str, user_id: str, event: Any = None
-    ) -> str:
+    async def get_group_member_name(self, bot: Any, group_id: str, user_id: str, event: Any = None) -> str:
         """获取群成员昵称。"""
         member = await self.get_group_member(bot, group_id, user_id)
         if not isinstance(member, dict):
@@ -165,9 +159,7 @@ class PlatformAdapter(ABC):
     async def ban(self, bot: Any, group_id: str, user_id: str, duration: int) -> Any:
         return await self._unsupported("禁言")
 
-    async def kick(
-        self, bot: Any, group_id: str, user_id: str, reject_add_request: bool = False
-    ) -> Any:
+    async def kick(self, bot: Any, group_id: str, user_id: str, reject_add_request: bool = False) -> Any:
         return await self._unsupported("踢人")
 
     async def whole_ban(self, bot: Any, group_id: str, enable: bool) -> Any:
@@ -219,9 +211,7 @@ class PlatformBot:
         return self.adapter.build_segment(self.raw, segment_type, data)
 
     def build_message(self, *segments: Any) -> Any:
-        return self.adapter.build_message(
-            self.raw, [segment for segment in segments if segment is not None]
-        )
+        return self.adapter.build_message(self.raw, [segment for segment in segments if segment is not None])
 
     def message_segment_class(self) -> type | None:
         return self.adapter.message_segment_class()
@@ -251,12 +241,8 @@ class PlatformBot:
     async def send_text_to_target(self, target: dict[str, Any], text: str):
         return await self.adapter.send_text_to_target(self.raw, target, text)
 
-    async def send_forward_messages(
-        self, event: Any, messages: list[Any], *, nickname: str = "FxBot"
-    ) -> bool:
-        return await self.adapter.send_forward_messages(
-            self.raw, event, messages, nickname=nickname
-        )
+    async def send_forward_messages(self, event: Any, messages: list[Any], *, nickname: str = "FxBot") -> bool:
+        return await self.adapter.send_forward_messages(self.raw, event, messages, nickname=nickname)
 
     async def get_replied_message(self, message_id: int) -> Any:
         return await self.adapter.get_replied_message(self.raw, message_id)
@@ -274,9 +260,7 @@ class PlatformBot:
         group_id: str | None = None,
         user_id: str | None = None,
     ):
-        return await self.adapter.delete_message(
-            self.raw, message_id, group_id=group_id, user_id=user_id
-        )
+        return await self.adapter.delete_message(self.raw, message_id, group_id=group_id, user_id=user_id)
 
     async def get_message(self, message_id: int):
         return await self.adapter.get_message(self.raw, message_id)
@@ -288,9 +272,7 @@ class PlatformBot:
         return await self.adapter.get_group_member(self.raw, str(group_id), str(user_id))
 
     async def get_group_member_name(self, group_id: str, user_id: str, event: Any = None) -> str:
-        return await self.adapter.get_group_member_name(
-            self.raw, str(group_id), str(user_id), event
-        )
+        return await self.adapter.get_group_member_name(self.raw, str(group_id), str(user_id), event)
 
     async def get_group_member_role(self, group_id: str, user_id: str):
         return await self.adapter.get_group_member_role(self.raw, str(group_id), str(user_id))

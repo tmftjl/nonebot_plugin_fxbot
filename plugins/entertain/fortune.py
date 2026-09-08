@@ -2,27 +2,26 @@
 
 from __future__ import annotations
 
-import base64
 import io
 import json
 import math
+import base64
 import random
-from datetime import datetime
-from pathlib import Path
 from typing import Any
+from pathlib import Path
+from datetime import datetime
 
+from PIL import Image, ImageOps, ImageDraw
 from nonebot import get_driver
 from nonebot.matcher import Matcher
-from PIL import Image, ImageDraw, ImageOps
 
-from ...adapter import selfBot
-from ...adapter import Uninfo
-from ...permission import PermLevel, PermScene
-from ...plugin import Plugin
-from ...utils.fonts import get_shared_font_path, load_font
-from ...utils.http import get_shared_async_client
-from ...utils.paths import data_dir
 from .config import cfg_api_urls
+from ...plugin import Plugin
+from ...adapter import Uninfo, selfBot
+from ...permission import PermLevel, PermScene
+from ...utils.http import get_shared_async_client
+from ...utils.fonts import load_font, get_shared_font_path
+from ...utils.paths import data_dir
 
 RESOURCE_DIR = Path(__file__).parent / "resource"
 DATA_DIR = data_dir("entertain")
@@ -77,9 +76,7 @@ def _load_user_fortunes() -> None:
 def _save_user_fortunes() -> None:
     """保存用户运势缓存。"""
     USER_DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
-    USER_DATA_FILE.write_text(
-        json.dumps(_USER_FORTUNES, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    USER_DATA_FILE.write_text(json.dumps(_USER_FORTUNES, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 @get_driver().on_startup
@@ -264,5 +261,7 @@ async def _handle_fortune(matcher: Matcher, session: Uninfo) -> None:
     except Exception as exc:
         await matcher.finish(f"生成失败：{exc}")
     background = await _get_background_image()
-    image = _generate_fortune_canvas(session.user.nick or session.user.name or f"用户{user_id}", data, background=background)
+    image = _generate_fortune_canvas(
+        session.user.nick or session.user.name or f"用户{user_id}", data, background=background
+    )
     await matcher.finish(selfBot.build_message(selfBot.build_segment("image", image)))

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import time
-from pathlib import Path
 from typing import Any
+from pathlib import Path
 
 from nonebot.adapters import Bot
 from nonebot.adapters.onebot.v11 import Bot as OneBotV11Bot
@@ -82,13 +82,9 @@ class OneBotV11MessageAdapter(PlatformAdapter):
 
     async def send_message_to_target(self, bot: Bot, target: dict[str, Any], message: Any) -> Any:
         if target.get("group_id") is not None:
-            return await self._api(
-                bot, "send_group_msg", group_id=int(target["group_id"]), message=message
-            )
+            return await self._api(bot, "send_group_msg", group_id=int(target["group_id"]), message=message)
         if target.get("user_id") is not None:
-            return await self._api(
-                bot, "send_private_msg", user_id=int(target["user_id"]), message=message
-            )
+            return await self._api(bot, "send_private_msg", user_id=int(target["user_id"]), message=message)
         raise RuntimeError("无法识别消息目标")
 
     async def _api(self, bot: Bot, name: str, **kwargs: Any) -> Any:
@@ -107,9 +103,7 @@ class OneBotV11MessageAdapter(PlatformAdapter):
         return await self._api(bot, "get_group_info", group_id=int(group_id))
 
     async def get_group_member(self, bot, group_id, user_id):
-        return await self._api(
-            bot, "get_group_member_info", group_id=int(group_id), user_id=int(user_id)
-        )
+        return await self._api(bot, "get_group_member_info", group_id=int(group_id), user_id=int(user_id))
 
     async def get_group_member_name(self, bot, group_id, user_id, event=None):
         member = await self.get_group_member(bot, group_id, user_id)
@@ -210,8 +204,7 @@ class OneBotV11MessageAdapter(PlatformAdapter):
         user_id_raw = str(getattr(bot, "self_id", "0") or "0")
         user_id: int | str = int(user_id_raw) if user_id_raw.isdigit() else user_id_raw
         nodes = [
-            MessageSegment.node_custom(user_id=user_id, nickname=nickname, content=message)
-            for message in messages
+            MessageSegment.node_custom(user_id=user_id, nickname=nickname, content=message) for message in messages
         ]
 
         group_id = getattr(event, "group_id", None)
@@ -221,8 +214,6 @@ class OneBotV11MessageAdapter(PlatformAdapter):
 
         user_id_value = getattr(event, "user_id", None)
         if event_is_private(event) and user_id_value is not None:
-            await self._api(
-                bot, "send_private_forward_msg", user_id=int(user_id_value), messages=nodes
-            )
+            await self._api(bot, "send_private_forward_msg", user_id=int(user_id_value), messages=nodes)
             return True
         return False

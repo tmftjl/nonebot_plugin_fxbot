@@ -39,12 +39,3 @@ include = ["nonebot_plugin_fxbot*"]
 
 [tool.setuptools.package-data]
 nonebot_plugin_fxbot = ["resources/**/*"]
-
-[tool.ruff]
-line-length = 100
-target-version = "py310"
-
-[tool.ruff.format]
-quote-style = "double"
-indent-style = "space"
-line-ending = "auto"

@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import base64
-from pathlib import Path
 from re import Match, Pattern
 from typing import Any
+from pathlib import Path
 
 from .bot import PlatformAdapter
 from .events import extract_message_target
-from .registry import adapter_name, get_platform_adapter, register_adapter
+from .registry import adapter_name, register_adapter, get_platform_adapter
 
 MessageAdapter = PlatformAdapter
 register_message_adapter = register_adapter
@@ -196,11 +196,7 @@ def _replace_message_segments(message: Any, segments: list[Any]) -> bool:
 
 def move_non_text_segments_to_end(value: Any) -> bool:
     """清理文本边界空白，并把所有非文本消息段后置。"""
-    message = (
-        event_message(value)
-        if hasattr(value, "get_message") or hasattr(value, "message")
-        else value
-    )
+    message = event_message(value) if hasattr(value, "get_message") or hasattr(value, "message") else value
     if message is None:
         return False
 
@@ -334,9 +330,7 @@ async def send_message_to_target(bot: Any, target: dict[str, Any], message: Any)
     return await require_message_adapter(bot).send_message_to_target(bot, target, message)
 
 
-async def send_forward_messages(
-    bot: Any, event: Any, messages: list[Any], *, nickname: str = "FxBot"
-) -> bool:
+async def send_forward_messages(bot: Any, event: Any, messages: list[Any], *, nickname: str = "FxBot") -> bool:
     """通过当前适配器发送一组转发消息。"""
     adapter = get_message_adapter(bot)
     if adapter is None:
@@ -344,9 +338,7 @@ async def send_forward_messages(
     return await adapter.send_forward_messages(bot, event, messages, nickname=nickname)
 
 
-async def send_forward_texts(
-    bot: Any, event: Any, texts: list[str], *, nickname: str = "FxBot"
-) -> bool:
+async def send_forward_texts(bot: Any, event: Any, texts: list[str], *, nickname: str = "FxBot") -> bool:
     """尝试把多段文本作为 OneBot V11 合并转发发送。"""
     messages = [build_message(bot, build_message_segment(bot, "text", text)) for text in texts]
     return await send_forward_messages(bot, event, messages, nickname=nickname)

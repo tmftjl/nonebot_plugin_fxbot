@@ -2,22 +2,21 @@
 
 from __future__ import annotations
 
-import base64
-import json
 import re
-import shutil
+import json
 import uuid
-from pathlib import Path
+import base64
+import shutil
 from typing import Any
+from pathlib import Path
 
 from nonebot import on_notice
-from nonebot.adapters import Bot, Event
 from nonebot.matcher import Matcher
+from nonebot.adapters import Bot, Event
 
-from ...adapter import build_message, build_message_segment, selfBot
-from ...adapter import Uninfo
-from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
+from ...adapter import Uninfo, selfBot, build_message, build_message_segment
+from ...permission import PermLevel, PermScene
 from ...utils.http import get_shared_async_client
 from ...utils.paths import data_dir
 
@@ -152,9 +151,7 @@ def _has_valid_content(segments: list[Any]) -> bool:
     return False
 
 
-async def _serialize_text_and_images(
-    bot: Bot, segments: list[Any], group_key: str
-) -> tuple[str, dict[str, int]]:
+async def _serialize_text_and_images(bot: Bot, segments: list[Any], group_key: str) -> tuple[str, dict[str, int]]:
     """序列化文本和图片到欢迎语存储。"""
     _reset_group_img_dir(group_key)
     directory = _group_img_dir(group_key)
@@ -249,9 +246,7 @@ disable_welcome_cmd = P.on_regex(
 
 
 @set_welcome_cmd.handle()
-async def _handle_set_welcome(
-    matcher: Matcher, bot: Bot, event: Event, session: Uninfo
-) -> None:
+async def _handle_set_welcome(matcher: Matcher, bot: Bot, event: Event, session: Uninfo) -> None:
     """设置欢迎语。"""
     group_key = session.scene.id if session.scene.is_group else None
     if not group_key:
@@ -273,9 +268,7 @@ async def _handle_set_welcome(
 
 
 @show_welcome_cmd.handle()
-async def _handle_show_welcome(
-    matcher: Matcher, bot: Bot, event: Event, session: Uninfo
-) -> None:
+async def _handle_show_welcome(matcher: Matcher, bot: Bot, event: Event, session: Uninfo) -> None:
     """查看欢迎语。"""
     group_key = session.scene.id if session.scene.is_group else None
     if not group_key:

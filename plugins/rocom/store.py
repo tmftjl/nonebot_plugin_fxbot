@@ -43,16 +43,12 @@ def get_subscriptions() -> list[dict[str, Any]]:
     return subs if isinstance(subs, list) else []
 
 
-def upsert_subscription(
-    sub_type: str, sub_key: str, target: dict[str, Any], operator_id: str
-) -> None:
+def upsert_subscription(sub_type: str, sub_key: str, target: dict[str, Any], operator_id: str) -> None:
     """新增或更新订阅（群或私聊）。"""
     state = load_state()
     key_field = "group_key" if sub_type == "group" else "user_key"
     subs = [
-        item
-        for item in get_subscriptions()
-        if not (item.get("type") == sub_type and item.get(key_field) == sub_key)
+        item for item in get_subscriptions() if not (item.get("type") == sub_type and item.get(key_field) == sub_key)
     ]
     entry: dict[str, Any] = {
         "type": sub_type,
@@ -70,11 +66,7 @@ def remove_subscription(sub_type: str, sub_key: str) -> bool:
     state = load_state()
     old = get_subscriptions()
     key_field = "group_key" if sub_type == "group" else "user_key"
-    new = [
-        item
-        for item in old
-        if not (item.get("type") == sub_type and item.get(key_field) == sub_key)
-    ]
+    new = [item for item in old if not (item.get("type") == sub_type and item.get(key_field) == sub_key)]
     state["subscriptions"] = new
     save_state(state)
     return len(new) != len(old)

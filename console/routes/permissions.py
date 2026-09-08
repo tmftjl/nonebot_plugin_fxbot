@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import Depends, APIRouter, HTTPException
 
-from ...permission import get_storage
 from ..auth import bearer_auth
+from ...permission import get_storage
 
 router = APIRouter(
     prefix="/permissions",

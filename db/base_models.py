@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
+from typing import Any, TypeVar, Callable, Awaitable, ParamSpec, Concatenate
 from functools import wraps
-from typing import Any, Awaitable, Callable, Concatenate, ParamSpec, TypeVar
 
 from nonebot import logger
+from sqlmodel import Field, SQLModel, select
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -15,7 +16,6 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
-from sqlmodel import Field, SQLModel, select
 
 from ..utils.paths import database_path
 
@@ -94,9 +94,7 @@ async def init_database() -> None:
             logger.info("[DB] SQLite initialized successfully")
         except Exception as e:
             logger.exception(f"[DB] Initialization failed: {e}")
-            raise ValueError(
-                "[DB] Initialization failed, please check environment and dependencies"
-            )
+            raise ValueError("[DB] Initialization failed, please check environment and dependencies")
 
 
 def is_initialized() -> bool:

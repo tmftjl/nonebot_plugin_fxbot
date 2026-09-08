@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import asyncio
 
-from nonebot import get_bots, get_driver, logger
+from nonebot import logger, get_bots, get_driver
 
-from ...adapter import build_message, build_message_segment, send_message_to_target
+from .store import get_subscriptions, get_last_signature, set_last_signature
 from .client import SHANGHAI_TZ, fetch_merchant_snapshot
 from .renderer import render_merchant_image
-from .store import get_last_signature, get_subscriptions, set_last_signature
+from ...adapter import build_message, build_message_segment, send_message_to_target
 
 _startup_hook_registered = False
 MERCHANT_RETRY_TIMES = 20

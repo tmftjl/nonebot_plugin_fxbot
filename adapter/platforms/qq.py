@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-import base64
 import time
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
+import base64
 from typing import Any
+from pathlib import Path
+from datetime import datetime, timezone, timedelta
 
 from nonebot.adapters import Bot
-from nonebot.adapters.qq import Bot as QQBot
-from nonebot.adapters.qq import Message, MessageSegment
+from nonebot.adapters.qq import Bot as QQBot, Message, MessageSegment
 from nonebot.adapters.qq.event import GroupMemberAddEvent
 from nonebot.adapters.qq.models import SetMemberMuteState
 
@@ -66,9 +65,7 @@ class QQOfficialMessageAdapter(PlatformAdapter):
             if isinstance(data, str) and data.startswith(("http://", "https://")):
                 return MessageSegment.video(data)
             if not hasattr(MessageSegment, "file_video"):
-                raise ValueError(
-                    "当前 QQ 官方适配器版本不支持本地视频发送，请升级 nonebot-adapter-qq"
-                )
+                raise ValueError("当前 QQ 官方适配器版本不支持本地视频发送，请升级 nonebot-adapter-qq")
             if isinstance(data, str) and data.startswith("base64://"):
                 return MessageSegment.file_video(base64.b64decode(data[9:]))
             if isinstance(data, Path):
@@ -87,9 +84,7 @@ class QQOfficialMessageAdapter(PlatformAdapter):
 
     async def send_message_to_target(self, bot: Bot, target: dict[str, Any], message: Any) -> Any:
         if target.get("group_openid") is not None:
-            return await bot.send_to_group(
-                group_openid=str(target["group_openid"]), message=message
-            )
+            return await bot.send_to_group(group_openid=str(target["group_openid"]), message=message)
         if target.get("user_openid") is not None:
             return await bot.send_to_c2c(openid=str(target["user_openid"]), message=message)
         raise RuntimeError("无法识别消息目标")
@@ -102,13 +97,9 @@ class QQOfficialMessageAdapter(PlatformAdapter):
 
     async def delete_message(self, bot, message_id, *, group_id=None, user_id=None):
         if group_id is not None:
-            return await bot.delete_group_message(
-                group_openid=str(group_id), message_id=str(message_id)
-            )
+            return await bot.delete_group_message(group_openid=str(group_id), message_id=str(message_id))
         if user_id is not None:
-            return await bot.delete_c2c_message(
-                openid=str(user_id), message_id=str(message_id)
-            )
+            return await bot.delete_c2c_message(openid=str(user_id), message_id=str(message_id))
         raise UnsupportedCapability("撤回 QQ 消息时必须提供群 ID 或用户 OpenID")
 
     async def send_event(self, bot: Bot, event: Any, message: Any) -> Any:
@@ -118,9 +109,7 @@ class QQOfficialMessageAdapter(PlatformAdapter):
                 return result
         return await bot.send(event, message)
 
-    async def _send_group_member_add_message(
-        self, bot: Bot, event: GroupMemberAddEvent, message: Any
-    ) -> Any:
+    async def _send_group_member_add_message(self, bot: Bot, event: GroupMemberAddEvent, message: Any) -> Any:
         parts = self._split_group_member_add_message(event, message)
         if parts is None:
             return None
@@ -132,9 +121,7 @@ class QQOfficialMessageAdapter(PlatformAdapter):
             result = await bot.send(event, Message([image_segment]))
         return result
 
-    def _split_group_member_add_message(
-        self, event: GroupMemberAddEvent, message: Any
-    ) -> tuple[str, list[Any]] | None:
+    def _split_group_member_add_message(self, event: GroupMemberAddEvent, message: Any) -> tuple[str, list[Any]] | None:
         msg = Message(message)
         if not msg or msg[0].type != "mention_user":
             return None
@@ -196,8 +183,7 @@ class QQOfficialMessageAdapter(PlatformAdapter):
 
     async def set_group_members_mute(self, bot, group_id, members):
         states = [
-            member if isinstance(member, SetMemberMuteState) else SetMemberMuteState(**member)
-            for member in members
+            member if isinstance(member, SetMemberMuteState) else SetMemberMuteState(**member) for member in members
         ]
         return await bot.set_group_members_mute(group_id=str(group_id), members=states)
 

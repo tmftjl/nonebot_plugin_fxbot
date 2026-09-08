@@ -2,10 +2,10 @@
 
 from .builder import (
     Plugin,
-    get_command_display_names,
+    set_plugin_display_name,
     get_plugin_display_names,
     set_command_display_name,
-    set_plugin_display_name,
+    get_command_display_names,
 )
 
 __all__ = [

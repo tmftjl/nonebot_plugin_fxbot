@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import secrets
-from typing import Any
 
-from fastapi import HTTPException, Request, status
+from fastapi import Request, HTTPException, status
 
-from ..config import SYSTEM_DEFAULTS
-from ..config import get_manager as get_config_manager
+from ..config import SYSTEM_DEFAULTS, get_manager as get_config_manager
 
 _TOKEN_BYTES = 32
 _MIN_TOKEN_LENGTH = 6

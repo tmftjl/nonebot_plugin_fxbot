@@ -9,7 +9,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-from ...utils.fonts import get_shared_font_path, load_font
+from ...utils.fonts import load_font, get_shared_font_path
 
 try:
     import emoji
@@ -36,9 +36,7 @@ def create_image(avatar: bytes, reply: list[str]) -> bytes:
     temp_img = Image.new("RGBA", (1, 1))
     temp_draw = ImageDraw.Draw(temp_img)
     if emoji is not None:
-        measure_text = "".join(
-            "一" if getattr(emoji, "is_emoji", None) and emoji.is_emoji(ch) else ch for ch in text
-        )
+        measure_text = "".join("一" if getattr(emoji, "is_emoji", None) and emoji.is_emoji(ch) else ch for ch in text)
     else:
         measure_text = text
     text_bbox = temp_draw.textbbox((0, 0), measure_text, font=FONT)
@@ -61,9 +59,7 @@ def create_image(avatar: bytes, reply: list[str]) -> bytes:
 
     mask = Image.new("L", (avatar_image.width, avatar_image.height), 0)
     mask_draw = ImageDraw.Draw(mask)
-    mask_draw.rounded_rectangle(
-        [(0, 0), (avatar_image.width, avatar_image.height)], CORNER_RADIUS, fill=255
-    )
+    mask_draw.rounded_rectangle([(0, 0), (avatar_image.width, avatar_image.height)], CORNER_RADIUS, fill=255)
     avatar_image.putalpha(mask)
     image.paste(avatar_image, (0, (image_height - avatar_image.height) // 2), mask)
     _draw_multi(image, text, avatar_image.width + TEXT_PADDING, TEXT_PADDING)

@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncGenerator
 from typing import Any
+from collections.abc import AsyncGenerator
 
-from anthropic import AsyncAnthropic
 from nonebot import logger
+from anthropic import AsyncAnthropic
 
 from ..base import ChatProvider
 from ..entities import LLMResponse
@@ -148,9 +148,7 @@ class AnthropicProvider(ChatProvider):
                         "type": "function",
                         "function": {
                             "name": block.name,
-                            "arguments": json.dumps(block.input)
-                            if isinstance(block.input, dict)
-                            else str(block.input),
+                            "arguments": json.dumps(block.input) if isinstance(block.input, dict) else str(block.input),
                         },
                     }
                 )

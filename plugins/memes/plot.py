@@ -2,9 +2,9 @@ from io import BytesIO
 
 import matplotlib
 from matplotlib import pyplot as plt
+from nonebot.utils import run_sync
 from matplotlib.axes import Axes
 from matplotlib.ticker import MaxNLocator
-from nonebot.utils import run_sync
 
 from ...utils.fonts import get_matplotlib_font
 
@@ -17,9 +17,7 @@ if _font_family:
 
 
 @run_sync
-def plot_meme_and_duration_counts(
-    meme_counts: dict[str, int], duration_counts: dict[str, int], title: str
-) -> bytes:
+def plot_meme_and_duration_counts(meme_counts: dict[str, int], duration_counts: dict[str, int], title: str) -> bytes:
     up_x = list(meme_counts.keys())
     up_y = list(meme_counts.values())
     low_x = list(duration_counts.keys())

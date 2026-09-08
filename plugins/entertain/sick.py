@@ -4,12 +4,11 @@ from __future__ import annotations
 
 from nonebot.matcher import Matcher
 
-from ...adapter import selfBot
-from ...adapter import Uninfo
-from ...permission import PermLevel, PermScene
-from ...plugin import Plugin
-from ...utils.http import get_shared_async_client
 from .config import cfg_api_urls
+from ...plugin import Plugin
+from ...adapter import Uninfo, selfBot
+from ...permission import PermLevel, PermScene
+from ...utils.http import get_shared_async_client
 
 P = Plugin(
     "entertain",

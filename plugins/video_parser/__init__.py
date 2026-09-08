@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from nonebot.plugin import PluginMetadata
 
-from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
+from ...permission import PermLevel, PermScene
 
 __plugin_meta__ = PluginMetadata(
     name="视频解析",
@@ -27,7 +27,6 @@ P = Plugin(
     scene=PermScene.ALL,
 )
 
-from . import config as config
-from . import matcher as matcher
+from . import config as config, matcher as matcher  # noqa: E402
 
 __all__ = ["P"]

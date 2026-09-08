@@ -8,9 +8,9 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-from ...utils.fonts import load_font
-from ...utils.http import get_shared_async_client
 from .client import MerchantProduct, MerchantSnapshot
+from ...utils.http import get_shared_async_client
+from ...utils.fonts import load_font
 
 RESOURCE_DIR = Path(__file__).parent / "resources"
 TEXTURE_DIR = RESOURCE_DIR / "merchant"

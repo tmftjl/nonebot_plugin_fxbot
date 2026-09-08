@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import Depends, APIRouter, HTTPException
 
-from ...chat.personas import delete_persona, list_personas, save_persona_text
-from ...config import get_manager
-from ...plugin.builder import get_command_display_names, get_plugin_display_names
-from ...utils.http import get_shared_async_client
 from ..auth import bearer_auth
+from ...config import get_manager
+from ...utils.http import get_shared_async_client
+from ...chat.personas import list_personas, delete_persona, save_persona_text
+from ...plugin.builder import get_plugin_display_names, get_command_display_names
 
 router = APIRouter(tags=["fxbot-meta"], dependencies=[Depends(bearer_auth)])
 

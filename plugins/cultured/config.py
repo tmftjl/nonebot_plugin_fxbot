@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import json
 import random
-from pathlib import Path
 from typing import Any
+from pathlib import Path
 
 from nonebot import logger
 
 from ...config import get_manager
-from ...utils.paths import data_dir
 from .ui_schema import DEFAULTS
+from ...utils.paths import data_dir
 
 PLUGIN_DIR = Path(__file__).parent
 COMMANDS_PATH = PLUGIN_DIR / "commands.json"
@@ -38,9 +38,7 @@ def face_list() -> list[str]:
     if not POKE_DIR.exists():
         return []
     try:
-        return sorted(
-            {path.name for path in POKE_DIR.iterdir() if path.is_dir() and path.name != ".git"}
-        )
+        return sorted({path.name for path in POKE_DIR.iterdir() if path.is_dir() and path.name != ".git"})
     except Exception:
         logger.opt(exception=True).warning("[Cultured] 读取图库目录失败")
         return []

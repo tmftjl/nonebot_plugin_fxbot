@@ -5,30 +5,30 @@ from __future__ import annotations
 import json
 
 import httpx
+from nonebot.log import logger
+from nonebot.rule import Rule
+from nonebot.params import RegexGroup
+from nonebot.typing import T_State
+from nonebot.matcher import Matcher
 from nonebot.adapters import Event
 from nonebot.exception import MatcherException
-from nonebot.log import logger
-from nonebot.matcher import Matcher
-from nonebot.params import RegexGroup
 from nonebot.permission import SUPERUSER
-from nonebot.rule import Rule
-from nonebot.typing import T_State
 
-from ...adapter import Uninfo, event_group_id, selfBot
-from ...permission import PermLevel, PermScene
 from . import P
+from .state import is_group_enabled, set_group_enabled
 from .config import is_global_enabled, set_global_enabled
+from .sender import send_image_result, send_video_result
+from .parsers import ParseError, find_url, parse_url, can_parse_url
+from ...adapter import Uninfo, selfBot, event_group_id
 from .downloader import (
     DownloadError,
+    download_video,
+    download_images,
+    create_download_dir,
     cleanup_download_dir,
     cleanup_legacy_cache,
-    create_download_dir,
-    download_images,
-    download_video,
 )
-from .parsers import ParseError, can_parse_url, find_url, parse_url
-from .sender import send_image_result, send_video_result
-from .state import is_group_enabled, set_group_enabled
+from ...permission import PermLevel, PermScene
 
 STATE_URL_KEY = "video_parser_url"
 
@@ -49,9 +49,7 @@ async def _recall_processing_message(sent: object, session: Uninfo) -> None:
     """解析成功后撤回处理中提示，且不让撤回失败影响结果。"""
     message_id = _sent_message_id(sent)
     if message_id is None:
-        logger.warning(
-            f"[video_parser] 处理中提示发送结果未包含消息 ID，无法撤回: {type(sent).__name__}"
-        )
+        logger.warning(f"[video_parser] 处理中提示发送结果未包含消息 ID，无法撤回: {type(sent).__name__}")
         return
     try:
         if session.scene.is_group:
@@ -157,9 +155,7 @@ bili_login_cmd = P.on_regex(
 
 
 @video_matcher.handle()
-async def _handle_video(
-    matcher: Matcher, event: Event, session: Uninfo, state: T_State
-) -> None:
+async def _handle_video(matcher: Matcher, event: Event, session: Uninfo, state: T_State) -> None:
     """处理视频解析。"""
     url = str(state.get(STATE_URL_KEY) or "")
     if not can_parse_url(url):
@@ -191,9 +187,7 @@ async def _handle_video(
 
 
 @group_toggle_cmd.handle()
-async def _handle_group_toggle(
-    matcher: Matcher, session: Uninfo, groups: tuple = RegexGroup()
-) -> None:
+async def _handle_group_toggle(matcher: Matcher, session: Uninfo, groups: tuple = RegexGroup()) -> None:
     """处理本群解析开关。"""
     group_id = session.scene.id if session.scene.is_group else None
     if not group_id:
@@ -214,7 +208,7 @@ async def _handle_global_toggle(matcher: Matcher, groups: tuple = RegexGroup()) 
 @bili_login_cmd.handle()
 async def _handle_bili_login(matcher: Matcher) -> None:
     """处理 B 站扫码登录。"""
-    from .parsers.bilibili import create_qrcode, poll_qrcode
+    from .parsers.bilibili import poll_qrcode, create_qrcode
 
     try:
         image = await create_qrcode()

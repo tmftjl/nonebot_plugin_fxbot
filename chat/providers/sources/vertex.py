@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncGenerator
 from typing import Any
+from collections.abc import AsyncGenerator
 
 import httpx
 from nonebot import logger
@@ -151,10 +151,7 @@ class VertexAIProvider(ChatProvider):
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            logger.error(
-                f"[{self.provider_id}] HTTP 错误: {exc.response.status_code} | "
-                f"response={exc.response.text}"
-            )
+            logger.error(f"[{self.provider_id}] HTTP 错误: {exc.response.status_code} | response={exc.response.text}")
             raise
         except Exception as exc:
             logger.error(f"[{self.provider_id}] Chat 请求失败: {exc}")

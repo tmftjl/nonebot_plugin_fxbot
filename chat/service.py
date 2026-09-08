@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 import json
-from typing import Any
 
-from nonebot import logger
-
+from .tools import ToolContext, ToolRuntime, execute_tool, default_registry
+from .types import ChatRequest, ChatResponse
 from ..config import get_manager as get_config_manager
+from .session import ChatSessionStore, default_session_store
 from .personas import get_persona_text
 from .providers import provider_manager
-from .session import ChatSessionStore, default_session_store
-from .tools import ToolContext, ToolRuntime, default_registry, execute_tool
-from .types import ChatRequest, ChatResponse
 
 
 class ChatService:
@@ -21,9 +18,7 @@ class ChatService:
     def __init__(self, session_store: ChatSessionStore = default_session_store) -> None:
         self.session_store = session_store
 
-    async def process(
-        self, request: ChatRequest, runtime: ToolRuntime | None = None
-    ) -> ChatResponse:
+    async def process(self, request: ChatRequest, runtime: ToolRuntime | None = None) -> ChatResponse:
         """处理一次对话请求。"""
         chat_cfg = get_config_manager().get_system()["chat"]
         self.session_store.max_messages = int(chat_cfg["max_history"])

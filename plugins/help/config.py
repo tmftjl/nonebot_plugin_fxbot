@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
+from pathlib import Path
+from dataclasses import dataclass
 
 RES_DIR = Path(__file__).parent / "resources"
 CFG_DIR = RES_DIR / "help_config"

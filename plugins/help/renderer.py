@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-import asyncio
-import base64
 import io
-from pathlib import Path
+import base64
+import asyncio
 from typing import Any
+from pathlib import Path
 
-from nonebot import get_driver, logger
 from PIL import Image, ImageDraw
+from nonebot import logger, get_driver
 
-from ...utils.fonts import get_shared_font_path, load_font
+from ...utils.fonts import load_font, get_shared_font_path
 
 RES_DIR = Path(__file__).parent / "resources"
 _PW = None
@@ -97,9 +97,7 @@ def _build_html(
         return f"<div class='cont-box'><div class='help-group'>{group.get('group', '')}</div>{table}</div>"
 
     bg_uri = _data_uri(background)
-    footer_text = (
-        footer if footer and str(footer).strip() else "Created by dggb | Rendered by Playwright"
-    )
+    footer_text = footer if footer and str(footer).strip() else "Created by dggb | Rendered by Playwright"
     return f"""
     <!doctype html>
     <html>
@@ -182,9 +180,7 @@ async def render_help_image(
                 element = await page.query_selector(".container")
                 if element:
                     return await asyncio.wait_for(element.screenshot(type="png"), timeout=15.0)
-                return await asyncio.wait_for(
-                    page.screenshot(type="png", full_page=True), timeout=15.0
-                )
+                return await asyncio.wait_for(page.screenshot(type="png", full_page=True), timeout=15.0)
             finally:
                 await page.close()
     except Exception as exc:

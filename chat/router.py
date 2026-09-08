@@ -5,16 +5,16 @@ from __future__ import annotations
 from typing import Any
 
 from nonebot import logger, on_message
-from nonebot.adapters import Bot, Event
-from nonebot.matcher import Matcher
 from nonebot.rule import Rule
+from nonebot.matcher import Matcher
+from nonebot.adapters import Bot, Event
 
-from ..adapter import event_group_id, event_is_tome
 from ..config import get_manager as get_config_manager
-from ..permission.message_policy import should_process_fxbot_message
-from .message_adapter import adapt_message_event
 from .service import chat_service
+from ..adapter import event_is_tome, event_group_id
 from .tool_runtime import default_runtime_factory
+from .message_adapter import adapt_message_event
+from ..permission.message_policy import should_process_fxbot_message
 
 
 def _plain_text(event: Any) -> str:

@@ -35,9 +35,7 @@ async def get_text_with_browser_fallback(
     """获取文本响应，传输层失败时使用浏览器 TLS 指纹重试。"""
     try:
         client = await get_shared_async_client()
-        response = await client.get(
-            url, timeout=timeout, follow_redirects=follow_redirects, headers=headers
-        )
+        response = await client.get(url, timeout=timeout, follow_redirects=follow_redirects, headers=headers)
         response.raise_for_status()
         return response.text
     except httpx.TransportError as exc:

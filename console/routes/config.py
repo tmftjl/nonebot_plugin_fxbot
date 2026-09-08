@@ -5,12 +5,12 @@ from __future__ import annotations
 import importlib
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import Depends, APIRouter, HTTPException
 from nonebot import logger
 
+from ..auth import bearer_auth
 from ...config import SYSTEM_DEFAULTS, get_manager
 from ...utils.paths import built_in_plugins_dir
-from ..auth import bearer_auth
 
 router = APIRouter(prefix="/config", tags=["fxbot-config"], dependencies=[Depends(bearer_auth)])
 

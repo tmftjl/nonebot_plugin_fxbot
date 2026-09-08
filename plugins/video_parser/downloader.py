@@ -2,19 +2,19 @@
 
 from __future__ import annotations
 
+import uuid
+import shutil
 import asyncio
 import hashlib
-import shutil
-import uuid
 from pathlib import Path
 from urllib.parse import urlsplit
 
-import curl_cffi
 import httpx
+import curl_cffi
 
-from ...utils.paths import cache_dir
-from .config import cfg_general, cfg_network
 from .types import VideoResult
+from .config import cfg_general, cfg_network
+from ...utils.paths import cache_dir
 
 CACHE_DIR = cache_dir("video_parser")
 LEGACY_MEDIA_SUFFIXES = {
@@ -128,9 +128,10 @@ async def _download_file_httpx(url: str, *, file_path: Path, headers: dict[str, 
     """使用 httpx 下载文件。"""
     max_bytes = int(cfg_general().get("max_file_mb", 80)) * 1024 * 1024
     total = 0
-    async with httpx.AsyncClient(
-        timeout=_timeout(), proxy=_proxy(), follow_redirects=True, verify=False
-    ) as client, client.stream("GET", url, headers=headers) as response:
+    async with (
+        httpx.AsyncClient(timeout=_timeout(), proxy=_proxy(), follow_redirects=True, verify=False) as client,
+        client.stream("GET", url, headers=headers) as response,
+    ):
         response.raise_for_status()
         _check_content_length(response.headers.get("Content-Length"), max_bytes)
         with file_path.open("wb") as file:
@@ -215,24 +216,17 @@ async def download_video(result: VideoResult, *, directory: Path | None = None) 
         raise DownloadError("解析结果没有视频直链")
     max_duration = float(cfg_general().get("max_duration_seconds", 600))
     if result.duration and result.duration > max_duration:
-        raise DownloadError(
-            f"视频时长超出配置限制：上限 {max_duration:g} 秒，当前 {result.duration:g} 秒"
-        )
+        raise DownloadError(f"视频时长超出配置限制：上限 {max_duration:g} 秒，当前 {result.duration:g} 秒")
 
     if not result.audio_url:
-        return await download_file(
-            result.video_url, suffix=".mp4", headers=result.headers, directory=directory
-        )
+        return await download_file(result.video_url, suffix=".mp4", headers=result.headers, directory=directory)
 
     video_path, audio_path = await asyncio.gather(
         download_file(result.video_url, suffix=".m4s", headers=result.headers, directory=directory),
         download_file(result.audio_url, suffix=".m4a", headers=result.headers, directory=directory),
     )
     output_dir = directory or CACHE_DIR
-    output = (
-        output_dir
-        / f"{hashlib.sha1((result.video_url + result.audio_url).encode('utf-8')).hexdigest()}.mp4"
-    )
+    output = output_dir / f"{hashlib.sha1((result.video_url + result.audio_url).encode('utf-8')).hexdigest()}.mp4"
     return await _merge_av(video_path, audio_path, output)
 
 
@@ -240,25 +234,18 @@ async def download_images(result: VideoResult, *, directory: Path | None = None)
     """下载解析结果中的图片。"""
     if not result.image_urls:
         raise DownloadError("解析结果没有图片")
-    tasks = [
-        _download_image(url, headers=result.headers, directory=directory)
-        for url in result.image_urls
-    ]
+    tasks = [_download_image(url, headers=result.headers, directory=directory) for url in result.image_urls]
     paths = [path for path in await asyncio.gather(*tasks) if path is not None]
     if not paths:
         raise DownloadError("图片下载失败")
     return paths
 
 
-async def _download_image(
-    url: str, *, headers: dict[str, str], directory: Path | None = None
-) -> Path | None:
+async def _download_image(url: str, *, headers: dict[str, str], directory: Path | None = None) -> Path | None:
     """下载图片，失败时尝试常见无样式原图地址。"""
     for candidate in _url_candidates(url):
         try:
-            return await download_file(
-                candidate, suffix=".jpg", headers=headers, directory=directory
-            )
+            return await download_file(candidate, suffix=".jpg", headers=headers, directory=directory)
         except DownloadError:
             continue
     return None

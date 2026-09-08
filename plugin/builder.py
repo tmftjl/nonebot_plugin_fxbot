@@ -2,21 +2,20 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
+from collections.abc import Callable
 
 from nonebot import logger
-from nonebot.adapters import Bot, Event
+from nonebot.rule import Rule
 from nonebot.matcher import Matcher
 from nonebot.message import event_preprocessor
+from nonebot.adapters import Bot, Event
 from nonebot.permission import SUPERUSER, Permission
-from nonebot.rule import Rule
 
-from ..adapter import bind_bot
-from ..adapter import move_non_text_segments_to_end, event_message
-from ..permission.message_policy import should_process_fxbot_message
+from ..adapter import bind_bot, event_message, move_non_text_segments_to_end
 from ..permission import PermLevel, PermScene, permission_for_cmd, permission_for_plugin
-from ..permission.helpers import upsert_command_defaults, upsert_plugin_defaults
+from ..permission.helpers import upsert_plugin_defaults, upsert_command_defaults
+from ..permission.message_policy import should_process_fxbot_message
 
 _PLUGIN_DISPLAY_NAMES: dict[str, str] = {}
 _COMMAND_DISPLAY_NAMES: dict[str, dict[str, str]] = {}
@@ -234,9 +233,7 @@ class Plugin:
             command_display = display_name or name
 
             async def _log_command_entry() -> None:
-                logger.opt(colors=True).info(
-                    f"[<y>{plugin_display}</y>·<g>{command_display}</g>] 命令触发"
-                )
+                logger.opt(colors=True).info(f"[<y>{plugin_display}</y>·<g>{command_display}</g>] 命令触发")
 
             matcher.append_handler(_log_command_entry)
 

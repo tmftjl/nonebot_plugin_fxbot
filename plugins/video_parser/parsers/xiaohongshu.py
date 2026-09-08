@@ -5,17 +5,15 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from ..types import VideoResult
 from .base import ParseError
-from .common import (
-    COMMON_HEADERS,
-    extract_json,
-    first,
-    get_text,
-    redirect_url,
-)
+from ..types import VideoResult
 from .common import (
     IOS_HEADERS as SHARED_IOS_HEADERS,
+    COMMON_HEADERS,
+    first,
+    get_text,
+    extract_json,
+    redirect_url,
 )
 
 HEADERS = {

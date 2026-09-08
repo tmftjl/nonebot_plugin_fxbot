@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import re
-from dataclasses import asdict, dataclass
 from typing import Any
+from dataclasses import asdict, dataclass
 
 from ...utils.http import get_shared_async_client
 

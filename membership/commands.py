@@ -3,24 +3,24 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
 from typing import Any
+from datetime import datetime, timezone
 
 from nonebot import get_bots, get_driver
-from nonebot.adapters import Bot, Event
-from nonebot.matcher import Matcher
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
+from nonebot.matcher import Matcher
+from nonebot.adapters import Bot, Event
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..adapter import selfBot
-from ..config import get_manager as get_config_manager
-from ..console.auth import rotate_console_token
 from ..db import with_session
-from ..permission import PermLevel, PermScene
-from ..plugin import Plugin
 from .guard import membership_guard
 from .models import MembershipGroup
+from ..config import get_manager as get_config_manager
+from ..plugin import Plugin
 from .service import MembershipError, membership_service
+from ..adapter import selfBot
+from ..permission import PermLevel, PermScene
+from ..console.auth import rotate_console_token
 
 P = Plugin("membership", category="system", display_name="会员系统")
 
@@ -42,9 +42,7 @@ class _MembershipCommandStore:
     """会员命令数据库操作。"""
 
     @with_session
-    async def adjust_managed_bots(
-        self, session: AsyncSession, groups_by_bot: dict[str, list[Any]]
-    ) -> tuple[int, int]:
+    async def adjust_managed_bots(self, session: AsyncSession, groups_by_bot: dict[str, list[Any]]) -> tuple[int, int]:
         result = await session.execute(select(MembershipGroup))
         rows = {row.group_id: row for row in result.scalars().all()}
         updated_count = 0
@@ -53,9 +51,7 @@ class _MembershipCommandStore:
         for bot_id, groups in groups_by_bot.items():
             for item in groups:
                 group_id = _normalize_id(
-                    item.get("group_id")
-                    if isinstance(item, dict)
-                    else getattr(item, "group_id", None)
+                    item.get("group_id") if isinstance(item, dict) else getattr(item, "group_id", None)
                 )
                 if not group_id or group_id not in rows:
                     continue
@@ -276,8 +272,7 @@ async def _handle_generate_code(matcher: Matcher, event: Event) -> None:
         await matcher.finish(str(exc))
     public_code = f"ww续费{length}{unit}-{row.code}"
     await matcher.finish(
-        f"已生成续费码（默认一次性）：{public_code}\n"
-        "请将其发送到需要开通/续费的群聊中（首次开通也使用此码）"
+        f"已生成续费码（默认一次性）：{public_code}\n请将其发送到需要开通/续费的群聊中（首次开通也使用此码）"
     )
 
 
@@ -313,9 +308,7 @@ async def _handle_renew(matcher: Matcher, bot: Bot, event: Event) -> None:
     except MembershipError:
         await matcher.finish("该续费码无效或已被使用")
 
-    await matcher.finish(
-        f"本群会员已成功续费{length}{unit}，到期时间：{_format_cn(result.after_expires_at)}"
-    )
+    await matcher.finish(f"本群会员已成功续费{length}{unit}，到期时间：{_format_cn(result.after_expires_at)}")
 
 
 @expiry_cmd.handle()
@@ -355,9 +348,7 @@ async def _handle_expiry(matcher: Matcher, event: Event) -> None:
 @prompt_cmd.handle()
 async def _handle_prompt(matcher: Matcher) -> None:
     """处理续费提示命令。"""
-    await matcher.finish(
-        "如需首次开通或续费,请联系管理员购买续费码（会员开通码），在群内直接发送即可生效"
-    )
+    await matcher.finish("如需首次开通或续费,请联系管理员购买续费码（会员开通码），在群内直接发送即可生效")
 
 
 @adjust_bot_cmd.handle()

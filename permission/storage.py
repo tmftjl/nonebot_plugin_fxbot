@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import ast
 import json
-from pathlib import Path
 from typing import Any
+from pathlib import Path
 
-from ..utils.paths import built_in_plugins_dir, config_dir
 from .types import perm_entry_default
+from ..utils.paths import config_dir, built_in_plugins_dir
 
 
 def scan_plugins_for_permissions() -> dict[str, Any]:
@@ -48,11 +48,7 @@ def _scan_file_for_commands(file_path: Path, commands: dict[str, Any]) -> None:
             continue
 
         if func.attr == "permission_cmd":
-            if (
-                node.args
-                and isinstance(node.args[0], ast.Constant)
-                and isinstance(node.args[0].value, str)
-            ):
+            if node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
                 commands.setdefault(node.args[0].value, perm_entry_default())
             continue
 
@@ -61,11 +57,7 @@ def _scan_file_for_commands(file_path: Path, commands: dict[str, Any]) -> None:
             level = "member"
             scene = "all"
             for kw in node.keywords:
-                if (
-                    kw.arg == "name"
-                    and isinstance(kw.value, ast.Constant)
-                    and isinstance(kw.value.value, str)
-                ):
+                if kw.arg == "name" and isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
                     command_name = kw.value.value
                 elif kw.arg == "level":
                     level = _scan_enum_value(kw.value, "PermLevel") or level

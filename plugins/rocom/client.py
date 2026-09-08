@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+import hashlib
 from typing import Any
+from datetime import datetime, timezone, timedelta
+from dataclasses import dataclass
 
 from ...utils.http import get_text_with_browser_fallback
 
@@ -75,9 +75,7 @@ def _guess_image(name: str) -> str:
     return ""
 
 
-def _product_from_mapping(
-    item: dict[str, Any], starttime: str = "", endtime: str = ""
-) -> MerchantProduct | None:
+def _product_from_mapping(item: dict[str, Any], starttime: str = "", endtime: str = "") -> MerchantProduct | None:
     """将页面商品对象转换为内部商品结构。"""
     name = str(item.get("name") or "").strip()
     if not name:
@@ -109,9 +107,7 @@ def _round_window(round_no: int | None) -> tuple[str, str]:
     return windows.get(round_no or 0, ("", ""))
 
 
-def _snapshot_signature(
-    status: str, round_no: int | None, started_at: str, products: list[MerchantProduct]
-) -> str:
+def _snapshot_signature(status: str, round_no: int | None, started_at: str, products: list[MerchantProduct]) -> str:
     """生成只反映当前营业状态和商品内容的稳定签名。"""
     product_labels = [f"{item.name}|{item.detail}|{item.image}" for item in products]
     signature_seed = "\n".join([status, str(round_no or ""), started_at, "\n".join(product_labels)])
@@ -149,9 +145,7 @@ def parse_merchant_json(source_url: str, data: dict[str, Any]) -> MerchantSnapsh
     started_at = str(data.get("startedAtBeijing") or "").strip()
     next_refresh = str(data.get("nextRefreshBeijing") or fallback_next).strip()
     updated_at = _parse_iso_time(str(data.get("fetchedAt") or "").strip())
-    signature = _snapshot_signature(
-        status or ("open" if products else "closed"), round_no, started_at, products
-    )
+    signature = _snapshot_signature(status or ("open" if products else "closed"), round_no, started_at, products)
 
     return MerchantSnapshot(
         source_url=source_url,

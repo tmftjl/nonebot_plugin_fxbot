@@ -2,29 +2,29 @@
 
 from __future__ import annotations
 
-import asyncio
 import re
+import asyncio
 import subprocess
-from pathlib import Path
 from typing import Any
+from pathlib import Path
 from urllib.parse import urlencode
 
 import httpx
 
-from ..config import cfg_douyin
-from ..types import VideoResult
 from .base import ParseError
+from ..types import VideoResult
 from .common import (
-    ANDROID_HEADERS,
-    COMMON_HEADERS,
     IOS_HEADERS,
-    extract_json,
-    final_url,
+    COMMON_HEADERS,
+    ANDROID_HEADERS,
     first,
-    get_text,
     proxy,
     timeout,
+    get_text,
+    final_url,
+    extract_json,
 )
+from ..config import cfg_douyin
 
 DOUYIN_API_HEADERS = {
     "User-Agent": (
@@ -64,9 +64,7 @@ async def parse(url: str) -> VideoResult:
 
 async def _parse_page(url: str, *, source_url: str) -> VideoResult:
     """解析抖音分享页。"""
-    html = await get_text(
-        url, headers=await _douyin_request_headers(IOS_HEADERS), follow_redirects=False
-    )
+    html = await get_text(url, headers=await _douyin_request_headers(IOS_HEADERS), follow_redirects=False)
     router = extract_json(html, r"window\._ROUTER_DATA\s*=\s*(.*?)</script>")
     # 新版页面可能把作品数据直接放在 loaderData 或其它字段中。
     if item := _find_item(router):
@@ -227,7 +225,10 @@ async def _generate_a_bogus(query: str, user_agent: str) -> str:
             [
                 "node",
                 "-e",
-                "const a=require(process.argv[1]); process.stdout.write(a.generate_a_bogus(process.argv[2], process.argv[3]));",
+                (
+                    "const a=require(process.argv[1]); "
+                    "process.stdout.write(a.generate_a_bogus(process.argv[2], process.argv[3]));"
+                ),
                 str(script),
                 query,
                 user_agent,

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from .storage import get_storage
 from .types import perm_entry_default
+from .storage import get_storage
 
 
 def _as_str_list(value: Any) -> list[str]:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import abc
 from typing import Any
 
-from .types import Decision, PermContext, PermLevel, PermScene, PolicyResult
+from .types import Decision, PermLevel, PermScene, PermContext, PolicyResult
 
 
 class PermissionPolicy(abc.ABC):

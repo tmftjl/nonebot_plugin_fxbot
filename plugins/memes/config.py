@@ -5,8 +5,8 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from ...config import get_manager
-from ...utils.paths import data_dir
 from .ui_schema import DEFAULTS
+from ...utils.paths import data_dir
 
 REG = get_manager().register("memes", DEFAULTS, clean_extra=True)
 

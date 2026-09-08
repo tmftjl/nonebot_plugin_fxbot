@@ -2,20 +2,20 @@
 
 from __future__ import annotations
 
-import asyncio
-import json
 import os
 import sys
+import json
+import asyncio
 from typing import Any
 
-from nonebot import get_driver, logger
-from nonebot.adapters import Bot, Event
+from nonebot import logger, get_driver
 from nonebot.matcher import Matcher
+from nonebot.adapters import Bot, Event
 
-from ..adapter import extract_message_target, send_forward_texts, send_text_to_target
+from ..adapter import send_forward_texts, send_text_to_target, extract_message_target
+from .registry import P
 from ..permission import PermLevel, PermScene
 from ..utils.paths import data_dir, package_root
-from .registry import P
 
 _RESTART_FLAG_FILE = data_dir("system") / "restart_flag.json"
 _PROC_CMDLINE = "/proc/self/cmdline"
@@ -94,9 +94,7 @@ def _current_process_argv() -> list[str]:
         pass
 
     if sys.argv[:1] == ["-c"]:
-        raise RuntimeError(
-            "当前进程由 python -c 启动，且无法读取 /proc/self/cmdline，不能还原重启命令"
-        )
+        raise RuntimeError("当前进程由 python -c 启动，且无法读取 /proc/self/cmdline，不能还原重启命令")
     return [sys.executable] + sys.argv
 
 
@@ -169,9 +167,7 @@ async def _run_git(args: list[str]) -> tuple[int, str]:
         stderr=asyncio.subprocess.PIPE,
     )
     stdout, stderr = await process.communicate()
-    output = "\n".join(
-        part.decode("utf-8", errors="replace").strip() for part in (stdout, stderr) if part
-    ).strip()
+    output = "\n".join(part.decode("utf-8", errors="replace").strip() for part in (stdout, stderr) if part).strip()
     return process.returncode, output
 
 
@@ -223,9 +219,7 @@ async def _git_pull_plugin() -> tuple[bool, str, list[str]]:
         await process.communicate()
         return False, "git pull 超时", []
 
-    output = "\n".join(
-        part.decode("utf-8", errors="replace").strip() for part in (stdout, stderr) if part
-    ).strip()
+    output = "\n".join(part.decode("utf-8", errors="replace").strip() for part in (stdout, stderr) if part).strip()
     if process.returncode == 0:
         after = await _git_head()
         logs = await _git_log_messages(before, after)
@@ -307,4 +301,4 @@ async def _check_restart_flag(bot: Bot) -> None:
 
 
 # 导入状态命令和监控 hooks，使 system_control 成为系统控制统一入口。
-from . import bot_status as bot_status
+from . import bot_status as bot_status  # noqa: E402

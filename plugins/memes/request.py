@@ -1,27 +1,27 @@
 import json
+from typing import Any, Union, Literal, Optional, cast, overload
 from datetime import datetime
-from typing import Any, Literal, Optional, Union, cast, overload
 
 import httpx
-from arclet.alconna import ArgFlag, Args, Empty, Option
-from arclet.alconna.action import Action
-from nonebot.compat import model_dump, type_validate_python
 from pydantic import BaseModel
+from arclet.alconna import Args, Empty, Option, ArgFlag
+from nonebot.compat import model_dump, type_validate_python
+from arclet.alconna.action import Action
 
 from .config import cfg_base_url
 from .exception import (
+    NoSuchMeme,
     ArgMismatch,
+    MemeFeedback,
+    ParamsMismatch,
+    TextOverLength,
+    OpenImageFailed,
     ArgModelMismatch,
     ArgParserMismatch,
-    ImageNumberMismatch,
-    MemeFeedback,
-    MemeGeneratorException,
-    NoSuchMeme,
-    OpenImageFailed,
-    ParamsMismatch,
     TextNumberMismatch,
+    ImageNumberMismatch,
     TextOrNameNotEnough,
-    TextOverLength,
+    MemeGeneratorException,
 )
 
 
@@ -209,18 +209,14 @@ class MemeInfo(BaseModel):
 
 
 async def get_meme_info(meme_key: str) -> MemeInfo:
-    return type_validate_python(
-        MemeInfo, await send_request(f"/memes/{meme_key}/info", "GET", "JSON")
-    )
+    return type_validate_python(MemeInfo, await send_request(f"/memes/{meme_key}/info", "GET", "JSON"))
 
 
 async def generate_meme_preview(meme_key: str) -> bytes:
     return await send_request(f"/memes/{meme_key}/preview", "GET", "BYTES")
 
 
-async def generate_meme(
-    meme_key: str, images: list[bytes], texts: list[str], args: dict[str, Any]
-) -> bytes:
+async def generate_meme(meme_key: str, images: list[bytes], texts: list[str], args: dict[str, Any]) -> bytes:
     files = [("images", image) for image in images]
     data = {"texts": texts, "args": json.dumps(args)}
     return await send_request(f"/memes/{meme_key}/", "POST", "BYTES", files=files, data=data)

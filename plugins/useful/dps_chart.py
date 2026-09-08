@@ -4,17 +4,17 @@ from __future__ import annotations
 
 from io import BytesIO
 
-from nonebot.adapters import Event
-from ...adapter import selfBot
-from nonebot.matcher import Matcher
 from PIL import Image
+from nonebot.matcher import Matcher
+from nonebot.adapters import Event
 
+from ...plugin import Plugin
 from ...adapter import (
+    selfBot,
     fetch_image_bytes,
     image_sources_from_event_or_reply,
 )
 from ...permission import PermLevel, PermScene
-from ...plugin import Plugin
 from ...utils.paths import data_dir
 
 DPS_IMAGE_PATH = data_dir("useful") / "wwdps.png"
@@ -64,9 +64,7 @@ async def _handle_wwdps(matcher: Matcher) -> None:
     """发送当前鸣潮 DPS 榜图片。"""
     if not DPS_IMAGE_PATH.is_file():
         await matcher.finish("DPS榜图片尚未设置，请发送图片并使用 ww更新dps 更新。")
-    await matcher.finish(
-        selfBot.build_message(selfBot.build_segment("image", DPS_IMAGE_PATH.read_bytes()))
-    )
+    await matcher.finish(selfBot.build_message(selfBot.build_segment("image", DPS_IMAGE_PATH.read_bytes())))
 
 
 @update_wwdps_cmd.handle()

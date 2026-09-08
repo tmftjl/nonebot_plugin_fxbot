@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 from importlib import import_module
 from importlib.util import module_from_spec, spec_from_file_location
-from pathlib import Path
 
-from nonebot import load_plugins, logger
+from nonebot import logger, load_plugins
 
-from .config import get_manager as get_config_manager
 from .db import init_database
+from .config import get_manager as get_config_manager
 from .utils.paths import built_in_plugins_dir
 
 _initialized = False
@@ -75,9 +75,7 @@ async def init() -> None:
         _database_ready = True
     except Exception:
         _database_ready = False
-        logger.opt(exception=True).error(
-            "[FxBot] 数据库初始化失败，会员门禁后续必须按 fail-closed 处理"
-        )
+        logger.opt(exception=True).error("[FxBot] 数据库初始化失败，会员门禁后续必须按 fail-closed 处理")
 
     _import_startup_module("membership.gate")
     _import_startup_module("membership.commands")

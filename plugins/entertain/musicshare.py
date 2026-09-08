@@ -2,40 +2,39 @@
 
 from __future__ import annotations
 
-import asyncio
-import base64
 import io
-import json
 import re
+import json
 import time
 import uuid
-from dataclasses import dataclass, replace
+import base64
+import asyncio
 from typing import Any, Literal
+from dataclasses import replace, dataclass
 
-from nonebot import logger
-from nonebot.adapters import Bot, Event
-from nonebot.adapters.qq import Bot as QQBot
-from nonebot.exception import FinishedException
-from nonebot.matcher import Matcher
-from nonebot.params import RegexGroup
-from nonebot.rule import Rule
-from nonebot.typing import T_State
 from PIL import Image, ImageDraw
+from nonebot import logger
+from nonebot.rule import Rule
+from nonebot.params import RegexGroup
+from nonebot.typing import T_State
+from nonebot.matcher import Matcher
+from nonebot.adapters import Bot, Event
+from nonebot.exception import FinishedException
+from nonebot.adapters.qq import Bot as QQBot
 
-from ...adapter import build_message, build_message_segment, selfBot
-from ...adapter import Uninfo, get_session
-from ...permission import PermLevel, PermScene
+from .config import cfg_music
 from ...plugin import Plugin
+from ...adapter import Uninfo, selfBot, get_session, build_message, build_message_segment
+from ...permission import PermLevel, PermScene
+from ...utils.http import get_shared_async_client
 from ...utils.fonts import (
-    draw_text_with_fallback,
-    get_shared_font_path,
-    load_fallback_font_pair,
     load_font,
+    get_shared_font_path,
+    draw_text_with_fallback,
+    load_fallback_font_pair,
     truncate_text_with_fallback,
 )
-from ...utils.http import get_shared_async_client
 from ...utils.paths import data_dir
-from .config import cfg_music
 
 Platform = Literal["qq", "netease"]
 
@@ -82,9 +81,7 @@ class MusicLoginRequired(Exception):
 class MusicPlayUnavailable(Exception):
     """music-api 返回播放失败原因。"""
 
-    def __init__(
-        self, message: str, reason: str = "", detail: dict[str, Any] | None = None
-    ) -> None:
+    def __init__(self, message: str, reason: str = "", detail: dict[str, Any] | None = None) -> None:
         super().__init__(message)
         self.message = message
         self.reason = reason
@@ -224,9 +221,7 @@ def _save_login_sessions() -> None:
                 }
         _LOGIN_SESSION_FILE.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = _LOGIN_SESSION_FILE.with_suffix(".tmp")
-        tmp_path.write_text(
-            json.dumps(persist_data, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        tmp_path.write_text(json.dumps(persist_data, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp_path.replace(_LOGIN_SESSION_FILE)
     except Exception:
         logger.opt(exception=True).warning("[musicshare] 保存音乐登录会话失败")
@@ -347,9 +342,7 @@ async def _get_login_session_data(owner: str, platform: Platform) -> dict[str, A
     if cached is not None:
         bucket = _normalize_login_bucket(owner, platform, cached)
     else:
-        bucket = _normalize_login_bucket(
-            owner, platform, _LOGIN_SESSIONS.get(_login_session_key(owner, platform))
-        )
+        bucket = _normalize_login_bucket(owner, platform, _LOGIN_SESSIONS.get(_login_session_key(owner, platform)))
     _cache_set(cache_key, bucket)
     return bucket
 
@@ -381,9 +374,7 @@ async def _add_pending_login(owner: str, platform: Platform, login_token: str) -
     return pending
 
 
-async def _update_pending_login(
-    owner: str, platform: Platform, pending_id: str, login_token: str
-) -> None:
+async def _update_pending_login(owner: str, platform: Platform, pending_id: str, login_token: str) -> None:
     """更新待确认登录 token。"""
     bucket = await _get_login_session_data(owner, platform)
     for item in bucket["pending"]:
@@ -422,11 +413,7 @@ async def _add_auth_account(
                 account[key] = payload[key]
     identity = _auth_account_identity(platform, account)
     if identity is not None:
-        bucket["accounts"] = [
-            item
-            for item in bucket["accounts"]
-            if _auth_account_identity(platform, item) != identity
-        ]
+        bucket["accounts"] = [item for item in bucket["accounts"] if _auth_account_identity(platform, item) != identity]
     bucket["accounts"].append(account)
     await _save_login_bucket(owner, platform, bucket)
     return account
@@ -479,9 +466,7 @@ async def _next_auth_account(
     ]
     if not candidates:
         return None
-    cursor_key = (
-        f"{_login_mode()}:{platform}" if _login_mode() == "shared" else f"{user_id}:{platform}"
-    )
+    cursor_key = f"{_login_mode()}:{platform}" if _login_mode() == "shared" else f"{user_id}:{platform}"
     index = _AUTH_POOL_CURSORS.get(cursor_key, 0) % len(candidates)
     _AUTH_POOL_CURSORS[cursor_key] = index + 1
     return candidates[index]
@@ -498,9 +483,7 @@ async def _send_login_text(bot: Bot, event: Event, text: str) -> None:
     await selfBot.send(event, build_message(bot, build_message_segment(bot, "text", text)))
 
 
-async def _music_api_get(
-    path: str, params: dict[str, Any], allow_error_body: bool = False
-) -> dict[str, Any]:
+async def _music_api_get(path: str, params: dict[str, Any], allow_error_body: bool = False) -> dict[str, Any]:
     """请求本地 music-api。"""
     url = f"{_music_api_base()}{path}"
     client = await get_shared_async_client()
@@ -548,9 +531,7 @@ async def _watch_login_status(
                 return
             login_token = str(pending.get("loginToken") or login_token)
             try:
-                data = await _music_api_get(
-                    "/api/login/poll", {"provider": platform, "loginToken": login_token}
-                )
+                data = await _music_api_get("/api/login/poll", {"provider": platform, "loginToken": login_token})
             except Exception as exc:
                 logger.debug(f"[musicshare] 自动检查音乐登录状态失败: {exc}")
                 continue
@@ -564,9 +545,7 @@ async def _watch_login_status(
                 await _add_auth_account(owner, platform, auth, data)
                 nickname = data.get("nickname")
                 suffix = f"：{nickname}" if nickname else ""
-                await _send_login_text(
-                    bot, event, f"{provider_name} 登录成功{suffix}，现在可以点歌了。"
-                )
+                await _send_login_text(bot, event, f"{provider_name} 登录成功{suffix}，现在可以点歌了。")
                 return
 
             next_token = str(data.get("loginToken") or "").strip()
@@ -733,9 +712,7 @@ async def _get_song_url_api(
         return str(url)
     if data.get("error") or data.get("reason") or data.get("detail"):
         message, reason, detail = _format_play_error(data)
-        raise MusicPlayUnavailable(
-            message or "music-api 未返回播放链接", reason=reason, detail=detail
-        )
+        raise MusicPlayUnavailable(message or "music-api 未返回播放链接", reason=reason, detail=detail)
     return None
 
 
@@ -764,9 +741,7 @@ async def _get_song_url_with_pool(
     if song.auth:
         tried.add(song.auth)
         try:
-            url = await _get_song_url_api(
-                platform, song, auth=song.auth, qqbot=isinstance(bot, QQBot)
-            )
+            url = await _get_song_url_api(platform, song, auth=song.auth, qqbot=isinstance(bot, QQBot))
             if url:
                 return url
         except MusicLoginRequired:
@@ -792,9 +767,7 @@ async def _get_song_url_with_pool(
         tried.add(auth)
         fallback_song = replace(song, search_id=None, auth=auth, auth_owner=owner)
         try:
-            url = await _get_song_url_api(
-                platform, fallback_song, auth=auth, qqbot=isinstance(bot, QQBot)
-            )
+            url = await _get_song_url_api(platform, fallback_song, auth=auth, qqbot=isinstance(bot, QQBot))
             if url:
                 return url
         except MusicLoginRequired:
@@ -1002,9 +975,7 @@ async def _handle_login(
 
 
 @login_poll_matcher.handle()
-async def _handle_login_poll(
-    matcher: Matcher, event: Event, session: Uninfo, groups: tuple = RegexGroup()
-) -> None:
+async def _handle_login_poll(matcher: Matcher, event: Event, session: Uninfo, groups: tuple = RegexGroup()) -> None:
     """手动检查 music-api 登录状态。"""
     user_id = session.user.id
     if not user_id:
@@ -1028,9 +999,7 @@ async def _handle_login_poll(
         if not pending_id or not login_token:
             continue
         try:
-            data = await _music_api_get(
-                "/api/login/poll", {"provider": platform, "loginToken": login_token}
-            )
+            data = await _music_api_get("/api/login/poll", {"provider": platform, "loginToken": login_token})
         except Exception as exc:
             logger.opt(exception=True).warning("[musicshare] 轮询音乐登录状态失败")
             errors.append(str(exc))
@@ -1092,9 +1061,7 @@ async def _handle_search(
 
 
 @select_matcher.handle()
-async def _handle_select(
-    matcher: Matcher, bot: Bot, event: Event, session: Uninfo, state: T_State
-) -> None:
+async def _handle_select(matcher: Matcher, bot: Bot, event: Event, session: Uninfo, state: T_State) -> None:
     """播放搜索结果中的歌曲。"""
     user_id = session.user.id
     item = _music_cache.get(user_id)
@@ -1115,9 +1082,7 @@ async def _handle_select(
     except MusicLoginRequired:
         await matcher.finish(_login_hint(platform))
     except MusicPlayUnavailable as exc:
-        logger.error(
-            f"[musicshare] 无法播放音乐: {song.song}, 平台: {platform}, 错误: {exc.log_text()}"
-        )
+        logger.error(f"[musicshare] 无法播放音乐: {song.song}, 平台: {platform}, 错误: {exc.log_text()}")
         await matcher.finish(f"播放失败：{song.song} - {song.singer}\n{exc}")
     if not audio_url:
         logger.error(f"[musicshare] 无法获取播放链接: {song.song}, 平台: {platform}")

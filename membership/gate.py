@@ -3,18 +3,18 @@
 from __future__ import annotations
 
 import re
-from collections import deque
-from datetime import datetime, timezone
 from typing import Any
+from datetime import datetime, timezone
+from collections import deque
 
+from nonebot.message import event_preprocessor
 from nonebot.adapters import Bot, Event
 from nonebot.exception import IgnoredException
-from nonebot.message import event_preprocessor
 
-from ..adapter import bind_bot, selfBot
-from ..config import get_manager as get_config_manager
-from ..permission.message_policy import should_process_fxbot_message
 from .guard import membership_guard
+from ..config import get_manager as get_config_manager
+from ..adapter import selfBot, bind_bot
+from ..permission.message_policy import should_process_fxbot_message
 
 _RENEW_COMMAND_RE = re.compile(r"^(?:ww到期|ww(?:拉群|续费)|ww续费\d+(?:天|月|年)-[A-Za-z0-9_]+)$")
 _PROMPTED_EVENT_IDS: set[int] = set()

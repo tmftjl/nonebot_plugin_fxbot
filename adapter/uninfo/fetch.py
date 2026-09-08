@@ -6,10 +6,10 @@ from typing import Any
 
 from nonebot.adapters import Bot, Event
 
+from .model import Role, User, Scene, Member, Session, SceneType, SupportScope
 from ..core.bot import PlatformBot
-from ..core.events import event_group_id, event_user_id, event_user_name
+from ..core.events import event_user_id, event_group_id, event_user_name
 from ..core.registry import adapter_name
-from .model import Member, Role, Scene, SceneType, Session, SupportScope, User
 
 
 def role_from_text(role: Any) -> Role:
@@ -59,9 +59,7 @@ async def build_session(bot: Bot, event: Event) -> Session:
             name=str(group_name) if group_name else None,
             avatar=client.group_avatar(group_id),
         )
-        role = role_from_text(
-            get_field(sender, "role", "member_role") or get_field(author, "member_role")
-        )
+        role = role_from_text(get_field(sender, "role", "member_role") or get_field(author, "member_role"))
         member = Member(user=user, nick=nick, roles=[role])
     else:
         scene = Scene(id=user_id, type=SceneType.PRIVATE, name=name, avatar=avatar)

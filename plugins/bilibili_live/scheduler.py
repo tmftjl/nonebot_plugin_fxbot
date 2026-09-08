@@ -5,16 +5,16 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from nonebot import get_bots, get_driver, logger
+from nonebot import logger, get_bots, get_driver
 
-from ...adapter import build_message, build_message_segment, send_message_to_target
-from .client import BilibiliLiveError, LiveRoomSnapshot, fetch_room
 from .store import (
-    get_room_records,
     get_room_state,
-    get_room_subscriptions,
     set_room_state,
+    get_room_records,
+    get_room_subscriptions,
 )
+from .client import LiveRoomSnapshot, BilibiliLiveError, fetch_room
+from ...adapter import build_message, build_message_segment, send_message_to_target
 
 _startup_hook_registered = False
 _background_task: asyncio.Task[None] | None = None
@@ -30,9 +30,7 @@ def _room_id(record: dict[str, Any]) -> int:
         return 0
 
 
-async def _fetch_record(
-    record: dict[str, Any], semaphore: asyncio.Semaphore
-) -> LiveRoomSnapshot | None:
+async def _fetch_record(record: dict[str, Any], semaphore: asyncio.Semaphore) -> LiveRoomSnapshot | None:
     """查询单个订阅记录，失败时保留原状态。"""
     room_id = _room_id(record)
     if room_id <= 0:
@@ -92,9 +90,7 @@ async def _push_room(room: LiveRoomSnapshot) -> int:
     for subscription in subscriptions:
         if await _send_to_subscription(subscription, room):
             pushed += 1
-    logger.info(
-        f"[bilibili_live] 直播间 {room.room_id} 开播推送完成：{pushed}/{len(subscriptions)} 个目标"
-    )
+    logger.info(f"[bilibili_live] 直播间 {room.room_id} 开播推送完成：{pushed}/{len(subscriptions)} 个目标")
     return pushed
 
 

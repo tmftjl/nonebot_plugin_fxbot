@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from nonebot.adapters import Bot, Event
 from nonebot.params import Depends
+from nonebot.adapters import Bot, Event
 
 from . import cache
 from .fetch import build_session
-from .interface import Interface, get_interface
 from .model import Session
+from .interface import Interface, get_interface
 
 
 async def get_session(bot: Bot, event: Event) -> Session:

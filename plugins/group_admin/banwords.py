@@ -2,24 +2,23 @@
 
 from __future__ import annotations
 
-import json
 import re
-from datetime import datetime
-from pathlib import Path
+import json
 from typing import Any, Literal
+from pathlib import Path
+from datetime import datetime
 
 from nonebot import logger
+from nonebot.params import RegexGroup
+from nonebot.matcher import Matcher
 from nonebot.adapters import Bot, Event
 from nonebot.exception import StopPropagation
-from nonebot.matcher import Matcher
-from nonebot.params import RegexGroup
 
-from ...adapter import selfBot
-from ...adapter import Uninfo
-from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
-from ...utils.paths import data_dir
 from .identity import is_superuser_id
+from ...adapter import Uninfo, selfBot
+from ...permission import PermLevel, PermScene
+from ...utils.paths import data_dir
 
 MatchType = Literal["exact", "fuzzy", "regex"]
 PenaltyType = Literal["mute", "kick", "recall"]
@@ -132,9 +131,7 @@ class BannedWordsManager:
                         continue
                     compiled.append((pattern, {**meta, "raw_word": str(word)}))
                 except re.error:
-                    logger.opt(exception=True).warning(
-                        f"[banwords] 正则编译失败: {group_id} {word}"
-                    )
+                    logger.opt(exception=True).warning(f"[banwords] 正则编译失败: {group_id} {word}")
         _compiled_cache[group_id] = compiled
         return compiled
 
@@ -283,9 +280,7 @@ banword_mute_time = P.on_regex(
 
 
 @banword_add.handle()
-async def _handle_banword_add(
-    matcher: Matcher, event: Event, session: Uninfo, groups: tuple = RegexGroup()
-) -> None:
+async def _handle_banword_add(matcher: Matcher, event: Event, session: Uninfo, groups: tuple = RegexGroup()) -> None:
     """添加违禁词。"""
     group_id = session.scene.id if session.scene.is_group else None
     user_id = session.user.id or "0"
@@ -310,9 +305,7 @@ async def _handle_banword_add(
 
 
 @banword_del.handle()
-async def _handle_banword_del(
-    matcher: Matcher, event: Event, session: Uninfo, groups: tuple = RegexGroup()
-) -> None:
+async def _handle_banword_del(matcher: Matcher, event: Event, session: Uninfo, groups: tuple = RegexGroup()) -> None:
     """删除违禁词。"""
     group_id = session.scene.id if session.scene.is_group else None
     if group_id is None:
@@ -385,9 +378,7 @@ async def _handle_banword_off(matcher: Matcher, session: Uninfo) -> None:
 
 
 @banword_mute_time.handle()
-async def _handle_banword_mute_time(
-    matcher: Matcher, session: Uninfo, groups: tuple = RegexGroup()
-) -> None:
+async def _handle_banword_mute_time(matcher: Matcher, session: Uninfo, groups: tuple = RegexGroup()) -> None:
     """设置违禁词禁言时长。"""
     group_id = session.scene.id if session.scene.is_group else None
     if group_id is None:

@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncGenerator
 from typing import Any
+from collections.abc import AsyncGenerator
 
-from nonebot import logger
 from openai import AsyncOpenAI
+from nonebot import logger
 
 from ..base import ChatProvider, EmbeddingProvider
 from ..entities import LLMResponse

@@ -3,9 +3,9 @@
 from .base_models import (
     BaseIDModel,
     exec_list,
+    with_session,
     init_database,
     is_initialized,
-    with_session,
 )
 
 __all__ = [

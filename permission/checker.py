@@ -8,10 +8,10 @@ from nonebot import get_driver
 from nonebot.adapters import Bot, Event
 from nonebot.permission import Permission
 
-from ..adapter import event_group_id, event_is_group, event_is_private
-from .policy import BlacklistPolicy, PolicyChain
+from .types import Decision, PermLevel, PermContext
+from .policy import PolicyChain, BlacklistPolicy
 from .storage import get_storage
-from .types import Decision, PermContext, PermLevel
+from ..adapter import event_group_id, event_is_group, event_is_private
 
 
 def _normalize_id(value: Any) -> str | None:
@@ -63,9 +63,7 @@ def _has_group_role(event: Any, role: str) -> bool:
     for member in (getattr(event, "sender", None), getattr(event, "author", None)):
         value = member.get("role") if isinstance(member, dict) else getattr(member, "role", None)
         value = value or (
-            member.get("member_role")
-            if isinstance(member, dict)
-            else getattr(member, "member_role", None)
+            member.get("member_role") if isinstance(member, dict) else getattr(member, "member_role", None)
         )
         if str(value or "") == role:
             return True
@@ -143,13 +141,9 @@ class PermissionChecker:
 
         plugin, command = self._parse_feature(feature)
         context = await self._build_context(event, config)
-        sub_plugins = (
-            config.get("sub_plugins") if isinstance(config.get("sub_plugins"), dict) else {}
-        )
+        sub_plugins = config.get("sub_plugins") if isinstance(config.get("sub_plugins"), dict) else {}
         plugin_node = sub_plugins.get(plugin, {}) if plugin else {}
-        commands = (
-            plugin_node.get("commands") if isinstance(plugin_node.get("commands"), dict) else {}
-        )
+        commands = plugin_node.get("commands") if isinstance(plugin_node.get("commands"), dict) else {}
 
         layers = [
             config.get("top"),

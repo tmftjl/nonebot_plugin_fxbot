@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections import defaultdict, deque
 from typing import Any
+from collections import deque, defaultdict
 
 
 class ChatSessionStore:
@@ -11,9 +11,7 @@ class ChatSessionStore:
 
     def __init__(self, max_messages: int = 20) -> None:
         self.max_messages = max_messages
-        self._store: dict[str, deque[dict[str, Any]]] = defaultdict(
-            lambda: deque(maxlen=self.max_messages)
-        )
+        self._store: dict[str, deque[dict[str, Any]]] = defaultdict(lambda: deque(maxlen=self.max_messages))
 
     def get(self, session_id: str) -> list[dict[str, Any]]:
         """获取会话历史。"""

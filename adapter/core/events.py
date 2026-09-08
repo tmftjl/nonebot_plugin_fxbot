@@ -40,16 +40,12 @@ def _raw_group_id(event: Event) -> str | None:
 
 
 def event_is_group(event: Event) -> bool:
-    return event_message_type(event) == "group" or (
-        not event_message_type(event) and _raw_group_id(event) is not None
-    )
+    return event_message_type(event) == "group" or (not event_message_type(event) and _raw_group_id(event) is not None)
 
 
 def event_is_private(event: Event) -> bool:
     return event_message_type(event) == "private" or (
-        not event_message_type(event)
-        and bool(event_user_id(event))
-        and _raw_group_id(event) is None
+        not event_message_type(event) and bool(event_user_id(event)) and _raw_group_id(event) is None
     )
 
 

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import UniqueConstraint
 from sqlmodel import Field
+from sqlalchemy import UniqueConstraint
 
 from ..db import BaseIDModel, exec_list
 

@@ -7,7 +7,7 @@ from typing import Any
 
 from nonebot.adapters import Bot
 
-from .model import Member, Scene, SceneType, Session, User
+from .model import User, Scene, Member, Session, SceneType
 
 UNINFO_CACHE = True
 UNINFO_CACHE_EXPIRE = 300
@@ -53,9 +53,7 @@ def get_scene(
 
 
 def get_member(bot: Bot, scene_type: SceneType, scene_id: str, user_id: str) -> Member | None:
-    return _member_cache.get(bot_cache_key(bot), {}).get(
-        (scene_type.value, str(scene_id), str(user_id))
-    )
+    return _member_cache.get(bot_cache_key(bot), {}).get((scene_type.value, str(scene_id), str(user_id)))
 
 
 def save_user(bot: Bot, user: User) -> None:

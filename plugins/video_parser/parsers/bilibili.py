@@ -2,20 +2,20 @@
 
 from __future__ import annotations
 
+import re
+import json
 import asyncio
 import inspect
-import json
-import re
-from collections.abc import Awaitable, Callable
-from pathlib import Path
 from typing import Any
+from pathlib import Path
+from collections.abc import Callable, Awaitable
 
 from nonebot import logger
 
-from ....utils.paths import data_dir
-from ..types import VideoResult
 from .base import ParseError
+from ..types import VideoResult
 from .common import COMMON_HEADERS, redirect_url
+from ....utils.paths import data_dir
 
 COOKIE_PATH: Path = data_dir("video_parser") / "bilibili_cookies.json"
 BILI_HEADERS = {
@@ -43,9 +43,7 @@ async def parse(url: str) -> VideoResult:
         page = re.search(r"[?&]p=(\d{1,3})", url)
         if page:
             page_num = max(1, int(page.group(1)))
-        return await _parse_video(
-            bvid=bvid, page_num=page_num, source=_clean_video_source(bvid, page_num)
-        )
+        return await _parse_video(bvid=bvid, page_num=page_num, source=_clean_video_source(bvid, page_num))
 
     av = re.search(
         r"(?:bilibili\.com(?:/video)?/)?av(?P<avid>\d{6,})(?:.*?[?&]p=(?P<page>\d{1,3}))?",
@@ -55,9 +53,7 @@ async def parse(url: str) -> VideoResult:
     if av:
         page_num = max(1, int(av.group("page") or 1))
         avid = int(av.group("avid"))
-        return await _parse_video(
-            avid=avid, page_num=page_num, source=_clean_av_source(avid, page_num)
-        )
+        return await _parse_video(avid=avid, page_num=page_num, source=_clean_av_source(avid, page_num))
 
     dynamic = re.search(r"(?:bilibili\.com/(?:opus|dynamic)/|t\.bilibili\.com/)(?P<id>\d+)", url)
     if dynamic:
@@ -72,7 +68,7 @@ async def parse(url: str) -> VideoResult:
 
 def _setup_client() -> None:
     """按原插件方式设置 bilibili_api HTTP 客户端。"""
-    from bilibili_api import request_settings, select_client
+    from bilibili_api import select_client, request_settings
 
     select_client("curl_cffi")
     request_settings.set("impersonate", "chrome131")
@@ -88,16 +84,14 @@ def _clean_av_source(avid: int, page_num: int) -> str:
     return f"https://www.bilibili.com/video/av{avid}" + (f"?p={page_num}" if page_num > 1 else "")
 
 
-async def _parse_video(
-    *, bvid: str | None = None, avid: int | None = None, page_num: int, source: str
-) -> VideoResult:
+async def _parse_video(*, bvid: str | None = None, avid: int | None = None, page_num: int, source: str) -> VideoResult:
     """解析 B 站视频信息和下载流。"""
     try:
         from bilibili_api.video import (
-            AudioStreamDownloadURL,
             Video,
-            VideoDownloadURLDataDetecter,
+            AudioStreamDownloadURL,
             VideoStreamDownloadURL,
+            VideoDownloadURLDataDetecter,
         )
     except Exception as exc:
         raise ParseError("缺少 bilibili-api-python 依赖，请先安装 requirements.txt") from exc
@@ -139,9 +133,7 @@ async def _parse_video(
         raise ParseError("B 站下载接口未返回 dash/durl 流")
     try:
         detector = VideoDownloadURLDataDetecter(download_data)
-        video_url, audio_url = _select_download_urls(
-            detector, VideoStreamDownloadURL, AudioStreamDownloadURL
-        )
+        video_url, audio_url = _select_download_urls(detector, VideoStreamDownloadURL, AudioStreamDownloadURL)
     except ParseError:
         raise
     except Exception as exc:
@@ -185,11 +177,7 @@ def _select_download_urls(
         no_dolby_video=True,
         no_hdr=True,
     )
-    video_streams = [
-        stream
-        for stream in streams
-        if isinstance(stream, video_stream_type) and _stream_url(stream)
-    ]
+    video_streams = [stream for stream in streams if isinstance(stream, video_stream_type) and _stream_url(stream)]
     if video_streams:
         preferred_video_streams = [
             stream
@@ -200,11 +188,7 @@ def _select_download_urls(
         video_url = _stream_url(video_stream)
         if not video_url:
             raise ParseError("B 站没有可下载的视频流")
-        audio_streams = [
-            stream
-            for stream in streams
-            if isinstance(stream, audio_stream_type) and _stream_url(stream)
-        ]
+        audio_streams = [stream for stream in streams if isinstance(stream, audio_stream_type) and _stream_url(stream)]
         audio_stream = max(audio_streams, key=_audio_stream_rank) if audio_streams else None
         return video_url, _stream_url(audio_stream) if audio_stream is not None else None
 

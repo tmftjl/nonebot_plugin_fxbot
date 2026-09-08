@@ -5,12 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import APIRouter
+from nonebot import logger, get_app
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from nonebot import get_app, logger
 
+from .routes import bots, meta, config, membership, permissions
 from ..config import get_manager
-from .routes import bots, config, membership, meta, permissions
 
 _mounted = False
 

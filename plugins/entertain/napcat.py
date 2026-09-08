@@ -4,14 +4,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from nonebot.adapters import Bot
 from nonebot.matcher import Matcher
+from nonebot.adapters import Bot
 
-from ...adapter import selfBot
-from ...adapter import Uninfo
+from ...plugin import Plugin
+from ...adapter import Uninfo, selfBot
 from ...chat.tools import ToolContext, ToolRuntime, tool
 from ...permission import PermLevel, PermScene
-from ...plugin import Plugin
 
 P = Plugin(
     "entertain",
@@ -76,9 +75,7 @@ async def _handle_like(matcher: Matcher, bot: Bot, session: Uninfo) -> None:
         "required": ["user_id"],
     },
 )
-async def like_tool(
-    ctx: ToolContext, rt: ToolRuntime, user_id: str, times: int = MAX_LIKE_TIMES
-) -> dict[str, Any]:
+async def like_tool(ctx: ToolContext, rt: ToolRuntime, user_id: str, times: int = MAX_LIKE_TIMES) -> dict[str, Any]:
     """AI 工具：点赞。"""
     try:
         ok = await _send_like(rt.require_bot(), user_id, times)

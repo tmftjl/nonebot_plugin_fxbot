@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-import secrets
 import string
-from dataclasses import dataclass
+import secrets
 from datetime import datetime, timedelta
+from dataclasses import dataclass
 
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import with_session
-from .models import MembershipGroup, RenewCode, RenewRecord, utc_now
+from .models import RenewCode, RenewRecord, MembershipGroup, utc_now
 
 
 class MembershipError(RuntimeError):
@@ -54,9 +54,7 @@ class MembershipService:
     @with_session
     async def get_group(self, session: AsyncSession, group_id: str) -> MembershipGroup | None:
         """按群号获取会员群。"""
-        result = await session.execute(
-            select(MembershipGroup).where(MembershipGroup.group_id == str(group_id))
-        )
+        result = await session.execute(select(MembershipGroup).where(MembershipGroup.group_id == str(group_id)))
         return result.scalar_one_or_none()
 
     @with_session
@@ -140,9 +138,7 @@ class MembershipService:
             after_expires_at=after,
         )
         session.add(record)
-        return RedeemResult(
-            group=group, record=record, before_expires_at=before, after_expires_at=after
-        )
+        return RedeemResult(group=group, record=record, before_expires_at=before, after_expires_at=after)
 
     @with_session
     async def generate_code(

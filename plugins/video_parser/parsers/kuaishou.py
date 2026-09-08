@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from ..types import VideoResult
 from .base import ParseError
-from .common import IOS_HEADERS, extract_json, final_url, first, get_text
+from ..types import VideoResult
+from .common import IOS_HEADERS, first, get_text, final_url, extract_json
 
 HEADERS = {**IOS_HEADERS, "Referer": "https://v.kuaishou.com/"}
 

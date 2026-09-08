@@ -2,27 +2,25 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
+import asyncio
 
 from nonebot import get_bots
-from nonebot.adapters import Bot
-from sqlalchemy import JSON, Column, UniqueConstraint, exc
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import Field, SQLModel, select
+from sqlalchemy import JSON, Column, UniqueConstraint, exc
+from nonebot.adapters import Bot
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db import with_session
+from .model import User, Scene, Member, Session, SceneType
 from ..core.registry import adapter_name
-from .model import Member, Scene, SceneType, Session, User
 
 
 class BotModel(SQLModel, table=True):
     """持久化 Bot。"""
 
     __tablename__ = "nonebot_plugin_uninfo_botmodel"
-    __table_args__ = (
-        UniqueConstraint("self_id", "adapter", name="nonebot_plugin_uninfo_unique_bot"),
-    )
+    __table_args__ = (UniqueConstraint("self_id", "adapter", name="nonebot_plugin_uninfo_unique_bot"),)
 
     id: int | None = Field(default=None, primary_key=True)
     self_id: str = Field(max_length=64, nullable=False)
@@ -57,11 +55,7 @@ class SceneModel(SQLModel, table=True):
     scene_data: dict = Field(sa_column=Column(JSON, nullable=False))
 
     async def to_scene(self) -> Scene:
-        parent_model = (
-            await get_scene_model(self.parent_scene_persist_id)
-            if self.parent_scene_persist_id
-            else None
-        )
+        parent_model = await get_scene_model(self.parent_scene_persist_id) if self.parent_scene_persist_id else None
         return Scene.load(
             {
                 **self.scene_data,
@@ -98,9 +92,7 @@ class UserModel(SQLModel, table=True):
     """持久化用户。"""
 
     __tablename__ = "nonebot_plugin_uninfo_usermodel"
-    __table_args__ = (
-        UniqueConstraint("bot_persist_id", "user_id", name="nonebot_plugin_uninfo_unique_user"),
-    )
+    __table_args__ = (UniqueConstraint("bot_persist_id", "user_id", name="nonebot_plugin_uninfo_unique_user"),)
 
     id: int | None = Field(default=None, primary_key=True)
     bot_persist_id: int = Field(nullable=False)
@@ -230,14 +222,10 @@ class _UninfoStore:
                 return persisted_id
 
     @with_session
-    async def get_scene_persist_id(
-        self, db_session: AsyncSession, basic_info: dict[str, str], scene: Scene
-    ) -> int:
+    async def get_scene_persist_id(self, db_session: AsyncSession, basic_info: dict[str, str], scene: Scene) -> int:
         bot_persist_id = await self.get_bot_persist_id(basic_info, session=db_session)
         parent_id = (
-            await self.get_scene_persist_id(basic_info, scene.parent, session=db_session)
-            if scene.parent
-            else None
+            await self.get_scene_persist_id(basic_info, scene.parent, session=db_session) if scene.parent else None
         )
         scene_data = json.loads(scene.dump_json())
         statement = (
@@ -273,15 +261,11 @@ class _UninfoStore:
                 return persisted_id
 
     @with_session
-    async def get_user_persist_id(
-        self, db_session: AsyncSession, basic_info: dict[str, str], user: User
-    ) -> int:
+    async def get_user_persist_id(self, db_session: AsyncSession, basic_info: dict[str, str], user: User) -> int:
         bot_persist_id = await self.get_bot_persist_id(basic_info, session=db_session)
         user_data = json.loads(user.dump_json())
         statement = (
-            select(UserModel)
-            .where(UserModel.bot_persist_id == bot_persist_id)
-            .where(UserModel.user_id == user.id)
+            select(UserModel).where(UserModel.bot_persist_id == bot_persist_id).where(UserModel.user_id == user.id)
         )
         if row := (await db_session.execute(statement)).scalar_one_or_none():
             row.user_data = user_data
@@ -305,12 +289,8 @@ class _UninfoStore:
     @with_session
     async def get_session_persist_id(self, db_session: AsyncSession, info_session: Session) -> int:
         bot_persist_id = await self.get_bot_persist_id(info_session.basic, session=db_session)
-        scene_persist_id = await self.get_scene_persist_id(
-            info_session.basic, info_session.scene, session=db_session
-        )
-        user_persist_id = await self.get_user_persist_id(
-            info_session.basic, info_session.user, session=db_session
-        )
+        scene_persist_id = await self.get_scene_persist_id(info_session.basic, info_session.scene, session=db_session)
+        user_persist_id = await self.get_user_persist_id(info_session.basic, info_session.user, session=db_session)
         member_data = json.loads(info_session.member.dump_json()) if info_session.member else None
         statement = (
             select(SessionModel)
@@ -344,32 +324,22 @@ class _UninfoStore:
 
     @with_session
     async def get_bot_model(self, db_session: AsyncSession, persist_id: int) -> BotModel:
-        return (
-            await db_session.execute(select(BotModel).where(BotModel.id == persist_id))
-        ).scalar_one()
+        return (await db_session.execute(select(BotModel).where(BotModel.id == persist_id))).scalar_one()
 
     @with_session
     async def get_scene_model(self, db_session: AsyncSession, persist_id: int) -> SceneModel:
-        return (
-            await db_session.execute(select(SceneModel).where(SceneModel.id == persist_id))
-        ).scalar_one()
+        return (await db_session.execute(select(SceneModel).where(SceneModel.id == persist_id))).scalar_one()
 
     @with_session
     async def get_user_model(self, db_session: AsyncSession, persist_id: int) -> UserModel:
-        return (
-            await db_session.execute(select(UserModel).where(UserModel.id == persist_id))
-        ).scalar_one()
+        return (await db_session.execute(select(UserModel).where(UserModel.id == persist_id))).scalar_one()
 
     @with_session
     async def get_session_model(self, db_session: AsyncSession, persist_id: int) -> SessionModel:
-        return (
-            await db_session.execute(select(SessionModel).where(SessionModel.id == persist_id))
-        ).scalar_one()
+        return (await db_session.execute(select(SessionModel).where(SessionModel.id == persist_id))).scalar_one()
 
     @with_session
-    async def get_user_model_by_key(
-        self, db_session: AsyncSession, bot: Bot, user_id: str
-    ) -> UserModel | None:
+    async def get_user_model_by_key(self, db_session: AsyncSession, bot: Bot, user_id: str) -> UserModel | None:
         bot_model = await self._get_bot_model_for_bot(db_session, bot)
         if bot_model is None:
             return None
@@ -420,9 +390,7 @@ class _UninfoStore:
         )
         return (await db_session.execute(statement)).scalar_one_or_none()
 
-    async def _get_bot_model_for_bot(
-        self, db_session: AsyncSession, bot: Bot
-    ) -> BotModel | None:
+    async def _get_bot_model_for_bot(self, db_session: AsyncSession, bot: Bot) -> BotModel | None:
         return (
             await db_session.execute(
                 select(BotModel)
@@ -447,9 +415,7 @@ async def get_user_persist_id(basic_info: dict[str, str], user: User) -> int:
     return await _store.get_user_persist_id(basic_info, user)
 
 
-async def get_session_persist_id(
-    info_session: Session, *, db_session: AsyncSession | None = None
-) -> int:
+async def get_session_persist_id(info_session: Session, *, db_session: AsyncSession | None = None) -> int:
     if db_session is not None:
         return await _store.get_session_persist_id(info_session, session=db_session)
     return await _store.get_session_persist_id(info_session)
@@ -475,9 +441,7 @@ async def get_user_model_by_key(bot: Bot, user_id: str) -> UserModel | None:
     return await _store.get_user_model_by_key(bot, user_id)
 
 
-async def get_scene_model_by_key(
-    bot: Bot, scene_type: SceneType, scene_id: str
-) -> SceneModel | None:
+async def get_scene_model_by_key(bot: Bot, scene_type: SceneType, scene_id: str) -> SceneModel | None:
     return await _store.get_scene_model_by_key(bot, scene_type, scene_id)
 
 

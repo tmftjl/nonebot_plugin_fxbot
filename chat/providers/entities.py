@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
+from dataclasses import field, dataclass
 
 
 class ProviderType(Enum):
@@ -58,9 +58,7 @@ class LLMRequest:
             if isinstance(content, str):
                 return content
             if isinstance(content, list):
-                return "".join(
-                    item.get("text", "") for item in content if item.get("type") == "text"
-                )
+                return "".join(item.get("text", "") for item in content if item.get("type") == "text")
         return ""
 
 

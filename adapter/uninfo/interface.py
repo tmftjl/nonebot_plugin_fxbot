@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from nonebot.adapters import Bot
 
-from ..core.bot import PlatformBot
 from . import cache
 from .fetch import role_from_text
-from .model import Member, Role, Scene, SceneType, User
+from .model import Role, User, Scene, Member, SceneType
+from ..core.bot import PlatformBot
 
 
 class Interface:
@@ -56,9 +56,7 @@ class Interface:
         parent_scene_id: str | None = None,
     ) -> Scene | None:
         scene_id = str(scene_id)
-        if scene := cache.get_scene(
-            self.bot, scene_type, scene_id, parent_scene_id=parent_scene_id
-        ):
+        if scene := cache.get_scene(self.bot, scene_type, scene_id, parent_scene_id=parent_scene_id):
             return scene
         if scene := await self._stored_scene(scene_type, scene_id):
             cache.save_scene(self.bot, scene)
@@ -97,9 +95,7 @@ class Interface:
             )
         return None
 
-    async def get_member(
-        self, scene_type: SceneType, scene_id: str, user_id: str
-    ) -> Member | None:
+    async def get_member(self, scene_type: SceneType, scene_id: str, user_id: str) -> Member | None:
         scene_id = str(scene_id)
         user_id = str(user_id)
         if member := cache.get_member(self.bot, scene_type, scene_id, user_id):
@@ -112,9 +108,7 @@ class Interface:
             cache.save_member(self.bot, scene_type, scene_id, member)
         return member
 
-    async def query_member(
-        self, scene_type: SceneType, scene_id: str, user_id: str
-    ) -> Member | None:
+    async def query_member(self, scene_type: SceneType, scene_id: str, user_id: str) -> Member | None:
         if scene_type != SceneType.GROUP:
             return None
         try:
@@ -154,9 +148,7 @@ class Interface:
         except Exception:
             return None
 
-    async def _stored_member(
-        self, scene_type: SceneType, scene_id: str, user_id: str
-    ) -> Member | None:
+    async def _stored_member(self, scene_type: SceneType, scene_id: str, user_id: str) -> Member | None:
         try:
             from .orm import get_session_model_by_key
 

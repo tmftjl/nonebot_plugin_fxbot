@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-from nonebot.adapters import Event
 from nonebot.matcher import Matcher
+from nonebot.adapters import Event
 
-from ...adapter import extract_message_target, selfBot
-from ...adapter import Uninfo
-from ...permission import PermLevel, PermScene
 from . import P
+from .store import get_subscription, remove_subscription, upsert_subscription
 from .client import fetch_merchant_snapshot
 from .renderer import render_merchant_image
-from .store import get_subscription, remove_subscription, upsert_subscription
+from ...adapter import Uninfo, selfBot, extract_message_target
+from ...permission import PermLevel, PermScene
 
 merchant_query = P.on_regex(
     r"^[#＃]远行商人$",
@@ -78,9 +77,7 @@ async def _handle_query(matcher: Matcher) -> None:
 
 
 @merchant_subscribe.handle()
-async def _handle_subscribe(
-    matcher: Matcher, event: Event, session: Uninfo
-) -> None:
+async def _handle_subscribe(matcher: Matcher, event: Event, session: Uninfo) -> None:
     """订阅远行商人推送（群聊或私聊）。"""
     sub_type, sub_key = _event_context(session)
     if not sub_key:

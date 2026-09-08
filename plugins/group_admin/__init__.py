@@ -4,21 +4,20 @@ from __future__ import annotations
 
 import re
 import time
-from dataclasses import dataclass
 from typing import Any
+from dataclasses import dataclass
 
 from nonebot import logger
-from nonebot.adapters import Bot, Event
-from nonebot.matcher import Matcher
 from nonebot.params import RegexGroup
+from nonebot.matcher import Matcher
+from nonebot.adapters import Bot, Event
 
-from ...adapter import selfBot
-from ...adapter import Uninfo
+from . import banwords as banwords
+from ...plugin import Plugin
+from .identity import is_superuser_id
+from ...adapter import Uninfo, selfBot
 from ...chat.tools import ToolContext, ToolRuntime, tool
 from ...permission import PermLevel, PermScene
-from ...plugin import Plugin
-from . import banwords as banwords
-from .identity import is_superuser_id
 
 P = Plugin(
     "group_admin",
@@ -216,9 +215,7 @@ async def _mute_all(bot: Bot, group_id: str, *, operator_id: str, enable: bool) 
         return _failure(guard, exc)
 
 
-async def _set_admin(
-    bot: Bot, group_id: str, user_id: str, *, operator_id: str, enable: bool
-) -> ServiceResult:
+async def _set_admin(bot: Bot, group_id: str, user_id: str, *, operator_id: str, enable: bool) -> ServiceResult:
     """设置或取消管理员。"""
     guard = await _guard(bot, group_id, operator_id, target_id=user_id, op_name="设置管理员")
     if not guard.success:
@@ -237,9 +234,7 @@ async def _set_admin(
         return ServiceResult(False, f"操作失败: {exc}")
 
 
-async def _recall_message(
-    bot: Bot, group_id: str, message_id: int, *, operator_id: str
-) -> ServiceResult:
+async def _recall_message(bot: Bot, group_id: str, message_id: int, *, operator_id: str) -> ServiceResult:
     """撤回消息。"""
     guard = await _guard(bot, group_id, operator_id, op_name="撤回")
     if not guard.success:
@@ -251,9 +246,7 @@ async def _recall_message(
         return ServiceResult(False, f"操作失败: {exc}")
 
 
-async def _set_essence(
-    bot: Bot, group_id: str, message_id: int, *, operator_id: str, enable: bool
-) -> ServiceResult:
+async def _set_essence(bot: Bot, group_id: str, message_id: int, *, operator_id: str, enable: bool) -> ServiceResult:
     """设置或取消精华消息。"""
     guard = await _guard(bot, group_id, operator_id, op_name="设置精华")
     if not guard.success:
@@ -312,9 +305,7 @@ mute_cmd = P.on_regex(
 
 
 @mute_cmd.handle()
-async def _handle_mute(
-    matcher: Matcher, bot: Bot, event: Event, session: Uninfo, groups: tuple = RegexGroup()
-) -> None:
+async def _handle_mute(matcher: Matcher, bot: Bot, event: Event, session: Uninfo, groups: tuple = RegexGroup()) -> None:
     """处理禁言命令。"""
     group_id = session.scene.id if session.scene.is_group else None
     if not group_id:
@@ -652,9 +643,7 @@ async def _handle_apply_title(matcher: Matcher, bot: Bot, event: Event, session:
     if not title:
         await matcher.finish("请提供头衔内容")
     if _title_width(title) > 12:
-        await matcher.finish(
-            f"❌ 头衔过长（当前等效 {_title_width(title)} 字符），最多 6 个中文字或 12 个英文字母"
-        )
+        await matcher.finish(f"❌ 头衔过长（当前等效 {_title_width(title)} 字符），最多 6 个中文字或 12 个英文字母")
     result = await _set_title(bot, group_id, session.user.id, title, operator_id=session.user.id)
     if not result.success:
         await matcher.finish("❌ " + result.message)
@@ -818,15 +807,11 @@ async def _handle_unset_essence(matcher: Matcher, bot: Bot, event: Event, sessio
         "required": ["user_id", "duration"],
     },
 )
-async def mute_member_tool(
-    ctx: ToolContext, rt: ToolRuntime, user_id: str, duration: int
-) -> dict[str, Any]:
+async def mute_member_tool(ctx: ToolContext, rt: ToolRuntime, user_id: str, duration: int) -> dict[str, Any]:
     """AI 工具：禁言群成员。"""
     if not ctx.group_id:
         return {"success": False, "message": "只能在群聊中使用"}
-    result = await _mute_member(
-        rt.require_bot(), ctx.group_id, user_id, duration, operator_id=ctx.user_id
-    )
+    result = await _mute_member(rt.require_bot(), ctx.group_id, user_id, duration, operator_id=ctx.user_id)
     return {"success": result.success, "message": result.message}
 
 
@@ -883,9 +868,7 @@ async def unmute_member_tool(ctx: ToolContext, rt: ToolRuntime, user_id: str) ->
         "required": [],
     },
 )
-async def self_mute_tool(
-    ctx: ToolContext, rt: ToolRuntime, duration_seconds: int = 600
-) -> dict[str, Any]:
+async def self_mute_tool(ctx: ToolContext, rt: ToolRuntime, duration_seconds: int = 600) -> dict[str, Any]:
     """AI 工具：禁言自己。"""
     if not ctx.group_id:
         return {"success": False, "message": "只能在群聊中使用"}
@@ -917,7 +900,5 @@ async def apply_title_tool(ctx: ToolContext, rt: ToolRuntime, title: str) -> dic
     """AI 工具：申请头衔。"""
     if not ctx.group_id:
         return {"success": False, "message": "只能在群聊中使用"}
-    result = await _set_title(
-        rt.require_bot(), ctx.group_id, ctx.user_id, title, operator_id=ctx.user_id
-    )
+    result = await _set_title(rt.require_bot(), ctx.group_id, ctx.user_id, title, operator_id=ctx.user_id)
     return {"success": result.success, "message": result.message}

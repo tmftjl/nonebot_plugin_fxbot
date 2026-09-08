@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-import json
 import re
+import json
 from typing import Any
 from urllib.parse import urljoin
 
 import httpx
 
-from ..config import cfg_general, cfg_network
 from .base import ParseError
+from ..config import cfg_general, cfg_network
 
 COMMON_HEADERS = {
     "User-Agent": (
@@ -20,7 +20,11 @@ COMMON_HEADERS = {
 }
 
 IOS_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+    "User-Agent": (
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+        "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 "
+        "Safari/604.1"
+    ),
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
 
@@ -43,9 +47,7 @@ def proxy() -> str | None:
     return value or None
 
 
-async def get_text(
-    url: str, *, headers: dict[str, str] | None = None, follow_redirects: bool = True
-) -> str:
+async def get_text(url: str, *, headers: dict[str, str] | None = None, follow_redirects: bool = True) -> str:
     """请求文本内容。"""
     async with httpx.AsyncClient(
         timeout=timeout(),
@@ -60,9 +62,7 @@ async def get_text(
 
 async def final_url(url: str, *, headers: dict[str, str] | None = None) -> str:
     """获取最终跳转地址。"""
-    async with httpx.AsyncClient(
-        timeout=timeout(), proxy=proxy(), follow_redirects=True, verify=False
-    ) as client:
+    async with httpx.AsyncClient(timeout=timeout(), proxy=proxy(), follow_redirects=True, verify=False) as client:
         response = await client.get(url, headers=headers or COMMON_HEADERS)
         response.raise_for_status()
         return str(response.url)
@@ -70,9 +70,7 @@ async def final_url(url: str, *, headers: dict[str, str] | None = None) -> str:
 
 async def redirect_url(url: str, *, headers: dict[str, str] | None = None) -> str:
     """获取单次跳转地址。"""
-    async with httpx.AsyncClient(
-        timeout=timeout(), proxy=proxy(), follow_redirects=False, verify=False
-    ) as client:
+    async with httpx.AsyncClient(timeout=timeout(), proxy=proxy(), follow_redirects=False, verify=False) as client:
         response = await client.get(url, headers=headers or COMMON_HEADERS)
         if response.status_code >= 400:
             response.raise_for_status()

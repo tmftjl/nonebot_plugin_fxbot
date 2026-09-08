@@ -3,15 +3,12 @@
 from __future__ import annotations
 
 from typing import Any
-from urllib.parse import urlencode
 
 from nonebot.matcher import Matcher
 
-from ...permission import PermLevel, PermScene
+from . import dps_chart as dps_chart, cos_upload as cos_upload, waves_analyze as waves_analyze
 from ...plugin import Plugin
-from . import cos_upload as cos_upload
-from . import dps_chart as dps_chart
-from . import waves_analyze as waves_analyze
+from ...permission import PermLevel, PermScene
 
 P = Plugin(
     "useful",

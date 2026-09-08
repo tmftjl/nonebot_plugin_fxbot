@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from nonebot.plugin import PluginMetadata
 
-from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
+from ...permission import PermLevel, PermScene
 
 __plugin_meta__ = PluginMetadata(
     name="洛克王国",
@@ -34,11 +34,13 @@ P = Plugin(
     scene=PermScene.ALL,
 )
 
-from . import commands_info as commands_info
-from . import commands_merchant as commands_merchant
-from . import config as config
-from . import resource_downloader as resource_downloader
-from .scheduler import setup_rocom_merchant_tasks
+from . import (  # noqa: E402
+    config as config,
+    commands_info as commands_info,
+    commands_merchant as commands_merchant,
+    resource_downloader as resource_downloader,
+)
+from .scheduler import setup_rocom_merchant_tasks  # noqa: E402
 
 setup_rocom_merchant_tasks()
 

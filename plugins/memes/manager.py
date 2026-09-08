@@ -1,16 +1,16 @@
 from enum import IntEnum
-from pathlib import Path
 from typing import Any, Optional
+from pathlib import Path
 
 import yaml
-from nonebot.compat import PYDANTIC_V2, model_dump, type_validate_python
-from nonebot.log import logger
 from pydantic import BaseModel
 from rapidfuzz import process
+from nonebot.log import logger
+from nonebot.compat import PYDANTIC_V2, model_dump, type_validate_python
 
-from ...utils.paths import data_dir
 from .config import cfg_disabled_list
 from .request import MemeInfo, get_meme_info, get_meme_keys
+from ...utils.paths import data_dir
 
 config_path = data_dir("memes") / "memes_config.yaml"
 
@@ -117,9 +117,7 @@ class MemeManager:
         score_cutoff: float = 80.0,
     ) -> list[MemeInfo]:
         meme_name = meme_name.lower()
-        meme_names = process.extract(
-            meme_name, self.__meme_names.keys(), limit=limit, score_cutoff=score_cutoff
-        )
+        meme_names = process.extract(meme_name, self.__meme_names.keys(), limit=limit, score_cutoff=score_cutoff)
         result: dict[str, MemeInfo] = {}
         for name, _, _ in meme_names:
             for meme in self.__meme_names[name]:
@@ -158,9 +156,7 @@ class MemeManager:
                 except Exception:
                     logger.warning("表情列表解析失败，将重新生成")
         try:
-            meme_list = {
-                name: type_validate_python(MemeConfig, config) for name, config in raw_list.items()
-            }
+            meme_list = {name: type_validate_python(MemeConfig, config) for name, config in raw_list.items()}
         except Exception:
             meme_list = {}
             logger.warning("表情列表解析失败，将重新生成")

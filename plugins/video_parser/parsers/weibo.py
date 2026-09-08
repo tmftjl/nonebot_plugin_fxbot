@@ -2,19 +2,19 @@
 
 from __future__ import annotations
 
-import html
 import re
-from html.parser import HTMLParser
+import html
 from math import ceil
 from time import time
-from typing import Any
 from uuid import uuid4
+from typing import Any
+from html.parser import HTMLParser
 
 import httpx
 
-from ..types import VideoResult
 from .base import ParseError
-from .common import COMMON_HEADERS, final_url, proxy, timeout
+from ..types import VideoResult
+from .common import COMMON_HEADERS, proxy, timeout, final_url
 
 HEADERS = {
     **COMMON_HEADERS,
@@ -34,9 +34,7 @@ async def parse(url: str) -> VideoResult:
             raise ParseError("微博短链无法跳转")
         return await parse(resolved)
 
-    article = re.search(r"ttarticle/.+?id=(?P<id>\d+)", url) or re.search(
-        r"article/.+?/id/(?P<id>\d+)", url
-    )
+    article = re.search(r"ttarticle/.+?id=(?P<id>\d+)", url) or re.search(r"article/.+?/id/(?P<id>\d+)", url)
     if article:
         return await _parse_article(article.group("id"), source=url)
 
@@ -66,9 +64,7 @@ async def _parse_article(article_id: str, *, source: str) -> VideoResult:
         "_t": int(time() * 1000),
     }
     async with httpx.AsyncClient(timeout=timeout(), proxy=proxy(), verify=False) as client:
-        response = await client.get(
-            "https://card.weibo.com/article/m/aj/detail", params=params, headers=HEADERS
-        )
+        response = await client.get("https://card.weibo.com/article/m/aj/detail", params=params, headers=HEADERS)
         response.raise_for_status()
         payload = response.json()
 
@@ -106,9 +102,7 @@ async def _parse_fid(fid: str, *, source: str) -> VideoResult:
         response.raise_for_status()
         data = response.json()
     play = ((data.get("data") or {}).get("Component_Play_Playinfo")) or {}
-    video_url = _normalize_scheme(
-        next(iter((play.get("urls") or {}).values()), None) or play.get("stream_url")
-    )
+    video_url = _normalize_scheme(next(iter((play.get("urls") or {}).values()), None) or play.get("stream_url"))
     if not video_url:
         raise ParseError("微博视频页没有视频直链")
     return VideoResult(

@@ -2,21 +2,21 @@
 
 from __future__ import annotations
 
-import asyncio
 import re
-from collections.abc import Callable
+import asyncio
 from typing import Any
+from collections.abc import Callable
 
 from nonebot import logger
-from nonebot.adapters import Event
 from nonebot.matcher import Matcher
+from nonebot.adapters import Event
 
+from . import update_gallery as update_gallery
+from .config import load_cfg, face_list, load_all_commands, random_local_image
+from ...plugin import Plugin
 from ...adapter import selfBot
 from ...permission import PermLevel, PermScene
-from ...plugin import Plugin
 from ...utils.http import get_shared_async_client
-from . import update_gallery as update_gallery
-from .config import face_list, load_all_commands, load_cfg, random_local_image
 
 P = Plugin(
     "cultured",

@@ -8,8 +8,8 @@ from typing import Any
 
 from nonebot import logger
 
-from ...utils.paths import data_dir
 from .client import LiveRoomSnapshot
+from ...utils.paths import data_dir
 
 DATA_FILE = data_dir("bilibili_live") / "state.json"
 
@@ -42,11 +42,7 @@ def save_state(data: dict[str, Any]) -> None:
 def get_subscriptions() -> list[dict[str, Any]]:
     """返回全部有效订阅会话。"""
     subscriptions = load_state().get("subscriptions", [])
-    return (
-        [item for item in subscriptions if isinstance(item, dict)]
-        if isinstance(subscriptions, list)
-        else []
-    )
+    return [item for item in subscriptions if isinstance(item, dict)] if isinstance(subscriptions, list) else []
 
 
 def _key_field(sub_type: str) -> str:
@@ -80,9 +76,7 @@ def add_room(
         (
             item
             for item in subscriptions
-            if isinstance(item, dict)
-            and item.get("type") == sub_type
-            and str(item.get(key_field) or "") == sub_key
+            if isinstance(item, dict) and item.get("type") == sub_type and str(item.get(key_field) or "") == sub_key
         ),
         None,
     )

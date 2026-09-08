@@ -3,24 +3,22 @@
 from __future__ import annotations
 
 import textwrap
-from datetime import datetime
 from io import BytesIO
 from typing import Any
+from datetime import datetime
 
-from nonebot import logger, on_notice
-from nonebot.adapters import Bot, Event
-from nonebot.matcher import Matcher
-from nonebot.params import RegexGroup
 from PIL import Image
+from nonebot import logger, on_notice
+from nonebot.params import RegexGroup
+from nonebot.matcher import Matcher
+from nonebot.adapters import Bot, Event
 
-from ...adapter import build_message, build_message_segment, selfBot
-from ...adapter import event_group_id, event_user_id
-from ...adapter import Uninfo
-from ...permission import PermLevel, PermScene
-from ...plugin import Plugin
-from ...utils.http import get_shared_async_client
-from .box_draw import create_image
 from .config import cfg_box
+from ...plugin import Plugin
+from .box_draw import create_image
+from ...adapter import Uninfo, selfBot, build_message, event_user_id, event_group_id, build_message_segment
+from ...permission import PermLevel, PermScene
+from ...utils.http import get_shared_async_client
 
 P = Plugin(
     "entertain",
@@ -36,9 +34,7 @@ def _cfg_get(key: str) -> Any:
     return cfg_box()[key]
 
 
-def _extract_target_id(
-    event: Event, fallback: str = "", self_id: str = "", default_user_id: str = ""
-) -> str:
+def _extract_target_id(event: Event, fallback: str = "", self_id: str = "", default_user_id: str = "") -> str:
     """提取开盒目标。"""
     target = selfBot.first_mention_target(event.get_message(), {self_id})
     if target:

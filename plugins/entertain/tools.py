@@ -6,19 +6,19 @@ from typing import Literal
 
 from nonebot import logger
 
-from ...adapter import build_message_segment, selfBot
-from ...chat.tools import ToolContext, ToolError, ToolRuntime, tool
 from .fortune import (
-    _generate_fortune_canvas,
     _get_background_image,
+    _generate_fortune_canvas,
     _get_or_create_today_fortune,
 )
+from ...adapter import selfBot, build_message_segment
 from .musicshare import (
     MusicLoginRequired,
-    _get_song_url_with_pool,
     _login_hint,
+    _get_song_url_with_pool,
     _search_songs_with_pool,
 )
+from ...chat.tools import ToolError, ToolContext, ToolRuntime, tool
 
 
 @tool(

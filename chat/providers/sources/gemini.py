@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-import base64
 import json
-from collections.abc import AsyncGenerator
+import base64
 from typing import Any
+from collections.abc import AsyncGenerator
 
 from google import genai
-from google.genai import types
 from nonebot import logger
+from google.genai import types
 
 from ..base import ChatProvider, EmbeddingProvider
 from ..entities import LLMResponse
@@ -70,9 +70,7 @@ class GeminiProvider(ChatProvider):
                                 )
                     contents.append(types.UserContent(parts=parts))
                 else:
-                    contents.append(
-                        types.UserContent(parts=[types.Part.from_text(text=content or " ")])
-                    )
+                    contents.append(types.UserContent(parts=[types.Part.from_text(text=content or " ")]))
             elif role == "assistant":
                 parts = []
                 if content:

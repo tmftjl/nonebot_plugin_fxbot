@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from nonebot.plugin import PluginMetadata
 
-from ...permission import PermLevel, PermScene
 from ...plugin import Plugin
+from ...permission import PermLevel, PermScene
 
 __plugin_meta__ = PluginMetadata(
     name="B站直播推送",
@@ -28,8 +28,8 @@ P = Plugin(
     scene=PermScene.ALL,
 )
 
-from . import commands as commands
-from .scheduler import setup_bilibili_live_tasks
+from . import commands as commands  # noqa: E402
+from .scheduler import setup_bilibili_live_tasks  # noqa: E402
 
 setup_bilibili_live_tasks()
 

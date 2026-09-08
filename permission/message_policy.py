@@ -4,14 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from nonebot.message import event_preprocessor
 from nonebot.adapters import Bot, Event
 from nonebot.exception import IgnoredException
-from nonebot.message import event_preprocessor
 
-from ..adapter import bind_bot, selfBot
-from ..adapter import event_is_group, event_is_tome
-from ..adapter import event_message
 from ..config import get_manager as get_config_manager
+from ..adapter import selfBot, bind_bot, event_is_tome, event_message, event_is_group
 
 
 def should_process_fxbot_message(bot: Bot, event: Event) -> bool:

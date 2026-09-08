@@ -6,8 +6,8 @@ from typing import Any
 
 from nonebot import logger
 
-from ..utils.paths import config_dir
 from .proxy import ConfigProxy
+from ..utils.paths import config_dir
 from .system_defaults import SYSTEM_DEFAULTS
 
 
@@ -50,10 +50,7 @@ class ConfigManager:
         return self.register("system", SYSTEM_DEFAULTS).load()
 
     def get_all(self) -> dict[str, Any]:
-        return {
-            f"{namespace}/{filename}": proxy.load()
-            for (namespace, filename), proxy in self._proxies.items()
-        }
+        return {f"{namespace}/{filename}": proxy.load() for (namespace, filename), proxy in self._proxies.items()}
 
     def get_console_configs(self) -> dict[str, Any]:
         """返回控制台使用的配置数据。"""
@@ -71,9 +68,7 @@ class ConfigManager:
         system_proxy = self.register("system", SYSTEM_DEFAULTS)
         system_keys = set(system_proxy.load())
         system_data = {
-            key: payload[key]
-            for key in system_keys
-            if key in payload and key not in self._registered_plugin_names()
+            key: payload[key] for key in system_keys if key in payload and key not in self._registered_plugin_names()
         }
         if system_data:
             system_proxy.save(system_data)
@@ -88,9 +83,7 @@ class ConfigManager:
     def _registered_plugin_names(self) -> set[str]:
         """返回已注册插件配置命名空间。"""
         return {
-            namespace
-            for (namespace, filename) in self._proxies
-            if namespace != "system" and filename == "config.json"
+            namespace for (namespace, filename) in self._proxies if namespace != "system" and filename == "config.json"
         }
 
     def reload_all(self) -> tuple[bool, dict[str, Any]]:

@@ -6,7 +6,7 @@ from typing import Any
 
 from nonebot.log import logger
 
-from .bot import PlatformAdapter, PlatformError
+from .bot import PlatformError, PlatformAdapter
 
 _adapters: list[PlatformAdapter] = []
 
@@ -17,11 +17,7 @@ def get_registered_adapters() -> tuple[PlatformAdapter, ...]:
 
 def adapter_name(bot: Any) -> str:
     adapter = getattr(bot, "adapter", None)
-    return (
-        str(adapter.get_name())
-        if adapter and hasattr(adapter, "get_name")
-        else str(getattr(bot, "type", "Unknown"))
-    )
+    return str(adapter.get_name()) if adapter and hasattr(adapter, "get_name") else str(getattr(bot, "type", "Unknown"))
 
 
 def register_adapter(adapter: PlatformAdapter | type[PlatformAdapter]):
