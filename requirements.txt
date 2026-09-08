@@ -5,7 +5,7 @@ pydantic
 sqlmodel
 sqlalchemy
 aiosqlite
-httpx
+httpx[socks]
 fastapi
 Pillow>=9.2
 playwright>=1.40
