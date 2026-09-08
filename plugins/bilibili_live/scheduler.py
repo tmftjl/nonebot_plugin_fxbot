@@ -21,6 +21,7 @@ _background_task: asyncio.Task[None] | None = None
 _calibration_task: asyncio.Task[None] | None = None
 CHECK_INTERVAL_SECONDS = 60
 MAX_CONCURRENCY = 4
+STARTUP_CALIBRATION_DELAY_SECONDS = 5
 
 
 def _room_id(record: dict[str, Any]) -> int:
@@ -141,11 +142,17 @@ async def _startup_calibrate() -> None:
         logger.opt(exception=True).warning("[bilibili_live] 启动状态校准失败")
 
 
+async def _delayed_startup_calibrate() -> None:
+    """等待 Bot 完成启动后再执行网络校准，避免抢占启动阶段资源。"""
+    await asyncio.sleep(STARTUP_CALIBRATION_DELAY_SECONDS)
+    await _startup_calibrate()
+
+
 async def _startup_task() -> None:
     """创建后台任务，不阻塞 NoneBot 启动流程。"""
     global _background_task, _calibration_task
     if _calibration_task is None or _calibration_task.done():
-        _calibration_task = asyncio.create_task(_startup_calibrate())
+        _calibration_task = asyncio.create_task(_delayed_startup_calibrate())
     if _background_task is None or _background_task.done():
         _background_task = asyncio.create_task(_background_loop())
         logger.info(f"[bilibili_live] 后台检查任务已启动：每 {CHECK_INTERVAL_SECONDS} 秒检查一次")
