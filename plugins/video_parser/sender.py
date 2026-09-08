@@ -25,7 +25,7 @@ async def send_video_result(
     matcher: Matcher, event: Event, result: VideoResult, video_path: Path
 ) -> None:
     """发送标题、可选封面和视频。"""
-    text_seg = selfBot.build_segment("text", _summary(result) + "\n")
+    text_seg = selfBot.build_segment("text", _summary(result))
     image_seg = (
         selfBot.build_segment("image", result.cover_url)
         if result.cover_url and bool(cfg_general().get("send_cover", False))
@@ -49,7 +49,7 @@ async def send_image_result(
     image_paths: list[Path],
 ) -> None:
     """发送标题和图片。"""
-    text_seg = selfBot.build_segment("text", _summary(result) + "\n")
+    text_seg = selfBot.build_segment("text", _summary(result))
     image_segments = [selfBot.build_segment("image", image_path) for image_path in image_paths]
 
     forward_messages = [selfBot.build_message(text_seg)]

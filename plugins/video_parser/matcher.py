@@ -39,7 +39,7 @@ def _sent_message_id(sent: object) -> int | str | None:
         return None
     if isinstance(sent, dict):
         return sent.get("message_id") or sent.get("id")
-    message_id = getattr(sent, "message_id", None)
+    message_id = getattr(sent, "message_id", None) or getattr(sent, "id", None)
     if message_id is not None:
         return message_id
     return sent if isinstance(sent, (int, str)) else None
@@ -49,6 +49,9 @@ async def _recall_processing_message(sent: object, event: Event) -> None:
     """解析成功后撤回处理中提示，且不让撤回失败影响结果。"""
     message_id = _sent_message_id(sent)
     if message_id is None:
+        logger.warning(
+            f"[video_parser] 处理中提示发送结果未包含消息 ID，无法撤回: {type(sent).__name__}"
+        )
         return
     try:
         await selfBot.delete_message(message_id, group_id=event_group_id(event))
