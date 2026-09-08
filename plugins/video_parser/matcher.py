@@ -45,7 +45,7 @@ def _sent_message_id(sent: object) -> int | str | None:
     return sent if isinstance(sent, (int, str)) else None
 
 
-async def _recall_processing_message(sent: object, group_id: str | None) -> None:
+async def _recall_processing_message(sent: object, session: Uninfo) -> None:
     """解析成功后撤回处理中提示，且不让撤回失败影响结果。"""
     message_id = _sent_message_id(sent)
     if message_id is None:
@@ -54,7 +54,10 @@ async def _recall_processing_message(sent: object, group_id: str | None) -> None
         )
         return
     try:
-        await selfBot.delete_message(message_id, group_id=group_id)
+        if session.scene.is_group:
+            await selfBot.delete_message(message_id, group_id=session.scene.id)
+        else:
+            await selfBot.delete_message(message_id, user_id=session.scene.id)
     except Exception as exc:  # noqa: BLE001 - 撤回失败不能影响已发送的解析结果
         logger.warning(f"[video_parser] 撤回处理中提示失败: {type(exc).__name__}: {exc}")
 
@@ -174,7 +177,7 @@ async def _handle_video(
             await send_image_result(matcher, event, result, image_paths)
         else:
             raise ParseError("解析结果没有可发送的媒体")
-        await _recall_processing_message(processing_message, session.scene.id)
+        await _recall_processing_message(processing_message, session)
     except (ParseError, DownloadError) as exc:
         await matcher.finish(f"解析失败：{exc}")
     except httpx.HTTPStatusError as exc:

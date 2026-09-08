@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import base64
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-import time
 from typing import Any
 
 from nonebot.adapters import Bot
@@ -100,12 +100,16 @@ class QQOfficialMessageAdapter(PlatformAdapter):
     async def send_private_message(self, bot, user_id, message):
         return await bot.send_to_c2c(openid=str(user_id), message=message)
 
-    async def delete_message(self, bot, message_id, *, group_id=None):
-        if group_id is None:
-            raise UnsupportedCapability("撤回 QQ 群消息时必须提供群 ID")
-        return await bot.delete_group_message(
-            group_openid=str(group_id), message_id=str(message_id)
-        )
+    async def delete_message(self, bot, message_id, *, group_id=None, user_id=None):
+        if group_id is not None:
+            return await bot.delete_group_message(
+                group_openid=str(group_id), message_id=str(message_id)
+            )
+        if user_id is not None:
+            return await bot.delete_c2c_message(
+                openid=str(user_id), message_id=str(message_id)
+            )
+        raise UnsupportedCapability("撤回 QQ 消息时必须提供群 ID 或用户 OpenID")
 
     async def send_event(self, bot: Bot, event: Any, message: Any) -> Any:
         if isinstance(event, GroupMemberAddEvent):

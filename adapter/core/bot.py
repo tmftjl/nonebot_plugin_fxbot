@@ -110,7 +110,12 @@ class PlatformAdapter(ABC):
         raise UnsupportedCapability(capability)
 
     async def delete_message(
-        self, bot: Any, message_id: int | str, *, group_id: str | None = None
+        self,
+        bot: Any,
+        message_id: int | str,
+        *,
+        group_id: str | None = None,
+        user_id: str | None = None,
     ) -> Any:
         return await self._unsupported("撤回消息")
 
@@ -262,8 +267,16 @@ class PlatformBot:
     def extract_reply_message_id(self, message: Any) -> int | None:
         return self.adapter.extract_reply_message_id(message)
 
-    async def delete_message(self, message_id: int | str, *, group_id: str | None = None):
-        return await self.adapter.delete_message(self.raw, message_id, group_id=group_id)
+    async def delete_message(
+        self,
+        message_id: int | str,
+        *,
+        group_id: str | None = None,
+        user_id: str | None = None,
+    ):
+        return await self.adapter.delete_message(
+            self.raw, message_id, group_id=group_id, user_id=user_id
+        )
 
     async def get_message(self, message_id: int):
         return await self.adapter.get_message(self.raw, message_id)
