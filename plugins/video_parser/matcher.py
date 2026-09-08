@@ -6,16 +6,15 @@ import json
 
 import httpx
 from nonebot.adapters import Event
-from ...adapter import selfBot
 from nonebot.exception import MatcherException
+from nonebot.log import logger
 from nonebot.matcher import Matcher
 from nonebot.params import RegexGroup
 from nonebot.permission import SUPERUSER
 from nonebot.rule import Rule
 from nonebot.typing import T_State
 
-from ...adapter import event_group_id
-from ...adapter import Uninfo
+from ...adapter import Uninfo, event_group_id, selfBot
 from ...permission import PermLevel, PermScene
 from . import P
 from .config import is_global_enabled, set_global_enabled
@@ -32,6 +31,29 @@ from .sender import send_image_result, send_video_result
 from .state import is_group_enabled, set_group_enabled
 
 STATE_URL_KEY = "video_parser_url"
+
+
+def _sent_message_id(sent: object) -> int | str | None:
+    """从适配器发送结果中提取消息 ID。"""
+    if sent is None:
+        return None
+    if isinstance(sent, dict):
+        return sent.get("message_id") or sent.get("id")
+    message_id = getattr(sent, "message_id", None)
+    if message_id is not None:
+        return message_id
+    return sent if isinstance(sent, (int, str)) else None
+
+
+async def _recall_processing_message(sent: object, event: Event) -> None:
+    """解析成功后撤回处理中提示，且不让撤回失败影响结果。"""
+    message_id = _sent_message_id(sent)
+    if message_id is None:
+        return
+    try:
+        await selfBot.delete_message(message_id, group_id=event_group_id(event))
+    except Exception as exc:  # noqa: BLE001 - 撤回失败不能影响已发送的解析结果
+        logger.warning(f"[video_parser] 撤回处理中提示失败: {type(exc).__name__}: {exc}")
 
 
 def _find_event_url(event: Event) -> str | None:
@@ -134,7 +156,7 @@ async def _handle_video(matcher: Matcher, event: Event, state: T_State) -> None:
     url = str(state.get(STATE_URL_KEY) or "")
     if not can_parse_url(url):
         return
-    await matcher.send("正在解析媒体，请稍候...")
+    processing_message = await matcher.send("正在解析媒体，请稍候...")
     cleanup_legacy_cache()
     download_dir = create_download_dir()
     try:
@@ -147,6 +169,7 @@ async def _handle_video(matcher: Matcher, event: Event, state: T_State) -> None:
             await send_image_result(matcher, event, result, image_paths)
         else:
             raise ParseError("解析结果没有可发送的媒体")
+        await _recall_processing_message(processing_message, event)
     except (ParseError, DownloadError) as exc:
         await matcher.finish(f"解析失败：{exc}")
     except httpx.HTTPStatusError as exc:

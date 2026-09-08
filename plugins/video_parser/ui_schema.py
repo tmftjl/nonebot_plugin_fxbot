@@ -8,8 +8,9 @@ DEFAULTS: dict[str, Any] = {
     "general": {
         "global_enabled": True,
         "use_base64": False,
+        "send_cover": False,
         "max_file_mb": 80,
-        "max_duration_seconds": 480,
+        "max_duration_seconds": 600,
         "request_timeout_seconds": 20,
     },
     "platforms": {
@@ -52,6 +53,13 @@ def get_ui_schema() -> dict[str, Any]:
                         "component": "Switch",
                         "default": DEFAULTS["general"]["use_base64"],
                         "helpMessage": "开启后视频内容直接随消息发送；关闭后发送本地路径，需让 NapCat 能访问同一路径。",
+                    },
+                    {
+                        "field": "send_cover",
+                        "label": "发送视频封面",
+                        "component": "Switch",
+                        "default": DEFAULTS["general"]["send_cover"],
+                        "helpMessage": "开启后发送视频封面，默认不发送。",
                     },
                     {
                         "field": "max_file_mb",

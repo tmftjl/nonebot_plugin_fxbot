@@ -166,13 +166,17 @@ async def _download_file_curl(url: str, *, file_path: Path, headers: dict[str, s
 def _check_content_length(content_length: str | None, max_bytes: int) -> None:
     """检查响应声明大小。"""
     if content_length and int(content_length) > max_bytes:
-        raise DownloadError(f"文件大小超过限制：{int(content_length) / 1024 / 1024:.1f} MB")
+        current_mb = int(content_length) / 1024 / 1024
+        max_mb = max_bytes / 1024 / 1024
+        raise DownloadError(f"文件大小超出配置限制：上限 {max_mb:g} MB，当前 {current_mb:.1f} MB")
 
 
 def _check_total_size(total: int, max_bytes: int) -> None:
     """检查已下载大小。"""
     if total > max_bytes:
-        raise DownloadError(f"文件大小超过限制：{max_bytes // 1024 // 1024} MB")
+        current_mb = total / 1024 / 1024
+        max_mb = max_bytes / 1024 / 1024
+        raise DownloadError(f"文件大小超出配置限制：上限 {max_mb:g} MB，当前 {current_mb:.1f} MB")
 
 
 def _ensure_downloaded(file_path: Path) -> Path:
@@ -210,9 +214,11 @@ async def download_video(result: VideoResult, *, directory: Path | None = None) 
     """下载解析结果中的视频。"""
     if not result.video_url:
         raise DownloadError("解析结果没有视频直链")
-    max_duration = float(cfg_general().get("max_duration_seconds", 480))
+    max_duration = float(cfg_general().get("max_duration_seconds", 600))
     if result.duration and result.duration > max_duration:
-        raise DownloadError(f"视频时长超过限制：{int(result.duration)} 秒")
+        raise DownloadError(
+            f"视频时长超出配置限制：上限 {max_duration:g} 秒，当前 {result.duration:g} 秒"
+        )
 
     if not result.audio_url:
         return await download_file(

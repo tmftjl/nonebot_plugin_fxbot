@@ -9,7 +9,7 @@ from ...plugin import Plugin
 
 __plugin_meta__ = PluginMetadata(
     name="视频解析",
-    description="解析抖音、快手、微博、小红书、B站视频链接并发送封面与视频。",
+    description="解析抖音、快手、微博、小红书、B站视频链接并发送视频，可选发送封面。",
     usage=(
         "发送支持平台的视频链接自动解析。\n"
         "#开启解析 / #关闭解析：控制本群解析\n"
