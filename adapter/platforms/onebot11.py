@@ -9,9 +9,7 @@ from pathlib import Path
 from nonebot.adapters import Bot
 from nonebot.adapters.onebot.v11 import Bot as OneBotV11Bot
 
-from ..core.bot import PlatformAdapter
-from ..core.events import event_is_group, event_is_private
-from ..core.message import _image_bytes
+from ..core.bot import PlatformAdapter, _image_bytes
 
 
 class OneBotV11MessageAdapter(PlatformAdapter):
@@ -208,12 +206,12 @@ class OneBotV11MessageAdapter(PlatformAdapter):
         ]
 
         group_id = getattr(event, "group_id", None)
-        if event_is_group(event) and group_id is not None:
+        if self.event_is_group(event) and group_id is not None:
             await self._api(bot, "send_group_forward_msg", group_id=int(group_id), messages=nodes)
             return True
 
         user_id_value = getattr(event, "user_id", None)
-        if event_is_private(event) and user_id_value is not None:
+        if self.event_is_private(event) and user_id_value is not None:
             await self._api(bot, "send_private_forward_msg", user_id=int(user_id_value), messages=nodes)
             return True
         return False

@@ -7,8 +7,7 @@ from typing import Any
 from nonebot.adapters import Bot, Event
 
 from .model import Role, User, Scene, Member, Session, SceneType, SupportScope
-from ..core.bot import PlatformBot
-from ..core.events import event_user_id, event_group_id, event_user_name
+from ..core.bot import PlatformBot, event_user_id, event_group_id, event_user_name
 from ..core.registry import adapter_name
 
 

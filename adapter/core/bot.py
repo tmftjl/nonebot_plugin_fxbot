@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import io
 from abc import ABC, abstractmethod
 from typing import Any
+from pathlib import Path
 from contextvars import ContextVar
 
 from nonebot.log import logger
@@ -62,30 +64,6 @@ class PlatformAdapter(ABC):
     async def get_replied_message(self, bot: Any, message_id: int) -> Any:
         result = await self.get_message(bot, message_id)
         return result.get("message") if isinstance(result, dict) else None
-
-    def extract_image_sources(self, message: Any) -> list[str]:
-        return [
-            source
-            for segment in list(message or [])
-            if getattr(segment, "type", "") == "image"
-            and isinstance(
-                source := (getattr(segment, "data", {}) or {}).get("url")
-                or (getattr(segment, "data", {}) or {}).get("file"),
-                str,
-            )
-            and source
-            and not source.startswith("base64://")
-        ]
-
-    def extract_reply_message_id(self, message: Any) -> int | None:
-        for segment in list(message or []):
-            if getattr(segment, "type", "") != "reply":
-                continue
-            try:
-                return int((getattr(segment, "data", {}) or {}).get("id"))
-            except (TypeError, ValueError):
-                return None
-        return None
 
     def is_mention_segment(self, segment: Any) -> bool:
         return False
@@ -191,6 +169,150 @@ class PlatformAdapter(ABC):
 
     async def send_event(self, bot: Any, event: Any, message: Any) -> Any:
         return await bot.send(event, message)
+
+    # Event/message helpers are overridable protocol hooks. The defaults keep
+    # the business facade usable for adapters that follow common conventions.
+    def event_message(self, event: Any) -> Any:
+        getter = getattr(event, "get_message", None)
+        if callable(getter):
+            try:
+                return getter()
+            except (AttributeError, ValueError):
+                return None
+        return getattr(event, "message", None)
+
+    def event_message_type(self, event: Any) -> str:
+        return str(getattr(event, "message_type", "") or getattr(event, "detail_type", "") or "").lower()
+
+    def event_is_group(self, event: Any) -> bool:
+        return self.event_message_type(event) == "group" or getattr(event, "group_id", None) is not None
+
+    def event_is_private(self, event: Any) -> bool:
+        return self.event_message_type(event) == "private" or not self.event_is_group(event)
+
+    def event_is_tome(self, event: Any) -> bool:
+        value = getattr(event, "is_tome", None)
+        return bool(value()) if callable(value) else bool(getattr(event, "to_me", False))
+
+    def event_user_id(self, event: Any) -> str:
+        value = getattr(event, "user_id", None)
+        return str(value) if value is not None else ""
+
+    def event_group_id(self, event: Any) -> str | None:
+        value = getattr(event, "group_id", None)
+        return str(value) if value is not None else None
+
+    def event_user_name(self, event: Any, user_id: str = "") -> str:
+        sender = getattr(event, "sender", None)
+        for key in ("card", "nickname", "nick", "user_name", "user_displayname"):
+            value = sender.get(key) if isinstance(sender, dict) else getattr(sender, key, None)
+            if value:
+                return str(value)
+        return str(user_id or "")
+
+    def extract_message_target(self, event: Any) -> dict[str, Any]:
+        target = {"user_id": getattr(event, "user_id", None)}
+        group_id = self.event_group_id(event)
+        if group_id is not None:
+            target["group_id"] = group_id
+        return target
+
+    def extract_image_sources(self, message: Any) -> list[str]:
+        result = []
+        for segment in list(message or []):
+            if getattr(segment, "type", "") != "image":
+                continue
+            data = getattr(segment, "data", {}) or {}
+            source = data.get("url") or data.get("file") or data.get("file_id")
+            if isinstance(source, str) and source and not source.startswith("base64://"):
+                result.append(source)
+        return result
+
+    def extract_raw_image_sources(self, message: Any) -> list[str | bytes]:
+        result = []
+        for segment in list(message or []):
+            if getattr(segment, "type", "") != "image":
+                continue
+            data = getattr(segment, "data", {}) or {}
+            source = data.get("url") or data.get("file") or data.get("file_id")
+            if isinstance(source, (str, bytes)) and source:
+                result.append(source)
+        return result
+
+    def extract_reply_message_id(self, message: Any) -> int | str | None:
+        for segment in list(message or []):
+            if getattr(segment, "type", "") != "reply":
+                continue
+            data = getattr(segment, "data", {}) or {}
+            value = data.get("id") or data.get("message_id")
+            return value if isinstance(value, (int, str)) and value else None
+        return None
+
+
+def _image_bytes(data: Any) -> bytes:
+    if isinstance(data, bytes):
+        return data
+    if isinstance(data, Path):
+        return data.read_bytes()
+    if isinstance(data, str):
+        return Path(data).read_bytes()
+    buffer = io.BytesIO()
+    data.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def event_message(event: Any) -> Any:
+    getter = getattr(event, "get_message", None)
+    if callable(getter):
+        try:
+            return getter()
+        except (AttributeError, ValueError):
+            return None
+    return getattr(event, "message", None)
+
+
+def event_message_type(event: Any) -> str:
+    return str(getattr(event, "message_type", "") or getattr(event, "detail_type", "") or "").lower()
+
+
+def event_is_group(event: Any) -> bool:
+    return event_message_type(event) == "group" or getattr(event, "group_id", None) is not None
+
+
+def event_is_private(event: Any) -> bool:
+    return event_message_type(event) == "private" or not event_is_group(event)
+
+
+def event_is_tome(event: Any) -> bool:
+    value = getattr(event, "is_tome", None)
+    return bool(value()) if callable(value) else bool(getattr(event, "to_me", False))
+
+
+def event_user_id(event: Any) -> str:
+    value = getattr(event, "user_id", None)
+    return str(value) if value is not None else ""
+
+
+def event_group_id(event: Any) -> str | None:
+    value = getattr(event, "group_id", None)
+    return str(value) if value is not None else None
+
+
+def event_user_name(event: Any, user_id: str = "") -> str:
+    sender = getattr(event, "sender", None)
+    for key in ("card", "nickname", "nick", "user_name", "user_displayname"):
+        value = sender.get(key) if isinstance(sender, dict) else getattr(sender, key, None)
+        if value:
+            return str(value)
+    return str(user_id or "")
+
+
+def extract_message_target(event: Any) -> dict[str, Any]:
+    target = {"user_id": getattr(event, "user_id", None)}
+    group_id = event_group_id(event)
+    if group_id is not None:
+        target["group_id"] = group_id
+    return target
 
 
 class PlatformBot:

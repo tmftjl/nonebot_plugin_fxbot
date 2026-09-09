@@ -13,8 +13,7 @@ from nonebot.adapters.qq import Bot as QQBot, Message, MessageSegment
 from nonebot.adapters.qq.event import GroupMemberAddEvent
 from nonebot.adapters.qq.models import SetMemberMuteState
 
-from ..core.bot import PlatformAdapter, UnsupportedCapability
-from ..core.message import _image_bytes
+from ..core.bot import PlatformAdapter, UnsupportedCapability, _image_bytes
 
 
 class QQOfficialMessageAdapter(PlatformAdapter):
