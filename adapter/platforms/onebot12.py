@@ -24,7 +24,10 @@ class OneBotV12MessageAdapter(PlatformAdapter):
         return await bot.call_api(action, **params)
 
     def match(self, bot: Bot) -> bool:
-        return isinstance(bot, OneBotV12Bot)
+        return isinstance(bot, OneBotV12Bot) or (
+            getattr(bot, "platform", "") == "wechat"
+            and getattr(bot, "impl", "") == "wxauto"
+        )
 
     def is_mention_segment(self, segment: Any) -> bool:
         return getattr(segment, "type", "") == "mention"
