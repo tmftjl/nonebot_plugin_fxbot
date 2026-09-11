@@ -185,36 +185,70 @@ class PlatformAdapter(ABC):
         return str(getattr(event, "message_type", "") or getattr(event, "detail_type", "") or "").lower()
 
     def event_is_group(self, event: Any) -> bool:
-        return self.event_message_type(event) == "group" or getattr(event, "group_id", None) is not None
+        return self.event_message_type(event) == "group" or (
+            not self.event_message_type(event) and self.event_group_id(event) is not None
+        )
 
     def event_is_private(self, event: Any) -> bool:
-        return self.event_message_type(event) == "private" or not self.event_is_group(event)
+        return self.event_message_type(event) == "private" or (
+            not self.event_message_type(event) and bool(self.event_user_id(event)) and not self.event_is_group(event)
+        )
 
     def event_is_tome(self, event: Any) -> bool:
         value = getattr(event, "is_tome", None)
         return bool(value()) if callable(value) else bool(getattr(event, "to_me", False))
 
     def event_user_id(self, event: Any) -> str:
-        value = getattr(event, "user_id", None)
-        return str(value) if value is not None else ""
+        get_user_id = getattr(event, "get_user_id", None)
+        try:
+            value = get_user_id() if callable(get_user_id) else None
+        except (AttributeError, ValueError):
+            value = None
+        if value is not None:
+            return str(value)
+        for attr in ("user_id", "user_openid", "member_openid", "operator_id", "author"):
+            value = getattr(event, attr, None)
+            for key in ("user_openid", "member_openid", "id"):
+                nested = getattr(value, key, None)
+                if nested is not None:
+                    return str(nested)
+            if value is not None:
+                return str(value)
+        return ""
 
     def event_group_id(self, event: Any) -> str | None:
-        value = getattr(event, "group_id", None)
-        return str(value) if value is not None else None
+        for attr in ("group_id", "group_openid", "channel_id", "guild_id"):
+            value = getattr(event, attr, None)
+            if value is not None:
+                return str(value)
+        return None
 
     def event_user_name(self, event: Any, user_id: str = "") -> str:
-        sender = getattr(event, "sender", None)
-        for key in ("card", "nickname", "nick", "user_name", "user_displayname"):
-            value = sender.get(key) if isinstance(sender, dict) else getattr(sender, key, None)
-            if value:
-                return str(value)
+        for value, keys in (
+            (getattr(event, "sender", None), ("card", "nickname", "nick", "user_name", "user_displayname")),
+            (getattr(event, "author", None), ("username", "nickname", "nick", "display_name", "user_name")),
+        ):
+            for key in keys:
+                name = value.get(key) if isinstance(value, dict) else getattr(value, key, None)
+                if name:
+                    return str(name)
         return str(user_id or "")
 
     def extract_message_target(self, event: Any) -> dict[str, Any]:
-        target = {"user_id": getattr(event, "user_id", None)}
-        group_id = self.event_group_id(event)
-        if group_id is not None:
-            target["group_id"] = group_id
+        get_session_id = getattr(event, "get_session_id", None)
+        target = {
+            "user_id": getattr(event, "user_id", None),
+            "session_id": get_session_id() if callable(get_session_id) else None,
+        }
+        author = getattr(event, "author", None)
+        user_openid = getattr(event, "user_openid", None) or getattr(author, "user_openid", None)
+        if user_openid is not None:
+            target["user_openid"] = user_openid
+        if self.event_is_group(event):
+            for field in ("group_id", "group_openid", "channel_id", "guild_id"):
+                value = getattr(event, field, None)
+                if value is not None:
+                    target[field] = value
         return target
 
     def extract_image_sources(self, message: Any) -> list[str]:
@@ -276,11 +310,13 @@ def event_message_type(event: Any) -> str:
 
 
 def event_is_group(event: Any) -> bool:
-    return event_message_type(event) == "group" or getattr(event, "group_id", None) is not None
+    return event_message_type(event) == "group" or (not event_message_type(event) and event_group_id(event) is not None)
 
 
 def event_is_private(event: Any) -> bool:
-    return event_message_type(event) == "private" or not event_is_group(event)
+    return event_message_type(event) == "private" or (
+        not event_message_type(event) and bool(event_user_id(event)) and not event_is_group(event)
+    )
 
 
 def event_is_tome(event: Any) -> bool:
@@ -289,29 +325,59 @@ def event_is_tome(event: Any) -> bool:
 
 
 def event_user_id(event: Any) -> str:
-    value = getattr(event, "user_id", None)
-    return str(value) if value is not None else ""
+    get_user_id = getattr(event, "get_user_id", None)
+    try:
+        value = get_user_id() if callable(get_user_id) else None
+    except (AttributeError, ValueError):
+        value = None
+    if value is not None:
+        return str(value)
+    for attr in ("user_id", "user_openid", "member_openid", "operator_id", "author"):
+        value = getattr(event, attr, None)
+        for key in ("user_openid", "member_openid", "id"):
+            nested = getattr(value, key, None)
+            if nested is not None:
+                return str(nested)
+        if value is not None:
+            return str(value)
+    return ""
 
 
 def event_group_id(event: Any) -> str | None:
-    value = getattr(event, "group_id", None)
-    return str(value) if value is not None else None
+    for attr in ("group_id", "group_openid", "channel_id", "guild_id"):
+        value = getattr(event, attr, None)
+        if value is not None:
+            return str(value)
+    return None
 
 
 def event_user_name(event: Any, user_id: str = "") -> str:
-    sender = getattr(event, "sender", None)
-    for key in ("card", "nickname", "nick", "user_name", "user_displayname"):
-        value = sender.get(key) if isinstance(sender, dict) else getattr(sender, key, None)
-        if value:
-            return str(value)
+    for value, keys in (
+        (getattr(event, "sender", None), ("card", "nickname", "nick", "user_name", "user_displayname")),
+        (getattr(event, "author", None), ("username", "nickname", "nick", "display_name", "user_name")),
+    ):
+        for key in keys:
+            name = value.get(key) if isinstance(value, dict) else getattr(value, key, None)
+            if name:
+                return str(name)
     return str(user_id or "")
 
 
 def extract_message_target(event: Any) -> dict[str, Any]:
-    target = {"user_id": getattr(event, "user_id", None)}
-    group_id = event_group_id(event)
-    if group_id is not None:
-        target["group_id"] = group_id
+    get_session_id = getattr(event, "get_session_id", None)
+    target = {
+        "user_id": getattr(event, "user_id", None),
+        "session_id": get_session_id() if callable(get_session_id) else None,
+    }
+    author = getattr(event, "author", None)
+    user_openid = getattr(event, "user_openid", None) or getattr(author, "user_openid", None)
+    if user_openid is not None:
+        target["user_openid"] = user_openid
+    if event_is_group(event):
+        for field in ("group_id", "group_openid", "channel_id", "guild_id"):
+            value = getattr(event, field, None)
+            if value is not None:
+                target[field] = value
     return target
 
 

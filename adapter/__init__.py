@@ -133,11 +133,19 @@ def extract_first_text_match(message, pattern, *, ignored_segment_types=None):
 
 
 def move_non_text_segments_to_end(value):
-    message = event_message(value) if hasattr(value, "get_message") else value
-    segments = list(message or [])
-    reordered = [item for item in segments if getattr(item, "type", "") == "text"] + [
-        item for item in segments if getattr(item, "type", "") != "text"
-    ]
+    message = event_message(value) if hasattr(value, "get_message") or hasattr(value, "message") else value
+    if message is None:
+        return False
+    segments = list(message)
+    text_segments = [segment for segment in segments if getattr(segment, "type", "") == "text"]
+    if not text_segments:
+        return False
+
+    first_text = text_segments[0]
+    data = getattr(first_text, "data", {}) or {}
+    if isinstance(data, dict) and isinstance(data.get("text"), str):
+        data["text"] = data["text"].strip()
+    reordered = text_segments + [segment for segment in segments if getattr(segment, "type", "") != "text"]
     if reordered == segments:
         return False
     message.clear()
