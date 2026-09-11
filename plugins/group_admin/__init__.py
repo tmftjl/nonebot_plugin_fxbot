@@ -15,7 +15,7 @@ from nonebot.adapters import Bot, Event
 from . import banwords as banwords
 from ...plugin import Plugin
 from .identity import is_superuser_id
-from ...adapter import Uninfo, selfBot
+from ...adapter import Uninfo, UnsupportedCapability, selfBot
 from ...chat.tools import ToolContext, ToolRuntime, tool
 from ...permission import PermLevel, PermScene
 
@@ -211,6 +211,8 @@ async def _mute_all(bot: Bot, group_id: str, *, operator_id: str, enable: bool) 
     try:
         await selfBot.whole_ban(group_id, enable)
         return ServiceResult(True, "已开启全体禁言" if enable else "已关闭全体禁言")
+    except UnsupportedCapability:
+        raise
     except Exception as exc:
         return _failure(guard, exc)
 
@@ -225,11 +227,15 @@ async def _set_admin(bot: Bot, group_id: str, user_id: str, *, operator_id: str,
             operator_info = await selfBot.get_group_member(group_id, operator_id)
             if operator_info.get("role") != "owner":
                 return ServiceResult(False, "仅群主可操作")
+    except UnsupportedCapability:
+        raise
     except Exception:
         return ServiceResult(False, "操作者权限获取失败")
     try:
         await selfBot.set_admin(group_id, str(user_id), enable)
         return ServiceResult(True, "操作成功")
+    except UnsupportedCapability:
+        raise
     except Exception as exc:
         return ServiceResult(False, f"操作失败: {exc}")
 
@@ -254,6 +260,8 @@ async def _set_essence(bot: Bot, group_id: str, message_id: int, *, operator_id:
     try:
         await selfBot.set_essence(message_id, enable)
         return ServiceResult(True, "操作成功")
+    except UnsupportedCapability:
+        raise
     except Exception as exc:
         return ServiceResult(False, f"操作失败: {exc}")
 
@@ -289,6 +297,8 @@ async def _set_title(
     try:
         await selfBot.set_special_title(group_id, str(user_id), title)
         return ServiceResult(True, "头衔已更新")
+    except UnsupportedCapability:
+        raise
     except Exception as exc:
         return ServiceResult(False, f"操作失败: {exc}")
 
@@ -501,7 +511,10 @@ async def _handle_mute_all_on(matcher: Matcher, bot: Bot, event: Event, session:
     group_id = session.scene.id if session.scene.is_group else None
     if not group_id:
         await matcher.finish("请在群聊中使用")
-    result = await _mute_all(bot, group_id, operator_id=session.user.id, enable=True)
+    try:
+        result = await _mute_all(bot, group_id, operator_id=session.user.id, enable=True)
+    except UnsupportedCapability:
+        await matcher.finish()
     await matcher.finish(("✅ " if result.success else "❌ ") + result.message)
 
 
@@ -511,7 +524,10 @@ async def _handle_mute_all_off(matcher: Matcher, bot: Bot, event: Event, session
     group_id = session.scene.id if session.scene.is_group else None
     if not group_id:
         await matcher.finish("请在群聊中使用")
-    result = await _mute_all(bot, group_id, operator_id=session.user.id, enable=False)
+    try:
+        result = await _mute_all(bot, group_id, operator_id=session.user.id, enable=False)
+    except UnsupportedCapability:
+        await matcher.finish()
     await matcher.finish(("✅ " if result.success else "❌ ") + result.message)
 
 
@@ -644,7 +660,10 @@ async def _handle_apply_title(matcher: Matcher, bot: Bot, event: Event, session:
         await matcher.finish("请提供头衔内容")
     if _title_width(title) > 12:
         await matcher.finish(f"❌ 头衔过长（当前等效 {_title_width(title)} 字符），最多 6 个中文字或 12 个英文字母")
-    result = await _set_title(bot, group_id, session.user.id, title, operator_id=session.user.id)
+    try:
+        result = await _set_title(bot, group_id, session.user.id, title, operator_id=session.user.id)
+    except UnsupportedCapability:
+        await matcher.finish()
     if not result.success:
         await matcher.finish("❌ " + result.message)
     await matcher.finish("✅ " + result.message)
@@ -731,7 +750,10 @@ async def _handle_set_admin(matcher: Matcher, bot: Bot, event: Event, session: U
     target_id = _extract_target_id(event)
     if target_id is None:
         await matcher.finish("请 @ 目标成员或提供 QQ 号")
-    result = await _set_admin(bot, group_id, target_id, operator_id=session.user.id, enable=True)
+    try:
+        result = await _set_admin(bot, group_id, target_id, operator_id=session.user.id, enable=True)
+    except UnsupportedCapability:
+        await matcher.finish()
     await matcher.finish(("✅ " if result.success else "❌ ") + result.message)
 
 
@@ -744,7 +766,10 @@ async def _handle_unset_admin(matcher: Matcher, bot: Bot, event: Event, session:
     target_id = _extract_target_id(event)
     if target_id is None:
         await matcher.finish("请 @ 目标成员或提供 QQ 号")
-    result = await _set_admin(bot, group_id, target_id, operator_id=session.user.id, enable=False)
+    try:
+        result = await _set_admin(bot, group_id, target_id, operator_id=session.user.id, enable=False)
+    except UnsupportedCapability:
+        await matcher.finish()
     await matcher.finish(("✅ " if result.success else "❌ ") + result.message)
 
 
@@ -775,7 +800,10 @@ async def _handle_set_essence(matcher: Matcher, bot: Bot, event: Event, session:
     message_id = _reply_message_id(event)
     if message_id is None:
         await matcher.finish("请回复目标消息后再使用")
-    result = await _set_essence(bot, group_id, message_id, operator_id=session.user.id, enable=True)
+    try:
+        result = await _set_essence(bot, group_id, message_id, operator_id=session.user.id, enable=True)
+    except UnsupportedCapability:
+        await matcher.finish()
     await matcher.finish(("✅ " if result.success else "❌ ") + result.message)
 
 
@@ -788,7 +816,10 @@ async def _handle_unset_essence(matcher: Matcher, bot: Bot, event: Event, sessio
     message_id = _reply_message_id(event)
     if message_id is None:
         await matcher.finish("请回复目标消息后再使用")
-    result = await _set_essence(bot, group_id, message_id, operator_id=session.user.id, enable=False)
+    try:
+        result = await _set_essence(bot, group_id, message_id, operator_id=session.user.id, enable=False)
+    except UnsupportedCapability:
+        await matcher.finish()
     await matcher.finish(("✅ " if result.success else "❌ ") + result.message)
 
 
