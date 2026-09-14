@@ -15,14 +15,12 @@ from typing import Any, Dict, List, Tuple, Optional
 from pathlib import Path
 from functools import wraps
 from collections import defaultdict
-from urllib.parse import quote
 
 import psutil
 from nonebot import logger, get_driver
 from nonebot.adapters import Bot, Event
 from playwright.async_api import async_playwright
 
-from ..config import get_manager
 from ..adapter import build_message, build_message_segment
 from .registry import P
 from ..utils.tz import now_str, today_str
@@ -43,16 +41,51 @@ _MESSAGE_CACHE_FILE = data_dir("system") / "status_message_cache.json"
 _RENDER_SEM = asyncio.Semaphore(2)
 
 # ========== 消息统计缓存 ==========
-_MESSAGE_CACHE: Dict[str, Dict[str, int]] = defaultdict(lambda: {"received": 0, "sent": 0})
+
+
+def _new_entry() -> Dict[str, Any]:
+    """新建一个 Bot 的统计条目。
+
+    只有发送方向做目标级拆分（控制台的按群/私聊明细用它），接收方向只留总数。
+    """
+    return {
+        "received": 0,
+        "sent": 0,
+        "group": {"count": 0, "targets": {}},
+        "private": {"count": 0, "targets": {}},
+    }
+
+
+def _normalize_entry(raw: Any) -> Dict[str, Any]:
+    """把盘上读回的条目补齐成当前结构。
+
+    只有 received/sent 的旧格式条目会补上空的方向桶，否则发送侧写计数时
+    entry["group"] 直接 KeyError。count 缺失或为 0 时按 targets 求和重建。
+    """
+    entry = _new_entry()
+    if not isinstance(raw, dict):
+        return entry
+
+    entry["received"] = int(raw.get("received") or 0)
+    entry["sent"] = int(raw.get("sent") or 0)
+    for chat_type in ("group", "private"):
+        bucket = raw.get(chat_type)
+        if not isinstance(bucket, dict):
+            continue
+        targets = bucket.get("targets")
+        if isinstance(targets, dict):
+            entry[chat_type]["targets"] = {str(key): int(value or 0) for key, value in targets.items()}
+        entry[chat_type]["count"] = int(bucket.get("count") or sum(entry[chat_type]["targets"].values()))
+    return entry
+
+
+_MESSAGE_CACHE: Dict[str, Dict[str, Any]] = defaultdict(_new_entry)
 _MESSAGE_CACHE_LOCK = asyncio.Lock()
 _MESSAGE_CACHE_DATE = today_str()
 # 计数只置脏标志，落盘交给后台循环，避免每条消息都写一次文件。
 _MESSAGE_CACHE_DIRTY = False
 _FLUSH_INTERVAL_SECONDS = 60
 _flush_task: Optional[asyncio.Task] = None
-
-# ========== 中央API统计配置 ==========
-_DEFAULT_STATS_API_URL = "http://127.0.0.1:8000"
 
 status_cmd = P.on_regex(
     r"^[#＃]状态$",
@@ -1176,7 +1209,7 @@ async def _ensure_today_cache() -> None:
 @_driver.on_startup
 async def _setup_driver():
     """启动时设置驱动启动时间"""
-    global _MESSAGE_CACHE_DATE, _flush_task
+    global _MESSAGE_CACHE_DATE, _MESSAGE_CACHE_DIRTY, _flush_task
     _driver._start_time = time.time()
 
     # 读取消息统计缓存
@@ -1189,8 +1222,12 @@ async def _setup_driver():
             async with _MESSAGE_CACHE_LOCK:
                 _MESSAGE_CACHE.clear()
                 if isinstance(cache_bots, dict):
-                    _MESSAGE_CACHE.update(cache_bots)
+                    _MESSAGE_CACHE.update(
+                        {key: _normalize_entry(value) for key, value in cache_bots.items()}
+                    )
                 _MESSAGE_CACHE_DATE = _today()
+                # 盘上可能是旧结构，置脏让第一个刷新周期把规范结构写回去。
+                _MESSAGE_CACHE_DIRTY = True
             logger.info(f"[bot_status] 已加载消息统计缓存: {len(_MESSAGE_CACHE)} 个Bot")
         except Exception as e:
             logger.error(f"[bot_status] 读取消息统计缓存失败: {e}")
@@ -1223,13 +1260,41 @@ async def _flush_message_cache() -> None:
         cache_data = {"date": _MESSAGE_CACHE_DATE, "bots": dict(_MESSAGE_CACHE)}
         _MESSAGE_CACHE_DIRTY = False
 
+    # 先写临时文件再 rename：直接 open(..., "w") 会先截断原文件，写到一半被杀就只剩
+    # 残缺 JSON，下次启动读盘失败，一整天已统计的计数全归零。
+    tmp_file = _MESSAGE_CACHE_FILE.with_name(_MESSAGE_CACHE_FILE.name + ".tmp")
     try:
-        with open(_MESSAGE_CACHE_FILE, "w", encoding="utf-8") as f:
+        with open(tmp_file, "w", encoding="utf-8") as f:
             json.dump(cache_data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_file, _MESSAGE_CACHE_FILE)
         logger.debug(f"[bot_status] 已保存消息统计缓存: {len(cache_data['bots'])} 个Bot")
     except Exception as e:
         _MESSAGE_CACHE_DIRTY = True
+        tmp_file.unlink(missing_ok=True)
         logger.error(f"[bot_status] 保存消息统计失败: {e}")
+
+
+async def get_today_stats() -> Dict[str, Any]:
+    """当日发送明细快照，形状对齐控制台的 BotStats（见 console/web/src/types/api.ts）。
+
+    只暴露发送方向：控制台展示的是「今日总消息」，接收方向只有 bot 级总数、留在
+    #状态 卡片上。count 为 0 的方向整个省略——前端是 v-if="botStats.group"，
+    给个空对象会渲染出一个空的「暂无数据」区块。
+    """
+    await _ensure_today_cache()
+
+    async with _MESSAGE_CACHE_LOCK:
+        bots: Dict[str, Any] = {}
+        for cache_key, entry in _MESSAGE_CACHE.items():
+            stats: Dict[str, Any] = {"total_sent": int(entry.get("sent") or 0)}
+            for chat_type in ("group", "private"):
+                bucket = entry.get(chat_type) or {}
+                count = int(bucket.get("count") or 0)
+                if count > 0:
+                    stats[chat_type] = {"count": count, "targets": dict(bucket.get("targets") or {})}
+            bots[cache_key.removeprefix("bot_")] = stats
+
+    return {"bots": bots}
 
 
 # ========== 重启收尾 ==========
@@ -1327,28 +1392,6 @@ def _get_nested(obj: Any, path: str) -> Any:
     return obj
 
 
-def _stats_api_url() -> str:
-    """读取消息统计服务地址。"""
-    try:
-        cfg = get_manager().get_system()
-        value = str((cfg.get("console") or {}).get("stats_api_url") or "").strip()
-        return value.rstrip("/") or _DEFAULT_STATS_API_URL
-    except Exception:
-        return _DEFAULT_STATS_API_URL
-
-
-async def _report_to_central_api(chat_type: str, bot_id: str, target_id: str) -> None:
-    """向中央API上报计数"""
-    if not bot_id or not target_id:
-        return
-    try:
-        url = f"{_stats_api_url()}/increment/{quote(chat_type)}/{quote(bot_id)}/{quote(target_id)}"
-        client = await get_shared_async_client()
-        await client.post(url, timeout=5.0)
-    except Exception as e:
-        logger.warning(f"[bot_status] 中央API上报失败: {e}")
-
-
 @_driver.on_bot_connect
 async def _hook_bot_methods(bot: Bot):
     """Hook Bot方法统计消息收发"""
@@ -1360,7 +1403,7 @@ async def _hook_bot_methods(bot: Bot):
     cache_key = f"bot_{bot.self_id}"
     async with _MESSAGE_CACHE_LOCK:
         if cache_key not in _MESSAGE_CACHE:
-            _MESSAGE_CACHE[cache_key] = {"received": 0, "sent": 0}
+            _MESSAGE_CACHE[cache_key] = _new_entry()
 
     # Hook handle_event 统计接收
     if hasattr(bot, "handle_event"):
@@ -1394,19 +1437,21 @@ async def _hook_bot_methods(bot: Bot):
             global _MESSAGE_CACHE_DIRTY
             result = await original_send(event, message, *args, **kwargs)
 
-            # 统计发送消息并上报
+            # 统计发送消息：bot 级总数和控制台要的按目标明细在同一临界区一起维护，
+            # 保证 sent == group.count + private.count 这个不变式不会被拆开。
             if classified := _classify_chat(event):
                 chat_type, target_id = classified
                 try:
                     await _ensure_today_cache()
                     async with _MESSAGE_CACHE_LOCK:
-                        _MESSAGE_CACHE[f"bot_{bot.self_id}"]["sent"] += 1
+                        entry = _MESSAGE_CACHE[f"bot_{bot.self_id}"]
+                        entry["sent"] += 1
+                        bucket = entry[chat_type]
+                        bucket["count"] += 1
+                        bucket["targets"][target_id] = bucket["targets"].get(target_id, 0) + 1
                         _MESSAGE_CACHE_DIRTY = True
                 except Exception as e:
                     logger.error(f"[bot_status] 发送消息统计失败: bot={bot.self_id} error={e}")
-
-                # 异步上报中央API（不阻塞）
-                asyncio.create_task(_report_to_central_api(chat_type, bot.self_id, target_id))
 
             return result
 

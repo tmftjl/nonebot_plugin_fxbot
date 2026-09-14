@@ -118,14 +118,6 @@ def _system_config_tab() -> dict[str, Any]:
                         "default": SYSTEM_DEFAULTS["console"]["token"],
                         "helpMessage": "留空时会在首次登录时自动生成。",
                     },
-                    {
-                        "field": "stats_api_url",
-                        "label": "消息统计 API",
-                        "component": "Input",
-                        "default": SYSTEM_DEFAULTS["console"]["stats_api_url"],
-                        "helpMessage": "用于控制台消息统计和 #状态 上报的统计服务地址。",
-                        "componentProps": {"placeholder": "http://127.0.0.1:8000"},
-                    },
                 ],
             },
             {

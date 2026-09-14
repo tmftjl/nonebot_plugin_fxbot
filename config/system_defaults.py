@@ -18,7 +18,6 @@ SYSTEM_DEFAULTS = {
         "enabled": True,
         "mount_path": "/fxbot",
         "token": "",
-        "stats_api_url": "http://127.0.0.1:8000",
     },
     "message": {
         "ignored_mention_bot_ids": [],
