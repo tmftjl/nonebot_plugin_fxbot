@@ -88,7 +88,7 @@ async def _on_startup() -> None:
 
 @get_driver().on_shutdown
 async def _on_shutdown() -> None:
-    """关闭时保存运势数据。"""
+    """关闭时兜底保存运势数据。"""
     _save_user_fortunes()
 
 
@@ -236,6 +236,8 @@ def _get_or_create_today_fortune(user_id: str) -> tuple[dict[str, Any], bool]:
         raise ValueError("运势库为空，无法生成")
     record = {"fortune": random.choice(_JRYS_DATA), "time": today}
     _USER_FORTUNES[user_id] = record
+    # 立即落盘：on_shutdown 只在优雅退出时执行，进程被强杀或走 os.execv 重启时不会触发
+    _save_user_fortunes()
     return record, True
 
 
