@@ -13,7 +13,6 @@ import asyncio
 import platform
 from typing import Any, Dict, List, Tuple, Optional
 from pathlib import Path
-from functools import wraps
 from collections import defaultdict
 
 import psutil
@@ -27,6 +26,7 @@ from ..utils.tz import now_str, today_str
 from ..permission import PermLevel, PermScene
 from ..utils.http import get_shared_async_client
 from ..utils.paths import data_dir
+from .stats_patches import install_receive_hook, install_send_patches
 from .status_monitor import get_monitor
 
 # ========== 背景图片配置 ==========
@@ -1236,6 +1236,9 @@ async def _setup_driver():
     if _flush_task is None or _flush_task.done():
         _flush_task = asyncio.create_task(_flush_loop())
 
+    # 发送统计接入点不依赖 Bot 实例，启动时装一次
+    install_send_patches(_count_sent)
+
 
 async def _flush_loop() -> None:
     """周期性把消息统计写入磁盘。"""
@@ -1359,37 +1362,37 @@ async def _on_shutdown():
 # ========== 消息统计 ==========
 
 
-def _classify_chat(event: Any) -> Optional[Tuple[str, str]]:
-    """识别消息类型并提取目标ID，返回 (chat_type, target_id) 或 None"""
-    if event is None:
-        return None
+async def _count_sent(bot: Bot, classified: Tuple[str, str]) -> None:
+    """给某个 Bot 记一次发送。
 
-    # 排除频道消息（QQ适配器）
-    if hasattr(event, "guild_id") and hasattr(event, "channel_id"):
-        return None
-
-    # OneBot v11 适配器
-    if group_id := getattr(event, "group_id", None):
-        return ("group", str(group_id))
-    if user_id := getattr(event, "user_id", None):
-        return ("private", str(user_id))
-
-    # QQ 官方适配器
-    if group_target := (getattr(event, "group_openid", None) or getattr(event, "group_code", None)):
-        return ("group", str(group_target))
-    if private_target := (getattr(event, "user_openid", None) or _get_nested(event, "author.user_openid")):
-        return ("private", str(private_target))
-
-    return None
+    bot 级总数和控制台要的按目标明细在同一临界区一起维护，保证
+    sent == group.count + private.count 这个不变式不会被拆开。
+    """
+    global _MESSAGE_CACHE_DIRTY
+    chat_type, target_id = classified
+    try:
+        await _ensure_today_cache()
+        async with _MESSAGE_CACHE_LOCK:
+            entry = _MESSAGE_CACHE[f"bot_{bot.self_id}"]
+            entry["sent"] += 1
+            bucket = entry[chat_type]
+            bucket["count"] += 1
+            bucket["targets"][target_id] = bucket["targets"].get(target_id, 0) + 1
+            _MESSAGE_CACHE_DIRTY = True
+    except Exception as e:
+        logger.error(f"[bot_status] 发送消息统计失败: bot={bot.self_id} error={e}")
 
 
-def _get_nested(obj: Any, path: str) -> Any:
-    """安全提取嵌套属性"""
-    for part in path.split("."):
-        if obj is None:
-            return None
-        obj = getattr(obj, part, None)
-    return obj
+async def _count_received(bot: Bot) -> None:
+    """给某个 Bot 记一次接收。"""
+    global _MESSAGE_CACHE_DIRTY
+    try:
+        await _ensure_today_cache()
+        async with _MESSAGE_CACHE_LOCK:
+            _MESSAGE_CACHE[f"bot_{bot.self_id}"]["received"] += 1
+            _MESSAGE_CACHE_DIRTY = True
+    except Exception as e:
+        logger.error(f"[bot_status] 接收消息统计失败: bot={bot.self_id} error={e}")
 
 
 @_driver.on_bot_connect
@@ -1405,57 +1408,7 @@ async def _hook_bot_methods(bot: Bot):
         if cache_key not in _MESSAGE_CACHE:
             _MESSAGE_CACHE[cache_key] = _new_entry()
 
-    # Hook handle_event 统计接收
-    if hasattr(bot, "handle_event"):
-        original_handle_event = bot.handle_event
-
-        @wraps(original_handle_event)
-        async def patched_handle_event(event: Event) -> None:
-            global _MESSAGE_CACHE_DIRTY
-            result = await original_handle_event(event)
-
-            # 统计接收消息
-            if _classify_chat(event):
-                try:
-                    await _ensure_today_cache()
-                    async with _MESSAGE_CACHE_LOCK:
-                        _MESSAGE_CACHE[f"bot_{bot.self_id}"]["received"] += 1
-                        _MESSAGE_CACHE_DIRTY = True
-                except Exception as e:
-                    logger.error(f"[bot_status] 接收消息统计失败: bot={bot.self_id} error={e}")
-
-            return result
-
-        bot.handle_event = patched_handle_event
-
-    # Hook send 统计发送
-    if hasattr(bot, "send"):
-        original_send = bot.send
-
-        @wraps(original_send)
-        async def patched_send(event: Any, message: Any, *args: Any, **kwargs: Any) -> Any:
-            global _MESSAGE_CACHE_DIRTY
-            result = await original_send(event, message, *args, **kwargs)
-
-            # 统计发送消息：bot 级总数和控制台要的按目标明细在同一临界区一起维护，
-            # 保证 sent == group.count + private.count 这个不变式不会被拆开。
-            if classified := _classify_chat(event):
-                chat_type, target_id = classified
-                try:
-                    await _ensure_today_cache()
-                    async with _MESSAGE_CACHE_LOCK:
-                        entry = _MESSAGE_CACHE[f"bot_{bot.self_id}"]
-                        entry["sent"] += 1
-                        bucket = entry[chat_type]
-                        bucket["count"] += 1
-                        bucket["targets"][target_id] = bucket["targets"].get(target_id, 0) + 1
-                        _MESSAGE_CACHE_DIRTY = True
-                except Exception as e:
-                    logger.error(f"[bot_status] 发送消息统计失败: bot={bot.self_id} error={e}")
-
-            return result
-
-        bot.send = patched_send
+    install_receive_hook(bot, _count_received)
 
     setattr(bot, "__bot_status_patched__", True)
     logger.info(f"[bot_status] 已为 Bot {bot.self_id} 安装消息统计补丁")
