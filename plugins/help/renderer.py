@@ -9,13 +9,11 @@ from typing import Any
 from pathlib import Path
 
 from PIL import Image, ImageDraw
-from nonebot import logger, get_driver
+from nonebot import logger
 
 from ...utils.fonts import load_font, get_shared_font_path
 
 RES_DIR = Path(__file__).parent / "resources"
-_PW = None
-_BROWSER = None
 _RENDER_SEM = asyncio.Semaphore(2)
 
 
@@ -163,42 +161,27 @@ async def render_help_image(
     bg = background if background and background.is_file() else default_bg
     html = _build_html(title, sub_title, groups, max(col_count, 1), bg, footer, icon)
 
-    async def ensure_browser():
-        global _PW, _BROWSER
-        if _BROWSER is not None:
-            return _BROWSER
-        _PW = await async_playwright().start()
-        _BROWSER = await _PW.chromium.launch()
-        return _BROWSER
-
+    # 用完就关：不留常驻浏览器，进程被强杀或走 execv 重启都不会有孤儿 Chromium。
+    # 三层 finally 逐级回收 page → browser → playwright，任一层抛异常都不会漏掉外层。
     try:
         async with _RENDER_SEM:
-            browser = await ensure_browser()
-            page = await browser.new_page(device_scale_factor=scale)
+            pw = await async_playwright().start()
             try:
-                await asyncio.wait_for(page.set_content(html, wait_until="load"), timeout=15.0)
-                element = await page.query_selector(".container")
-                if element:
-                    return await asyncio.wait_for(element.screenshot(type="png"), timeout=15.0)
-                return await asyncio.wait_for(page.screenshot(type="png", full_page=True), timeout=15.0)
+                browser = await pw.chromium.launch()
+                try:
+                    page = await browser.new_page(device_scale_factor=scale)
+                    try:
+                        await asyncio.wait_for(page.set_content(html, wait_until="load"), timeout=15.0)
+                        element = await page.query_selector(".container")
+                        if element:
+                            return await asyncio.wait_for(element.screenshot(type="png"), timeout=15.0)
+                        return await asyncio.wait_for(page.screenshot(type="png", full_page=True), timeout=15.0)
+                    finally:
+                        await page.close()
+                finally:
+                    await browser.close()
             finally:
-                await page.close()
+                await pw.stop()
     except Exception as exc:
         logger.warning(f"[help][renderer] Playwright 渲染失败，回退到 PIL: {exc}")
         return fallback()
-
-
-@get_driver().on_shutdown
-async def _shutdown_renderer() -> None:
-    """关闭帮助图渲染器。"""
-    global _PW, _BROWSER
-    try:
-        if _BROWSER is not None:
-            await _BROWSER.close()
-    finally:
-        _BROWSER = None
-    try:
-        if _PW is not None:
-            await _PW.stop()
-    finally:
-        _PW = None

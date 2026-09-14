@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import os
 import sys
 import json
+import signal
 import asyncio
 from typing import Any
 
@@ -14,6 +14,7 @@ from nonebot.adapters import Bot, Event
 
 from ..adapter import send_forward_texts, send_text_to_target, extract_message_target
 from .registry import P
+from .bot_status import set_pending_argv
 from ..permission import PermLevel, PermScene
 from ..utils.paths import data_dir, package_root
 
@@ -98,26 +99,33 @@ def _current_process_argv() -> list[str]:
     return [sys.executable] + sys.argv
 
 
+def _trigger_graceful_shutdown() -> None:
+    """投递 SIGINT，走 uvicorn 完整的优雅关闭流程（等价于按 Ctrl+C）。
+
+    uvicorn 的信号处理器是装着的（nonebot 调 uvicorn.run 时没禁用），收到后停止
+    接收新连接、跑完 NoneBot 的 lifespan shutdown，然后 main.run() 正常返回。
+    重新拉起进程由关闭流程收尾的钩子负责，见 bot_status 里的 reexec_if_pending。
+    """
+    signal.raise_signal(signal.SIGINT)
+
+
 async def _execute_restart() -> None:
-    """执行进程重启。"""
+    """请求重启进程。"""
     logger.critical("[system_control] 执行 NoneBot 进程重启")
     try:
         argv = _current_process_argv()
-        logger.info(f"[system_control] 重启命令: {' '.join(argv)}")
-        os.execv(argv[0], argv)
     except Exception as exc:
-        logger.error(f"[system_control] Bot 重启失败: {exc}")
+        logger.error(f"[system_control] 无法确定启动命令，重启取消: {exc}")
+        return
+    logger.info(f"[system_control] 重启命令: {' '.join(argv)}")
+    set_pending_argv(argv)
+    _trigger_graceful_shutdown()
 
 
 async def _execute_shutdown() -> None:
-    """执行进程关闭。"""
+    """请求关闭进程。"""
     logger.critical("[system_control] 执行 NoneBot 进程关闭")
-    try:
-        get_driver().exit()
-        logger.info("[system_control] Bot 已优雅退出")
-    except Exception as exc:
-        logger.error(f"[system_control] Bot 关闭失败，强制退出: {exc}")
-        sys.exit(0)
+    _trigger_graceful_shutdown()
 
 
 def _truncate_output(text: str, limit: int = 1200) -> str:

@@ -3,8 +3,10 @@
 
 from __future__ import annotations
 
+import os
 import json
 import time
+import atexit
 import base64
 import socket
 import asyncio
@@ -18,8 +20,7 @@ from urllib.parse import quote
 import psutil
 from nonebot import logger, get_driver
 from nonebot.adapters import Bot, Event
-from playwright.async_api import Browser, async_playwright
-from playwright.async_api._generated import Playwright as PlaywrightType
+from playwright.async_api import async_playwright
 
 from ..config import get_manager
 from ..adapter import build_message, build_message_segment
@@ -38,14 +39,17 @@ _DEFAULT_BG_FILE = "1.jpg"
 _MESSAGE_CACHE_FILE = data_dir("system") / "status_message_cache.json"
 
 # ========== 浏览器资源管理 ==========
-_PW: Optional[PlaywrightType] = None
-_BROWSER: Optional[Browser] = None
-_BROWSER_INIT_LOCK = asyncio.Lock()
+# 渲染用完即关，不留常驻浏览器，所以只需要限制并发启动数。
+_RENDER_SEM = asyncio.Semaphore(2)
 
 # ========== 消息统计缓存 ==========
 _MESSAGE_CACHE: Dict[str, Dict[str, int]] = defaultdict(lambda: {"received": 0, "sent": 0})
 _MESSAGE_CACHE_LOCK = asyncio.Lock()
 _MESSAGE_CACHE_DATE = today_str()
+# 计数只置脏标志，落盘交给后台循环，避免每条消息都写一次文件。
+_MESSAGE_CACHE_DIRTY = False
+_FLUSH_INTERVAL_SECONDS = 60
+_flush_task: Optional[asyncio.Task] = None
 
 # ========== 中央API统计配置 ==========
 _DEFAULT_STATS_API_URL = "http://127.0.0.1:8000"
@@ -66,7 +70,12 @@ async def handle_status(bot: Bot, event: Event):
     """处理状态查询命令"""
     data = await _collect_status_data()
     html = await _build_status_html(data)
-    image_bytes = await _render_html_to_image(html)
+    try:
+        image_bytes = await _render_html_to_image(html)
+    except Exception as exc:
+        logger.error(f"[bot_status] 状态图渲染失败: {exc}")
+        await status_cmd.finish("状态图渲染失败，详情见后台日志")
+        return
 
     image_seg = build_message_segment(bot, "image", image_bytes)
     await status_cmd.finish(build_message(bot, image_seg))
@@ -130,10 +139,6 @@ async def _collect_bot_info() -> List[Dict[str, Any]]:
             user_id = info.id
             avatar_url = info.avatar if info.avatar else ""
             count_contacts = {}
-
-            # 消息统计（使用bot_self_id作为缓存key，而不是info.id）
-            cache = _MESSAGE_CACHE[f"bot_{bot_self_id}"]
-            message_count = {"今日接收": cache["received"], "今日发送": cache["sent"]}
         else:
             # OneBot v11 等适配器
             login_info = await bot.get_login_info()
@@ -151,9 +156,10 @@ async def _collect_bot_info() -> List[Dict[str, Any]]:
                 "群友": total_members,
             }
 
-            # 消息统计
-            cache = _MESSAGE_CACHE[f"bot_{user_id}"]
-            message_count = {"今日接收": cache["received"], "今日发送": cache["sent"]}
+        # 消息统计：读写两侧统一用 bot_self_id 作 key，不用 login_info 里的 user_id，
+        # 否则两者不等时这里永远显示 0，还会给缓存凭空加一个多余的键。
+        cache = _MESSAGE_CACHE.get(f"bot_{bot_self_id}") or {"received": 0, "sent": 0}
+        message_count = {"今日接收": cache["received"], "今日发送": cache["sent"]}
 
         bot_info_list.append(
             {
@@ -1060,61 +1066,37 @@ def _get_yenai_css() -> str:
 
 async def _render_html_to_image(html: str) -> bytes:
     """渲染HTML为图片"""
-    browser = await _get_browser()
-    page = await browser.new_page(viewport={"width": 650, "height": 100})
-
-    try:
-        page.set_default_timeout(5000)
-
-        # 设置路由以处理头像图片的跨域问题
-        async def handle_route(route):
-            await route.continue_()
-
-        await page.route("**/*", handle_route)
-        await page.set_content(html, wait_until="networkidle", timeout=10000)
-
+    # 用完就关：不留常驻浏览器，进程被强杀或走 execv 重启都不会有孤儿 Chromium。
+    # 三层 finally 逐级回收 page → browser → playwright，任一层抛异常都不会漏掉外层。
+    async with _RENDER_SEM:
+        pw = await async_playwright().start()
         try:
-            await page.wait_for_selector("#Chart", timeout=2000)
-            await asyncio.sleep(0.5)
-        except Exception:
-            await asyncio.sleep(0.5)
-
-        return await page.screenshot(full_page=True, type="png", timeout=10000)
-    finally:
-        await page.close()
-
-
-async def _get_browser() -> Browser:
-    """获取Browser实例"""
-    global _BROWSER, _PW
-
-    if _BROWSER is not None:
-        return _BROWSER
-
-    async with _BROWSER_INIT_LOCK:
-        if _BROWSER is not None:
-            return _BROWSER
-
-        pw_local = None
-        browser_local = None
-        try:
-            pw_local = await async_playwright().start()
-            browser_local = await pw_local.chromium.launch(headless=True)
-            _PW = pw_local
-            _BROWSER = browser_local
-            return _BROWSER
-        except Exception:
-            if browser_local:
+            browser = await pw.chromium.launch(headless=True)
+            try:
+                page = await browser.new_page(viewport={"width": 650, "height": 100})
                 try:
-                    await browser_local.close()
-                except Exception:
-                    pass
-            if pw_local:
-                try:
-                    await pw_local.stop()
-                except Exception:
-                    pass
-            raise
+                    page.set_default_timeout(5000)
+
+                    # 设置路由以处理头像图片的跨域问题
+                    async def handle_route(route):
+                        await route.continue_()
+
+                    await page.route("**/*", handle_route)
+                    await page.set_content(html, wait_until="networkidle", timeout=10000)
+
+                    try:
+                        await page.wait_for_selector("#Chart", timeout=2000)
+                        await asyncio.sleep(0.5)
+                    except Exception:
+                        await asyncio.sleep(0.5)
+
+                    return await page.screenshot(full_page=True, type="png", timeout=10000)
+                finally:
+                    await page.close()
+            finally:
+                await browser.close()
+        finally:
+            await pw.stop()
 
 
 # ========== 工具函数 ==========
@@ -1175,8 +1157,12 @@ def _today() -> str:
 
 
 async def _ensure_today_cache() -> None:
-    """跨天时重置本地收发统计。"""
-    global _MESSAGE_CACHE_DATE
+    """跨天时重置本地收发统计。
+
+    本缓存是单日语义：读盘处（见 _setup_driver）只接受 date 等于当天的数据，
+    所以跨天清空即可，旧数据没有落盘价值。
+    """
+    global _MESSAGE_CACHE_DATE, _MESSAGE_CACHE_DIRTY
     today = _today()
     if _MESSAGE_CACHE_DATE == today:
         return
@@ -1184,12 +1170,13 @@ async def _ensure_today_cache() -> None:
         if _MESSAGE_CACHE_DATE != today:
             _MESSAGE_CACHE.clear()
             _MESSAGE_CACHE_DATE = today
+            _MESSAGE_CACHE_DIRTY = True
 
 
 @_driver.on_startup
 async def _setup_driver():
     """启动时设置驱动启动时间"""
-    global _MESSAGE_CACHE_DATE
+    global _MESSAGE_CACHE_DATE, _flush_task
     _driver._start_time = time.time()
 
     # 读取消息统计缓存
@@ -1208,48 +1195,100 @@ async def _setup_driver():
         except Exception as e:
             logger.error(f"[bot_status] 读取消息统计缓存失败: {e}")
 
+    # 计数只置脏标志，靠这个循环周期落盘
+    if _flush_task is None or _flush_task.done():
+        _flush_task = asyncio.create_task(_flush_loop())
 
-@_driver.on_shutdown
-async def _shutdown_renderer():
-    """关闭渲染器并保存消息统计"""
-    global _BROWSER, _PW
 
-    # 保存消息统计缓存
+async def _flush_loop() -> None:
+    """周期性把消息统计写入磁盘。"""
+    while True:
+        await asyncio.sleep(_FLUSH_INTERVAL_SECONDS)
+        await _flush_message_cache()
+
+
+async def _flush_message_cache() -> None:
+    """把消息统计写入磁盘；没有新计数时直接跳过。"""
+    global _MESSAGE_CACHE_DIRTY
+    if not _MESSAGE_CACHE_DIRTY:
+        return
+
+    await _ensure_today_cache()
+
+    # 锁内只取快照并清脏标志，写文件放在锁外，免得阻塞事件循环里的计数。
+    # 清标志和取快照在同一临界区：这之后新增的计数会重新置脏，不会漏。
+    async with _MESSAGE_CACHE_LOCK:
+        if not _MESSAGE_CACHE_DIRTY:
+            return
+        cache_data = {"date": _MESSAGE_CACHE_DATE, "bots": dict(_MESSAGE_CACHE)}
+        _MESSAGE_CACHE_DIRTY = False
+
     try:
-        await _ensure_today_cache()
-        async with _MESSAGE_CACHE_LOCK:
-            cache_data = {"date": _MESSAGE_CACHE_DATE, "bots": dict(_MESSAGE_CACHE)}
         with open(_MESSAGE_CACHE_FILE, "w", encoding="utf-8") as f:
             json.dump(cache_data, f, ensure_ascii=False, indent=2)
-        logger.info(f"[bot_status] 已保存消息统计缓存: {len(cache_data['bots'])} 个Bot")
+        logger.debug(f"[bot_status] 已保存消息统计缓存: {len(cache_data['bots'])} 个Bot")
     except Exception as e:
+        _MESSAGE_CACHE_DIRTY = True
         logger.error(f"[bot_status] 保存消息统计失败: {e}")
 
-    # 关闭浏览器
-    if _BROWSER:
-        try:
-            # 检查浏览器是否已连接
-            if _BROWSER.is_connected():
-                await _BROWSER.close()
-            else:
-                logger.debug("[bot_status] Browser已断开连接，跳过关闭")
-        except Exception as e:
-            # 如果底层传输已关闭，这是预期内的，只记录debug级别
-            if "closed=True" in str(e) or "handler is closed" in str(e):
-                logger.debug(f"[bot_status] Browser底层传输已关闭: {e}")
-            else:
-                logger.error(f"[bot_status] 关闭Browser失败: {e}")
-        finally:
-            _BROWSER = None
 
-    if _PW:
+# ========== 重启收尾 ==========
+
+# 待重新拉起的启动命令。#重启/#更新 触发优雅关闭前登记，关闭流程收尾时用它 execv。
+_PENDING_ARGV: Optional[List[str]] = None
+
+
+def set_pending_argv(argv: List[str]) -> None:
+    """登记重启命令，关闭流程收尾时用它重新拉起进程。"""
+    global _PENDING_ARGV
+    _PENDING_ARGV = list(argv)
+
+
+def reexec_if_pending() -> None:
+    """有重启请求时就地替换进程镜像。
+
+    取走即清空，所以下面两个入口只会真正执行一次。execv 失败时进程会正常结束而不再
+    重启，这是有意的：宁可停在已知状态，也不要留在半关闭的进程里。
+    """
+    global _PENDING_ARGV
+    argv, _PENDING_ARGV = _PENDING_ARGV, None
+    if not argv:
+        return
+    logger.critical(f"[system_control] 重新拉起进程: {' '.join(argv)}")
+    try:
+        os.execv(argv[0], argv)
+    except Exception as exc:
+        logger.error(f"[system_control] 重新拉起进程失败，进程将正常结束: {exc}")
+
+
+# 兜底入口：NoneBot 的 on_shutdown 钩子链没有逐项容错（_lifespan.py 的 _run_lifespan_func），
+# 前面任一钩子抛异常都会中断后续调用，那时下面的 _reexec_on_shutdown 就跑不到。
+atexit.register(reexec_if_pending)
+
+
+# 必须定义在 _on_shutdown 之前：NoneBot 逆序执行 on_shutdown，注册最早 = 执行最后，而这里的
+# execv 会把进程镜像整个换掉，排在它后面的钩子再也跑不到。本项目和其他插件同批加载、顺序每个
+# 进程都不同，别的插件若排在我们之后，它们的清理钩子可能被跳过；那些钩子只关连接、取消后台
+# 任务，不落盘任何状态，跳过无害。
+@_driver.on_shutdown
+async def _reexec_on_shutdown():
+    """关闭流程收尾：若本次是重启或更新，就地替换进程镜像。"""
+    reexec_if_pending()
+
+
+@_driver.on_shutdown
+async def _on_shutdown():
+    """关闭时停止落盘循环并兜底保存消息统计"""
+    global _flush_task
+    if _flush_task is not None and not _flush_task.done():
+        _flush_task.cancel()
         try:
-            await _PW.stop()
-        except Exception as e:
-            # Playwright 停止时的异常也降级为 warning
-            logger.warning(f"[bot_status] 停止Playwright时出现异常（可忽略）: {e}")
-        finally:
-            _PW = None
+            await _flush_task
+        except asyncio.CancelledError:
+            pass
+    _flush_task = None
+
+    await _flush_message_cache()
 
 
 # ========== 消息统计 ==========
@@ -1329,6 +1368,7 @@ async def _hook_bot_methods(bot: Bot):
 
         @wraps(original_handle_event)
         async def patched_handle_event(event: Event) -> None:
+            global _MESSAGE_CACHE_DIRTY
             result = await original_handle_event(event)
 
             # 统计接收消息
@@ -1337,6 +1377,7 @@ async def _hook_bot_methods(bot: Bot):
                     await _ensure_today_cache()
                     async with _MESSAGE_CACHE_LOCK:
                         _MESSAGE_CACHE[f"bot_{bot.self_id}"]["received"] += 1
+                        _MESSAGE_CACHE_DIRTY = True
                 except Exception as e:
                     logger.error(f"[bot_status] 接收消息统计失败: bot={bot.self_id} error={e}")
 
@@ -1350,6 +1391,7 @@ async def _hook_bot_methods(bot: Bot):
 
         @wraps(original_send)
         async def patched_send(event: Any, message: Any, *args: Any, **kwargs: Any) -> Any:
+            global _MESSAGE_CACHE_DIRTY
             result = await original_send(event, message, *args, **kwargs)
 
             # 统计发送消息并上报
@@ -1359,6 +1401,7 @@ async def _hook_bot_methods(bot: Bot):
                     await _ensure_today_cache()
                     async with _MESSAGE_CACHE_LOCK:
                         _MESSAGE_CACHE[f"bot_{bot.self_id}"]["sent"] += 1
+                        _MESSAGE_CACHE_DIRTY = True
                 except Exception as e:
                     logger.error(f"[bot_status] 发送消息统计失败: bot={bot.self_id} error={e}")
 
