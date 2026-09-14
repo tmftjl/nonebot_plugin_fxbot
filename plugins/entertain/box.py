@@ -17,6 +17,7 @@ from .config import cfg_box
 from ...plugin import Plugin
 from .box_draw import create_image
 from ...adapter import Uninfo, selfBot, build_message, event_user_id, event_group_id, build_message_segment
+from ...utils.tz import SHANGHAI_TZ
 from ...permission import PermLevel, PermScene
 from ...utils.http import get_shared_async_client
 
@@ -196,11 +197,11 @@ def _transform_info(info: dict[str, Any], member_info: dict[str, Any]) -> list[s
     if level := member_info.get("level"):
         lines.append(f"群等级：{int(level)}级")
     if join_time := member_info.get("join_time"):
-        lines.append(f"加群时间：{datetime.fromtimestamp(int(join_time)).strftime('%Y-%m-%d')}")
+        lines.append(f"加群时间：{datetime.fromtimestamp(int(join_time), SHANGHAI_TZ).strftime('%Y-%m-%d')}")
     if qq_level := info.get("qqLevel"):
         lines.append(f"QQ等级：{_qq_level_to_icon(int(qq_level))}")
     if reg_time := info.get("reg_time"):
-        lines.append(f"注册时间：{datetime.fromtimestamp(int(reg_time)).strftime('%Y-%m-%d')}")
+        lines.append(f"注册时间：{datetime.fromtimestamp(int(reg_time), SHANGHAI_TZ).strftime('%Y-%m-%d')}")
     if long_nick := info.get("long_nick"):
         for line in textwrap.wrap(text=f"签名：{long_nick}", width=15):
             lines.append(line)

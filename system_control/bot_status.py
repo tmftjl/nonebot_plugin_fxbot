@@ -11,7 +11,6 @@ import asyncio
 import platform
 from typing import Any, Dict, List, Tuple, Optional
 from pathlib import Path
-from datetime import datetime
 from functools import wraps
 from collections import defaultdict
 from urllib.parse import quote
@@ -25,6 +24,7 @@ from playwright.async_api._generated import Playwright as PlaywrightType
 from ..config import get_manager
 from ..adapter import build_message, build_message_segment
 from .registry import P
+from ..utils.tz import now_str, today_str
 from ..permission import PermLevel, PermScene
 from ..utils.http import get_shared_async_client
 from ..utils.paths import data_dir
@@ -45,7 +45,7 @@ _BROWSER_INIT_LOCK = asyncio.Lock()
 # ========== 消息统计缓存 ==========
 _MESSAGE_CACHE: Dict[str, Dict[str, int]] = defaultdict(lambda: {"received": 0, "sent": 0})
 _MESSAGE_CACHE_LOCK = asyncio.Lock()
-_MESSAGE_CACHE_DATE = datetime.now().strftime("%Y-%m-%d")
+_MESSAGE_CACHE_DATE = today_str()
 
 # ========== 中央API统计配置 ==========
 _DEFAULT_STATS_API_URL = "http://127.0.0.1:8000"
@@ -102,7 +102,7 @@ async def _collect_status_data() -> Dict[str, Any]:
         "network": network,
         "processes": processes,
         "system_info": system_info,
-        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "time": now_str(),
     }
 
 
@@ -1171,7 +1171,7 @@ _driver = get_driver()
 
 def _today() -> str:
     """返回当前日期字符串。"""
-    return datetime.now().strftime("%Y-%m-%d")
+    return today_str()
 
 
 async def _ensure_today_cache() -> None:

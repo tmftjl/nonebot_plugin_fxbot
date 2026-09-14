@@ -27,6 +27,7 @@ from .config import (
     cfg_command_prefixes,
     cfg_random_meme_show_info,
 )
+from ...utils import tz
 from .manager import MemeMode, meme_manager
 from .request import (
     MemeInfo,
@@ -581,7 +582,7 @@ async def _help(event: Event, matcher: Matcher, session: Uninfo):
     meme_list: list[MemeKeyWithProperties] = []
     for meme in memes:
         labels: list[str] = []
-        if datetime.now() - meme.date_created < timedelta(days=30):
+        if tz.now() - tz.as_shanghai_local(meme.date_created) < timedelta(days=30):
             labels.append("new")
         if meme_generation_keys.count(meme.key) >= 21:
             labels.append("hot")
@@ -778,7 +779,7 @@ async def _do_statistics(
 
     meme = await find_meme(matcher, meme_name) if meme_name else None
 
-    now = datetime.now().astimezone()
+    now = tz.now()
     if typ == "24h":
         start = now - timedelta(days=1)
         td = timedelta(hours=1)

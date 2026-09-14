@@ -5,13 +5,13 @@ from __future__ import annotations
 import json
 import asyncio
 from typing import Any
-from datetime import date
 
 from nonebot.matcher import Matcher
 from nonebot.adapters import Bot
 
 from ...plugin import Plugin
 from ...adapter import Uninfo, selfBot
+from ...utils.tz import today_str
 from ...chat.tools import ToolContext, ToolRuntime, tool
 from ...permission import PermLevel, PermScene
 from ...utils.paths import data_dir
@@ -107,7 +107,7 @@ async def _handle_like(matcher: Matcher, bot: Bot, session: Uninfo) -> None:
     if not user_id:
         await matcher.finish("无法获取用户 ID")
     bot_id = str(session.self_id)
-    liked_on = date.today().isoformat()
+    liked_on = today_str()
     async with _like_lock:
         like_data = _load_like_data(liked_on)
         today_count = _get_like_count(like_data, bot_id, user_id)

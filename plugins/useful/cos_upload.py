@@ -17,6 +17,7 @@ from ...adapter import (
     extract_image_sources,
     extract_reply_message_id,
 )
+from ...utils.tz import SHANGHAI_TZ, today_str
 from ...permission import PermLevel, PermScene
 from ...utils.http import get_shared_async_client
 from ...utils.paths import data_dir
@@ -109,7 +110,7 @@ async def _handle_cos_upload(matcher: Matcher, bot: Bot, event: Event) -> None:
 
     success_count = 0
     fail_count = 0
-    date_dir = datetime.now().strftime("%Y%m%d")
+    date_dir = today_str("%Y%m%d")
     for url in image_urls:
         save_path = DATA_DIR / date_dir / _image_filename(url)
         if await _download_image(url, save_path):
@@ -138,7 +139,7 @@ async def _handle_cos_list(matcher: Matcher) -> None:
         count = len([path for path in date_path.iterdir() if path.is_file()])
         total += count
         try:
-            label = datetime.strptime(date_path.name, "%Y%m%d").strftime("%Y-%m-%d")
+            label = datetime.strptime(date_path.name, "%Y%m%d").replace(tzinfo=SHANGHAI_TZ).strftime("%Y-%m-%d")
         except Exception:
             label = date_path.name
         lines.append(f"{label}: {count} 张")

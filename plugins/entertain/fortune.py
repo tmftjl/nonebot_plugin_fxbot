@@ -9,7 +9,6 @@ import base64
 import random
 from typing import Any
 from pathlib import Path
-from datetime import datetime
 
 from PIL import Image, ImageOps, ImageDraw
 from nonebot import get_driver
@@ -18,6 +17,7 @@ from nonebot.matcher import Matcher
 from .config import cfg_api_urls
 from ...plugin import Plugin
 from ...adapter import Uninfo, selfBot
+from ...utils.tz import today_str
 from ...permission import PermLevel, PermScene
 from ...utils.http import get_shared_async_client
 from ...utils.fonts import load_font, get_shared_font_path
@@ -228,7 +228,7 @@ def _get_or_create_today_fortune(user_id: str) -> tuple[dict[str, Any], bool]:
     """获取或生成当天运势。"""
     if not _JRYS_DATA:
         _load_fortune_defs()
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = today_str()
     record = _USER_FORTUNES.get(user_id)
     if record and record.get("time") == today:
         return record, False

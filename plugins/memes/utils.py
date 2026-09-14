@@ -1,8 +1,10 @@
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime
 
 import httpx
 from nonebot.log import logger
+
+from ...utils.tz import as_shanghai, to_naive_utc
 
 
 class NetworkError(Exception):
@@ -23,16 +25,10 @@ async def download_url(url: str) -> bytes:
 
 
 def remove_timezone(dt: datetime) -> datetime:
-    """移除时区"""
-    if dt.tzinfo is None:
-        return dt
-    # 先转至 UTC 时间，再移除时区
-    dt = dt.astimezone(timezone.utc)
-    return dt.replace(tzinfo=None)
+    """移除时区，转为无时区的 UTC 用于存储。"""
+    return to_naive_utc(dt)
 
 
 def add_timezone(dt: datetime) -> datetime:
-    """添加时区"""
-    if dt.tzinfo is not None:
-        return dt.astimezone()
-    return dt.replace(tzinfo=timezone.utc).astimezone()
+    """添加时区，归一到北京时间用于展示与分桶。"""
+    return as_shanghai(dt)

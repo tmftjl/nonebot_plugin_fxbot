@@ -6,7 +6,6 @@ import re
 import json
 from typing import Any, Literal
 from pathlib import Path
-from datetime import datetime
 
 from nonebot import logger
 from nonebot.params import RegexGroup
@@ -17,6 +16,7 @@ from nonebot.exception import StopPropagation
 from ...plugin import Plugin
 from .identity import is_superuser_id
 from ...adapter import Uninfo, selfBot
+from ...utils.tz import now_str
 from ...permission import PermLevel, PermScene
 from ...utils.paths import data_dir
 
@@ -153,7 +153,7 @@ class BannedWordsManager:
             "match_type": match_type,
             "penalty_type": penalty_type,
             "added_by": added_by,
-            "added_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "added_at": now_str(),
         }
         cls.save_group_data(group_id, data)
         cls.invalidate_cache(group_id)

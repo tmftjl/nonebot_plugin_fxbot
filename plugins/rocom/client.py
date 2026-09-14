@@ -8,9 +8,9 @@ from typing import Any
 from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass
 
+from ...utils.tz import SHANGHAI_TZ
 from ...utils.http import get_text_with_browser_fallback
 
-SHANGHAI_TZ = timezone(timedelta(hours=8))
 MERCHANT_LIVE_URL = "https://rocokingdomworld.org/api/merchant/live"
 MERCHANT_REQUEST_TIMEOUT_SECONDS = 15.0
 

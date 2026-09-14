@@ -7,9 +7,10 @@ import asyncio
 from nonebot import logger, get_bots, get_driver
 
 from .store import get_subscriptions, get_last_signature, set_last_signature
-from .client import SHANGHAI_TZ, fetch_merchant_snapshot
+from .client import fetch_merchant_snapshot
 from .renderer import render_merchant_image
 from ...adapter import build_message, build_message_segment, send_message_to_target
+from ...utils.tz import SHANGHAI_TZ
 
 _startup_hook_registered = False
 MERCHANT_RETRY_TIMES = 20
