@@ -30,9 +30,15 @@ watch(() => props.activeTab, (newVal) => {
 
 const currentTab = () => tabs.value.find(t => t.key === currentTabKey.value)
 
+const getTabData = () => {
+  const dataKey = currentTab()?.dataKey
+  if (!dataKey) return configs.value
+  return dataKey.split('.').reduce((data: any, key) => data?.[key], configs.value) || {}
+}
+
 const getCardData = (cardKey: string) => {
   const parts = cardKey.split('.')
-  let current: any = configs.value
+  let current: any = getTabData()
   for (const part of parts) {
     if (!current || typeof current !== 'object') return {}
     current = current[part]
@@ -42,7 +48,7 @@ const getCardData = (cardKey: string) => {
 
 const setCardData = (cardKey: string, data: Record<string, any>) => {
   const parts = cardKey.split('.')
-  let current = configs.value
+  let current = getTabData()
 
   for (let i = 0; i < parts.length - 1; i++) {
     const part = parts[i]

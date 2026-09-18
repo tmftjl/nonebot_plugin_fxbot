@@ -21,6 +21,7 @@ def _system_config_tab() -> dict[str, Any]:
         "key": "system",
         "title": "系统配置",
         "order": 0,
+        "dataKey": "system",
         "cards": [
             {
                 "key": "membership",
