@@ -12,7 +12,7 @@ from nonebot.exception import IgnoredException
 
 from .guard import membership_guard
 from ..config import get_manager as get_config_manager
-from .contact import renewal_contact_text
+from .contact import renewal_contact_text, format_membership_expiry
 from ..adapter import selfBot, bind_bot, normalize_id, event_user_id, event_group_id, event_plain_text
 from ..permission.message_policy import should_process_fxbot_message
 
@@ -83,7 +83,7 @@ def _expire_prompt_threshold() -> int | None:
 
 def _expiring_prompt(days: int, expires_at: datetime) -> str:
     """生成快到期提示。"""
-    expires_text = _as_utc(expires_at).astimezone().strftime("%Y-%m-%d %H:%M:%S")  # type: ignore[union-attr]
+    expires_text = format_membership_expiry(expires_at)
     if days <= 0:
         message = f"本群会员今天到期，到期时间：{expires_text}。"
     else:

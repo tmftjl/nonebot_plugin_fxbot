@@ -11,7 +11,7 @@ from nonebot import logger, get_bots
 from ..auth import bearer_auth
 from ...adapter import bind_bot
 from ...membership.guard import membership_guard
-from ...membership.contact import renewal_contact_text
+from ...membership.contact import renewal_contact_text, format_membership_expiry
 from ...membership.service import MembershipError, membership_service
 
 router = APIRouter(prefix="/membership", tags=["fxbot-membership"], dependencies=[Depends(bearer_auth)])
@@ -181,7 +181,7 @@ async def remind_group(payload: dict[str, Any]) -> dict[str, int]:
     row = await membership_service.get_group(group_id)
     if row is None:
         raise HTTPException(status_code=404, detail="群不存在")
-    expires = row.expires_at.isoformat() if row.expires_at else "-"
+    expires = format_membership_expiry(row.expires_at)
     await _send_group_message(row, f"本群会员到期时间：{expires}。\n{renewal_contact_text()}")
     return {"sent": 1}
 

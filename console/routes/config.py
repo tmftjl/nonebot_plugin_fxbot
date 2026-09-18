@@ -76,7 +76,7 @@ def _system_config_tab() -> dict[str, Any]:
                         "component": "Input",
                         "default": SYSTEM_DEFAULTS["membership"]["schedule_time"],
                         "helpMessage": "每日执行会员检查的时间，格式 HH:MM。",
-                        "componentProps": {"placeholder": "12:00"},
+                        "componentProps": {"placeholder": "00:00"},
                     },
                     {
                         "field": "batch_delay_seconds",
@@ -147,6 +147,13 @@ def _system_config_tab() -> dict[str, Any]:
                         "default": SYSTEM_DEFAULTS["chat"]["max_history"],
                         "helpMessage": "保留给 AI 的会话轮数。",
                         "componentProps": {"min": 0},
+                    },
+                    {
+                        "field": "renewal_contact",
+                        "label": "续费联系人",
+                        "component": "Input",
+                        "default": SYSTEM_DEFAULTS["membership"]["renewal_contact"],
+                        "helpMessage": "填写 qq123456 或 wx123456。",
                     },
                     {
                         "field": "max_tool_rounds",

@@ -17,7 +17,7 @@ from .guard import membership_guard
 from .models import MembershipGroup
 from ..config import get_manager as get_config_manager
 from ..plugin import Plugin
-from .contact import renewal_contact_text
+from .contact import renewal_contact_text, format_membership_expiry
 from .service import MembershipError, membership_service
 from ..adapter import selfBot, normalize_id, event_user_id, event_group_id, event_plain_text
 from ..permission import PermLevel, PermScene
@@ -151,9 +151,7 @@ def _as_utc(value: datetime | None) -> datetime | None:
 
 def _format_cn(value: datetime | None) -> str:
     """格式化旧版会员命令时间。"""
-    if value is None:
-        return "永久"
-    return _as_utc(value).astimezone().strftime("%Y-%m-%d %H:%M:%S")  # type: ignore[union-attr]
+    return "永久" if value is None else format_membership_expiry(value)
 
 
 def _days_remaining(value: datetime) -> int:

@@ -14,7 +14,7 @@ from ..db import with_session
 from .guard import membership_guard
 from .models import MembershipGroup, utc_now
 from ..config import get_manager as get_config_manager
-from .contact import renewal_contact_text
+from .contact import renewal_contact_text, format_membership_expiry
 from .service import membership_service
 from ..adapter import bind_bot
 
@@ -97,7 +97,7 @@ async def _leave_group(bot_id: str | None, group_id: str, expires_at: datetime) 
     try:
         client = bind_bot(bot)
         try:
-            expires_text = _as_utc(expires_at).astimezone().strftime("%Y-%m-%d %H:%M:%S")
+            expires_text = format_membership_expiry(expires_at)
             message = f"本群会员已到期，到期时间：{expires_text}。\n{renewal_contact_text()}"
             await client.send_group_message(group_id, message)
         except Exception as exc:

@@ -10,8 +10,9 @@ SYSTEM_DEFAULTS = {
         "expire_prompt_text_prefixes": ["ww"],
         "auto_leave_expired_groups": False,
         "enable_scheduler": True,
-        "schedule_time": "12:00",
+        "schedule_time": "00:00",
         "batch_delay_seconds": 5,
+        "renewal_contact": "",
     },
     "system": {
         "token": "",
