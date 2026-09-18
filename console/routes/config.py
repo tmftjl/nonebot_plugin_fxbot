@@ -86,6 +86,13 @@ def _system_config_tab() -> dict[str, Any]:
                         "helpMessage": "群消息和退群操作之间的间隔。",
                         "componentProps": {"min": 0},
                     },
+                    {
+                        "field": "renewal_contact",
+                        "label": "续费联系人",
+                        "component": "Input",
+                        "default": SYSTEM_DEFAULTS["membership"]["renewal_contact"],
+                        "helpMessage": "填写 qq123456 或 wx123456。",
+                    },
                 ],
             },
             {
@@ -147,13 +154,6 @@ def _system_config_tab() -> dict[str, Any]:
                         "default": SYSTEM_DEFAULTS["chat"]["max_history"],
                         "helpMessage": "保留给 AI 的会话轮数。",
                         "componentProps": {"min": 0},
-                    },
-                    {
-                        "field": "renewal_contact",
-                        "label": "续费联系人",
-                        "component": "Input",
-                        "default": SYSTEM_DEFAULTS["membership"]["renewal_contact"],
-                        "helpMessage": "填写 qq123456 或 wx123456。",
                     },
                     {
                         "field": "max_tool_rounds",

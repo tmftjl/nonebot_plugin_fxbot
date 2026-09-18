@@ -91,7 +91,7 @@ gen_code_cmd = P.on_regex(
 )
 
 renew_cmd = P.on_regex(
-    r"^ww续费(\d+)(天|月|年)-([A-Za-z0-9_]+)$",
+    r"^ww续费([A-Za-z0-9_]+)$",
     name="membership_renew",
     display_name="续费",
     priority=5,
@@ -229,7 +229,7 @@ async def _handle_generate_code(matcher: Matcher, event: Event) -> None:
         )
     except MembershipError as exc:
         await matcher.finish(str(exc))
-    public_code = f"ww续费{length}{unit}-{row.code}"
+    public_code = f"ww续费{row.code}"
     await matcher.finish(
         f"已生成续费码（默认一次性）：{public_code}\n请将其发送到需要开通/续费的群聊中（首次开通也使用此码）"
     )
@@ -243,19 +243,14 @@ async def _handle_renew(matcher: Matcher, bot: Bot, event: Event) -> None:
         await matcher.finish("续费码只能在群聊中使用哦")
 
     matched = event_plain_text(event)
-    match = re.match(r"^ww续费(\d+)(天|月|年)-([A-Za-z0-9_]+)$", matched)
+    match = re.match(r"^ww续费([A-Za-z0-9_]+)$", matched)
     if not match:
         await matcher.finish("格式错误")
-    length = int(match.group(1))
-    unit = match.group(2)
-    code = match.group(3)
+    code = match.group(1)
 
     row = await _find_code(code)
     if row is None or row.status != "active" or row.used_count >= row.max_use:
         await matcher.finish("该续费码无效或已被使用")
-    if row.duration_value != length or _row_unit_cn(row.duration_unit) != unit:
-        await matcher.finish("续费码信息不匹配，请检查")
-
     try:
         result = await membership_service.redeem_code(
             code,
@@ -264,10 +259,11 @@ async def _handle_renew(matcher: Matcher, bot: Bot, event: Event) -> None:
             managed_by_bot=str(bot.self_id),
         )
         await membership_guard.invalidate(group_id)
-    except MembershipError:
-        await matcher.finish("该续费码无效或已被使用")
+    except MembershipError as exc:
+        await matcher.finish(str(exc))
 
-    await matcher.finish(f"本群会员已成功续费{length}{unit}，到期时间：{_format_cn(result.after_expires_at)}")
+    duration = f"{row.duration_value}{_row_unit_cn(row.duration_unit)}"
+    await matcher.finish(f"本群会员已成功续费{duration}，到期时间：{_format_cn(result.after_expires_at)}")
 
 
 @expiry_cmd.handle()

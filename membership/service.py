@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import string
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass
 
 from sqlmodel import select
@@ -16,6 +16,15 @@ from .models import RenewCode, RenewRecord, MembershipGroup, utc_now
 
 class MembershipError(RuntimeError):
     """会员业务错误。"""
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    """标准化 SQLite 读取的无时区时间。"""
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 @dataclass
@@ -131,9 +140,12 @@ class MembershipService:
         if group is None:
             group = MembershipGroup(group_id=str(group_id), status="active")
             session.add(group)
-        before = group.expires_at
+        before = _as_utc(group.expires_at)
         base = before if before and before > now else now
-        after = base + delta
+        try:
+            after = base + delta
+        except OverflowError as exc:
+            raise MembershipError("续费后到期时间超出系统支持范围") from exc
         group.status = "active"
         group.expires_at = after
         if managed_by_bot:
@@ -200,7 +212,8 @@ class MembershipService:
         now = utc_now()
         if renew_code.status != "active":
             raise MembershipError("续费码不可用")
-        if renew_code.expires_at and renew_code.expires_at <= now:
+        code_expires_at = _as_utc(renew_code.expires_at)
+        if code_expires_at and code_expires_at <= now:
             raise MembershipError("续费码已过期")
         if renew_code.used_count >= renew_code.max_use:
             raise MembershipError("续费码使用次数已耗尽")

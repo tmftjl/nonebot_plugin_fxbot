@@ -16,7 +16,7 @@ from .contact import renewal_contact_text, format_membership_expiry
 from ..adapter import selfBot, bind_bot, normalize_id, event_user_id, event_group_id, event_plain_text
 from ..permission.message_policy import should_process_fxbot_message
 
-_RENEW_COMMAND_RE = re.compile(r"^(?:ww到期|ww(?:拉群|续费)|ww续费\d+(?:天|月|年)-[A-Za-z0-9_]+)$")
+_RENEW_COMMAND_RE = re.compile(r"^(?:ww到期|ww(?:拉群|续费)|ww续费[A-Za-z0-9_]+)$")
 _PROMPTED_EVENT_IDS: set[int] = set()
 _PROMPTED_EVENT_ORDER: deque[int] = deque(maxlen=1024)
 
