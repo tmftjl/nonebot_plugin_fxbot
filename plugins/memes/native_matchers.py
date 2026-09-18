@@ -24,6 +24,8 @@ from .plot import plot_duration_counts, plot_meme_and_duration_counts
 from .utils import add_timezone, download_url
 from .config import (
     cfg_notice_prob,
+    cfg_whitelist_ids,
+    cfg_protected_memes,
     cfg_command_prefixes,
     cfg_random_meme_show_info,
 )
@@ -732,8 +734,8 @@ async def _unprotect_meme(matcher: Matcher, arg: Message = CommandArg()):
 
 @protection_list_cmd.handle()
 async def _protection_list(matcher: Matcher):
-    whitelist = protection_manager.get_whitelist()
-    protected_memes = protection_manager.get_protected_memes()
+    whitelist = cfg_whitelist_ids()
+    protected_memes = cfg_protected_memes()
     msg = "【保护配置】\n"
     msg += f"\n保护白名单: {', '.join(whitelist) if whitelist else '（空）'}\n"
     msg += f"\n保护表情: {', '.join(protected_memes) if protected_memes else '（空）'}"

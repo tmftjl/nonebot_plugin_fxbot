@@ -222,10 +222,20 @@ class _UninfoStore:
                 return persisted_id
 
     @with_session
-    async def get_scene_persist_id(self, db_session: AsyncSession, basic_info: dict[str, str], scene: Scene) -> int:
-        bot_persist_id = await self.get_bot_persist_id(basic_info, session=db_session)
+    async def get_scene_persist_id(
+        self,
+        db_session: AsyncSession,
+        basic_info: dict[str, str],
+        scene: Scene,
+        bot_persist_id: int | None = None,
+    ) -> int:
+        bot_persist_id = bot_persist_id or await self.get_bot_persist_id(basic_info, session=db_session)
         parent_id = (
-            await self.get_scene_persist_id(basic_info, scene.parent, session=db_session) if scene.parent else None
+            await self.get_scene_persist_id(
+                basic_info, scene.parent, session=db_session, bot_persist_id=bot_persist_id
+            )
+            if scene.parent
+            else None
         )
         scene_data = json.loads(scene.dump_json())
         statement = (
@@ -261,8 +271,14 @@ class _UninfoStore:
                 return persisted_id
 
     @with_session
-    async def get_user_persist_id(self, db_session: AsyncSession, basic_info: dict[str, str], user: User) -> int:
-        bot_persist_id = await self.get_bot_persist_id(basic_info, session=db_session)
+    async def get_user_persist_id(
+        self,
+        db_session: AsyncSession,
+        basic_info: dict[str, str],
+        user: User,
+        bot_persist_id: int | None = None,
+    ) -> int:
+        bot_persist_id = bot_persist_id or await self.get_bot_persist_id(basic_info, session=db_session)
         user_data = json.loads(user.dump_json())
         statement = (
             select(UserModel).where(UserModel.bot_persist_id == bot_persist_id).where(UserModel.user_id == user.id)
@@ -289,8 +305,18 @@ class _UninfoStore:
     @with_session
     async def get_session_persist_id(self, db_session: AsyncSession, info_session: Session) -> int:
         bot_persist_id = await self.get_bot_persist_id(info_session.basic, session=db_session)
-        scene_persist_id = await self.get_scene_persist_id(info_session.basic, info_session.scene, session=db_session)
-        user_persist_id = await self.get_user_persist_id(info_session.basic, info_session.user, session=db_session)
+        scene_persist_id = await self.get_scene_persist_id(
+            info_session.basic,
+            info_session.scene,
+            session=db_session,
+            bot_persist_id=bot_persist_id,
+        )
+        user_persist_id = await self.get_user_persist_id(
+            info_session.basic,
+            info_session.user,
+            session=db_session,
+            bot_persist_id=bot_persist_id,
+        )
         member_data = json.loads(info_session.member.dump_json()) if info_session.member else None
         statement = (
             select(SessionModel)

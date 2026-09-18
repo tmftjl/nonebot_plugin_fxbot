@@ -305,6 +305,28 @@ def event_message(event: Any) -> Any:
     return getattr(event, "message", None)
 
 
+def normalize_id(value: Any) -> str | None:
+    """标准化事件 ID。"""
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text if text and text != "0" else None
+
+
+def event_plain_text(event: Any) -> str:
+    """提取事件纯文本。"""
+    getter = getattr(event, "get_plaintext", None)
+    if callable(getter):
+        try:
+            return str(getter()).strip()
+        except (AttributeError, ValueError):
+            pass
+    try:
+        return str(event_message(event) or "").strip()
+    except (AttributeError, ValueError):
+        return ""
+
+
 def event_message_type(event: Any) -> str:
     return str(getattr(event, "message_type", "") or getattr(event, "detail_type", "") or "").lower()
 

@@ -10,7 +10,6 @@ from urllib.parse import unquote, urljoin
 
 from nonebot import logger, get_driver
 
-from .config import cfg_resources
 from ...utils.http import get_shared_async_client
 from ...utils.paths import data_dir
 
@@ -38,6 +37,8 @@ ENDPOINTS = {
 }
 
 _download_lock = asyncio.Lock()
+RESOURCE_DOWNLOAD_ENABLED = True
+RESOURCE_DOWNLOAD_CONCURRENCY = 12
 
 
 def resources_ready() -> bool:
@@ -54,19 +55,18 @@ def resources_ready() -> bool:
 
 async def ensure_rocom_resources(force: bool = False) -> None:
     """检查并下载 RocomUID 运行时资源。"""
-    cfg = cfg_resources()
-    if not bool(cfg.get("enabled", True)):
+    if not RESOURCE_DOWNLOAD_ENABLED:
         return
     async with _download_lock:
         if resources_ready() and not force:
             return
 
         client = await get_shared_async_client()
-        tag, base_url = await _choose_base_url(str(cfg.get("base_url") or "").strip())
+        tag, base_url = await _choose_base_url("")
         logger.info(f"[rocom] 使用资源站 {tag} {base_url} 下载运行时资源")
         total = 0
         for endpoint, target in ENDPOINTS.items():
-            changed = await _download_endpoint(client, base_url, endpoint, target, int(cfg.get("concurrency") or 12))
+            changed = await _download_endpoint(client, base_url, endpoint, target, RESOURCE_DOWNLOAD_CONCURRENCY)
             total += changed
             logger.info(f"[rocom] 资源 {endpoint} 检查完成，更新 {changed} 个文件")
         logger.info(f"[rocom] 运行时资源检查完成，更新 {total} 个文件")

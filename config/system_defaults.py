@@ -11,28 +11,19 @@ SYSTEM_DEFAULTS = {
         "auto_leave_expired_groups": False,
         "enable_scheduler": True,
         "schedule_time": "12:00",
-        "batch_delay_seconds": 0,
-        "contact_info": "",
+        "batch_delay_seconds": 5,
     },
-    "console": {
-        "enabled": True,
-        "mount_path": "/fxbot",
+    "system": {
         "token": "",
-    },
-    "message": {
         "ignored_mention_bot_ids": [],
-        "qq_group_requires_mention": False,
+        "bot_admins": [],
     },
     "chat": {
         "enabled": False,
         "command_prefixes": ["#", "/", "."],
-        "group_requires_mention": False,
         "provider": "",
         "providers": {},
         "max_history": 20,
         "max_tool_rounds": 3,
-    },
-    "permission": {
-        "bot_admins": [],
     },
 }

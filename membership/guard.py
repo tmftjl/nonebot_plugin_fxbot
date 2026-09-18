@@ -38,8 +38,7 @@ def _is_superuser(user_id: str) -> bool:
 def _bot_admins() -> set[str]:
     """读取 bot_admin 用户列表。"""
     cfg = get_config_manager().get_system()
-    permission_cfg = cfg["permission"]
-    value = permission_cfg["bot_admins"]
+    value = cfg["system"]["bot_admins"]
     if isinstance(value, (list, tuple, set)):
         return {str(item) for item in value if item is not None}
     return set()
@@ -91,6 +90,8 @@ class MembershipGuard:
 
         cached = self._cache.get(gid)
         if cached is not None:
+            if cached.expires_at is not None and cached.expires_at <= _now_utc():
+                return MembershipDecision(False, "expired", cached.expires_at, cached.status)
             return cached
 
         decision = await self._load_from_db(gid)

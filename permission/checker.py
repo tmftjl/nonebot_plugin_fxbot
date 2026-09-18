@@ -10,31 +10,9 @@ from nonebot.permission import Permission
 
 from .types import Decision, PermLevel, PermContext
 from .policy import PolicyChain, BlacklistPolicy
+from ..config import get_manager as get_config_manager
 from .storage import get_storage
-from ..adapter import event_group_id, event_is_group, event_is_private
-
-
-def _normalize_id(value: Any) -> str | None:
-    """标准化事件 ID。"""
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text if text and text != "0" else None
-
-
-def _uid(event: Any) -> str | None:
-    """提取用户 ID。"""
-    if hasattr(event, "get_user_id"):
-        try:
-            return _normalize_id(event.get_user_id())
-        except Exception:
-            pass
-    return _normalize_id(getattr(event, "user_id", None))
-
-
-def _gid(event: Any) -> str | None:
-    """提取群 ID。"""
-    return _normalize_id(event_group_id(event))
+from ..adapter import normalize_id, event_user_id, event_group_id, event_is_group, event_is_private
 
 
 def _is_group_event(event: Any) -> bool:
@@ -76,6 +54,7 @@ def _bot_admins(config: dict[str, Any]) -> set[str]:
     for source in (
         config,
         config.get("top") if isinstance(config.get("top"), dict) else {},
+        get_config_manager().get_system().get("system", {}),
     ):
         value = source.get("bot_admins") if isinstance(source, dict) else None
         if isinstance(value, (list, tuple, set)):
@@ -85,7 +64,7 @@ def _bot_admins(config: dict[str, Any]) -> set[str]:
 
 async def _user_level(event: Any, config: dict[str, Any]) -> PermLevel:
     """计算用户权限等级。"""
-    user_id = _uid(event)
+    user_id = normalize_id(event_user_id(event))
     if not user_id:
         return PermLevel.LOW
     if _is_superuser(user_id):
@@ -113,8 +92,8 @@ class PermissionChecker:
     async def _build_context(self, event: Any, config: dict[str, Any]) -> PermContext:
         """构建权限上下文。"""
         return PermContext(
-            user_id=_uid(event) or "",
-            group_id=_gid(event),
+            user_id=normalize_id(event_user_id(event)) or "",
+            group_id=normalize_id(event_group_id(event)),
             user_level=await _user_level(event, config),
             is_group=_is_group_event(event),
             is_private=_is_private_event(event),

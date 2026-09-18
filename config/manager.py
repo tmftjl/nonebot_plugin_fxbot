@@ -54,9 +54,7 @@ class ConfigManager:
 
     def get_console_configs(self) -> dict[str, Any]:
         """返回控制台使用的配置数据。"""
-        configs: dict[str, Any] = {}
-        system = self.get_system()
-        configs.update(system)
+        configs: dict[str, Any] = {"system": self.get_system()}
         for (namespace, filename), proxy in self._proxies.items():
             if namespace == "system" or filename != "config.json":
                 continue
@@ -65,13 +63,9 @@ class ConfigManager:
 
     def save_console_configs(self, payload: dict[str, Any]) -> None:
         """保存控制台提交的配置数据。"""
-        system_proxy = self.register("system", SYSTEM_DEFAULTS)
-        system_keys = set(system_proxy.load())
-        system_data = {
-            key: payload[key] for key in system_keys if key in payload and key not in self._registered_plugin_names()
-        }
-        if system_data:
-            system_proxy.save(system_data)
+        system_data = payload.get("system")
+        if isinstance(system_data, dict):
+            self.register("system", SYSTEM_DEFAULTS).save(system_data)
 
         for (namespace, filename), proxy in list(self._proxies.items()):
             if namespace == "system" or filename != "config.json":

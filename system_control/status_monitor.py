@@ -95,6 +95,7 @@ class StatusMonitor:
         self.top_process_count = 30  # 监控TOP30进程
         self.process_refresh_interval = 10  # 每10次采样刷新一次监控列表
         self._process_cache: dict[int, Any] = {}  # 缓存进程对象用于 CPU 采样
+        self._process_count = 0
         self._sample_counter = 0  # 采样计数器
         self._process_data: dict[str, Any] = {
             "top_cpu": [],
@@ -293,6 +294,7 @@ class StatusMonitor:
                     continue
 
             # 按内存排序，选出TOP进程
+            self._process_count = len(all_processes)
             all_processes.sort(key=lambda x: x["mem_bytes"], reverse=True)
             top_processes = all_processes[: self.top_process_count]
 
@@ -371,14 +373,11 @@ class StatusMonitor:
             }
             status_counts_cn = {status_map.get(k, k): v for k, v in status_counts.items()}
 
-            # 获取总进程数
-            total_count = len(list(psutil.process_iter()))
-
             self._process_data = {
                 "top_cpu": top_cpu,
                 "top_mem": top_mem,
                 "status_counts": status_counts_cn,
-                "total_count": total_count,
+                "total_count": self._process_count,
             }
 
         except Exception as e:

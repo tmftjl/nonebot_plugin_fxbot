@@ -38,7 +38,7 @@ def deep_merge(
                 out[key] = deepcopy(base_value)
         return out
 
-    return _merge(deepcopy(defaults or {}), deepcopy(overrides or {}))
+    return _merge(defaults or {}, overrides or {})
 
 
 @dataclass
@@ -51,6 +51,8 @@ class ConfigProxy:
     _storage: ConfigStorage | None = None
     _cache: dict[str, Any] | None = None
     _mtime: float = 0.0
+    _merged_cache: dict[str, Any] | None = None
+    _merged_mtime: float = 0.0
 
     @property
     def storage(self) -> ConfigStorage:
@@ -76,17 +78,20 @@ class ConfigProxy:
             self.validator(raw)
         self._cache = raw
         self._mtime = self.storage.mtime()
+        self._merged_cache = None
         return deepcopy(raw)
 
     def load(self) -> dict[str, Any]:
         if self._cache is None or self.storage.mtime() != self._mtime:
             self.reload()
-        merged = deep_merge(
-            self.defaults,
-            self._cache or {},
-            clean_extra=self.clean_extra,
-        )
-        return deepcopy(merged)
+        if self._merged_cache is None or self._merged_mtime != self._mtime:
+            self._merged_cache = deep_merge(
+                self.defaults,
+                self._cache or {},
+                clean_extra=self.clean_extra,
+            )
+            self._merged_mtime = self._mtime
+        return deepcopy(self._merged_cache)
 
     def merge_and_save(self) -> dict[str, Any]:
         merged = self.load()
@@ -100,6 +105,7 @@ class ConfigProxy:
         self.storage.write(data)
         self._cache = deepcopy(data)
         self._mtime = self.storage.mtime()
+        self._merged_cache = None
 
     def reload_and_validate(self) -> tuple[bool, dict[str, Any], str | None]:
         try:

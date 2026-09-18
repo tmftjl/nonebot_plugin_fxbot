@@ -10,17 +10,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .routes import bots, meta, config, membership, permissions
-from ..config import get_manager
 
 _mounted = False
-
-
-def _mount_path() -> str:
-    """读取控制台挂载路径。"""
-    cfg = get_manager().get_system()
-    console_cfg = cfg["console"]
-    path = str(console_cfg["mount_path"]).strip()
-    return path if path.startswith("/") else f"/{path}"
 
 
 def mount_console() -> None:
@@ -29,13 +20,8 @@ def mount_console() -> None:
     if _mounted:
         return
 
-    cfg = get_manager().get_system()
-    console_cfg = cfg["console"]
-    if not bool(console_cfg["enabled"]):
-        return
-
     app = get_app()
-    prefix = _mount_path()
+    prefix = "/fxbot"
     router = APIRouter(prefix=prefix)
     router.include_router(membership.router)
     router.include_router(permissions.router)

@@ -22,8 +22,8 @@ def get_console_token() -> str:
     """读取控制台 token，不存在时自动生成。"""
     manager = get_config_manager()
     cfg = manager.get_system()
-    console_cfg = cfg["console"]
-    token = str(console_cfg["token"] or "")
+    system_cfg = cfg["system"]
+    token = str(system_cfg["token"] or "")
     if len(token) >= _MIN_TOKEN_LENGTH:
         return token
     return rotate_console_token()
@@ -33,9 +33,8 @@ def rotate_console_token() -> str:
     """生成并保存新的控制台 token。"""
     manager = get_config_manager()
     cfg = manager.get_system()
-    console_cfg = cfg["console"]
     token = secrets.token_urlsafe(_TOKEN_BYTES)
-    console_cfg["token"] = token
+    cfg["system"]["token"] = token
     _system_proxy().save(cfg)
     return token
 

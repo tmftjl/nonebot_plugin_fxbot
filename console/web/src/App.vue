@@ -43,7 +43,11 @@ const handleMenuSelect = (index: string) => {
 const loadConfigTabs = async () => {
   try {
     const tabs = await configApi.getTabs()
-    configTabs.value = tabs || []
+    configTabs.value = [...(tabs || [])].sort((a, b) => {
+      const orderA = Number.isFinite(a.order) ? a.order! : 1000
+      const orderB = Number.isFinite(b.order) ? b.order! : 1000
+      return orderA - orderB || a.key.localeCompare(b.key)
+    })
   } catch (e) {
     console.error('加载配置tabs失败', e)
   }

@@ -11,28 +11,10 @@ from nonebot.adapters import Bot, Event
 
 from ..config import get_manager as get_config_manager
 from .service import chat_service
-from ..adapter import event_is_tome, event_group_id
+from ..adapter import event_is_tome, event_plain_text
 from .tool_runtime import default_runtime_factory
 from .message_adapter import adapt_message_event
 from ..permission.message_policy import should_process_fxbot_message
-
-
-def _plain_text(event: Any) -> str:
-    """提取纯文本。"""
-    if hasattr(event, "get_plaintext"):
-        try:
-            return str(event.get_plaintext()).strip()
-        except Exception:
-            pass
-    try:
-        return str(event.get_message()).strip()
-    except Exception:
-        return ""
-
-
-def _gid(event: Any) -> str | None:
-    """提取群 ID。"""
-    return event_group_id(event)
 
 
 def _is_to_me(event: Any) -> bool:
@@ -53,13 +35,11 @@ async def _ai_fallback_rule(bot: Bot, event: Event) -> bool:
     cfg = _chat_cfg()
     if not bool(cfg["enabled"]):
         return False
-    text = _plain_text(event)
+    text = event_plain_text(event)
     if not text:
         return False
     prefixes = tuple(str(item) for item in cfg["command_prefixes"])
     if text.startswith(prefixes):
-        return False
-    if _gid(event) and bool(cfg["group_requires_mention"]) and not _is_to_me(event):
         return False
     return True
 

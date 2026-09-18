@@ -25,7 +25,7 @@ DEFAULTS: dict[str, Any] = {
         "cookie": "",
     },
     "network": {
-        "proxy": "",
+        "proxy": "http://127.0.0.1:7890",
     },
 }
 

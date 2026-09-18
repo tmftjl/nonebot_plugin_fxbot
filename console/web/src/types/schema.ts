@@ -74,6 +74,7 @@ export interface ConfigCard {
 export interface ConfigTab {
   key: string                         // Tab唯一标识
   title: string                       // Tab标题
+  order?: number                      // 左侧菜单排序，数值越小越靠前
   cards: ConfigCard[]                 // 卡片列表
 }
 

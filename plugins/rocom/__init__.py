@@ -35,7 +35,6 @@ P = Plugin(
 )
 
 from . import (  # noqa: E402
-    config as config,
     commands_info as commands_info,
     commands_merchant as commands_merchant,
     resource_downloader as resource_downloader,

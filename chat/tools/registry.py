@@ -12,10 +12,12 @@ class ToolRegistry:
 
     def __init__(self) -> None:
         self._tools: dict[str, ToolSpec] = {}
+        self._openai_tools_cache: list[dict[str, Any]] | None = None
 
     def register(self, spec: ToolSpec) -> ToolSpec:
         """注册工具。"""
         self._tools[spec.name] = spec
+        self._openai_tools_cache = None
         return spec
 
     def get(self, name: str) -> ToolSpec | None:
@@ -28,17 +30,19 @@ class ToolRegistry:
 
     def to_openai_tools(self) -> list[dict[str, Any]]:
         """转换为 OpenAI function calling 工具格式。"""
-        return [
-            {
-                "type": "function",
-                "function": {
-                    "name": spec.name,
-                    "description": spec.description,
-                    "parameters": spec.parameters,
-                },
-            }
-            for spec in self.list()
-        ]
+        if self._openai_tools_cache is None:
+            self._openai_tools_cache = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": spec.name,
+                        "description": spec.description,
+                        "parameters": spec.parameters,
+                    },
+                }
+                for spec in self.list()
+            ]
+        return self._openai_tools_cache
 
 
 default_registry = ToolRegistry()

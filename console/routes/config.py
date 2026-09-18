@@ -20,6 +20,7 @@ def _system_config_tab() -> dict[str, Any]:
     return {
         "key": "system",
         "title": "系统配置",
+        "order": 0,
         "cards": [
             {
                 "key": "membership",
@@ -84,59 +85,32 @@ def _system_config_tab() -> dict[str, Any]:
                         "helpMessage": "群消息和退群操作之间的间隔。",
                         "componentProps": {"min": 0},
                     },
-                    {
-                        "field": "contact_info",
-                        "label": "续费联系信息",
-                        "component": "Textarea",
-                        "default": SYSTEM_DEFAULTS["membership"]["contact_info"],
-                        "helpMessage": "展示在到期查询和提醒消息中的联系方式。",
-                    },
                 ],
             },
             {
-                "key": "console",
-                "title": "控制台",
+                "key": "system",
+                "title": "系统",
                 "schemas": [
-                    {
-                        "field": "enabled",
-                        "label": "启用控制台",
-                        "component": "Switch",
-                        "default": SYSTEM_DEFAULTS["console"]["enabled"],
-                        "helpMessage": "关闭后不会挂载控制台页面和接口。",
-                    },
-                    {
-                        "field": "mount_path",
-                        "label": "挂载路径",
-                        "component": "Input",
-                        "default": SYSTEM_DEFAULTS["console"]["mount_path"],
-                        "helpMessage": "控制台页面访问路径。",
-                    },
                     {
                         "field": "token",
                         "label": "访问 Token",
                         "component": "InputPassword",
-                        "default": SYSTEM_DEFAULTS["console"]["token"],
+                        "default": SYSTEM_DEFAULTS["system"]["token"],
                         "helpMessage": "留空时会在首次登录时自动生成。",
-                    },
-                ],
-            },
-            {
-                "key": "message",
-                "title": "消息处理",
-                "schemas": [
-                    {
-                        "field": "qq_group_requires_mention",
-                        "label": "QQ 群需 @Bot",
-                        "component": "Switch",
-                        "default": SYSTEM_DEFAULTS["message"]["qq_group_requires_mention"],
-                        "helpMessage": "开启后 FxBot 忽略 QQ 官方群内未 @ 本机器人的消息，不影响其他插件接收消息。",
                     },
                     {
                         "field": "ignored_mention_bot_ids",
                         "label": "忽略 @Bot",
                         "component": "GTags",
-                        "default": SYSTEM_DEFAULTS["message"]["ignored_mention_bot_ids"],
+                        "default": SYSTEM_DEFAULTS["system"]["ignored_mention_bot_ids"],
                         "helpMessage": "消息中 @ 到这些 Bot QQ 时，本机器人不处理该消息。",
+                    },
+                    {
+                        "field": "bot_admins",
+                        "label": "Bot 管理员",
+                        "component": "GTags",
+                        "default": SYSTEM_DEFAULTS["system"]["bot_admins"],
+                        "helpMessage": "这些账号拥有 Bot 管理员权限。",
                     },
                 ],
             },
@@ -157,13 +131,6 @@ def _system_config_tab() -> dict[str, Any]:
                         "component": "GTags",
                         "default": SYSTEM_DEFAULTS["chat"]["command_prefixes"],
                         "helpMessage": "这些前缀开头的消息不会进入 AI 兜底。",
-                    },
-                    {
-                        "field": "group_requires_mention",
-                        "label": "群聊需 @bot",
-                        "component": "Switch",
-                        "default": SYSTEM_DEFAULTS["chat"]["group_requires_mention"],
-                        "helpMessage": "开启后群聊必须 @bot 才会进入 AI 兜底。",
                     },
                     {
                         "field": "provider",
@@ -187,19 +154,6 @@ def _system_config_tab() -> dict[str, Any]:
                         "default": SYSTEM_DEFAULTS["chat"]["max_tool_rounds"],
                         "helpMessage": "单次对话允许的工具调用轮数。",
                         "componentProps": {"min": 0},
-                    },
-                ],
-            },
-            {
-                "key": "permission",
-                "title": "权限",
-                "schemas": [
-                    {
-                        "field": "bot_admins",
-                        "label": "Bot 管理员",
-                        "component": "GTags",
-                        "default": SYSTEM_DEFAULTS["permission"]["bot_admins"],
-                        "helpMessage": "这些账号拥有 Bot 管理员权限。",
                     },
                 ],
             },
@@ -228,10 +182,19 @@ def _plugin_config_tabs() -> list[dict[str, Any]]:
     return tabs
 
 
+def _tab_sort_key(tab: dict[str, Any]) -> tuple[int, str]:
+    """按 schema 声明的顺序排列配置页。"""
+    try:
+        order = int(tab.get("order", 1000))
+    except (TypeError, ValueError):
+        order = 1000
+    return order, str(tab.get("key") or "")
+
+
 @router.get("/tabs")
 async def get_config_tabs() -> list[dict[str, Any]]:
     """返回控制台配置表单结构。"""
-    return [_system_config_tab(), *_plugin_config_tabs()]
+    return sorted([_system_config_tab(), *_plugin_config_tabs()], key=_tab_sort_key)
 
 
 @router.get("")

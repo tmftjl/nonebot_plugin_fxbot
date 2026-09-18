@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import math
+import asyncio
 from io import BytesIO
 from pathlib import Path
+from functools import lru_cache
 
 from PIL import Image, ImageDraw
 
@@ -21,16 +23,29 @@ FONT_META = load_font(FONT_DIR / "skill_origin.ttf", 26)
 FONT_SMALL = load_font(FONT_DIR / "skill_origin.ttf", 18)
 
 RECOMMEND_NAMES = {"炫彩精灵蛋", "棱镜球", "国王球"}
+_ICON_CACHE: dict[str, Image.Image] = {}
+
+
+@lru_cache(maxsize=8)
+def _load_texture(name: str, mode: str) -> Image.Image:
+    """加载并缓存固定渲染素材。"""
+    return Image.open(TEXTURE_DIR / name).convert(mode)
 
 
 async def _fetch_icon(url: str) -> Image.Image | None:
     if not url:
         return None
+    if url in _ICON_CACHE:
+        return _ICON_CACHE[url]
     try:
         client = await get_shared_async_client()
         response = await client.get(url, timeout=10.0, follow_redirects=True)
         response.raise_for_status()
-        return Image.open(BytesIO(response.content)).convert("RGBA")
+        icon = Image.open(BytesIO(response.content)).convert("RGBA")
+        _ICON_CACHE[url] = icon
+        if len(_ICON_CACHE) > 256:
+            _ICON_CACHE.pop(next(iter(_ICON_CACHE)))
+        return icon
     except Exception:
         return None
 
@@ -67,15 +82,16 @@ async def render_merchant_image(snapshot: MerchantSnapshot) -> bytes:
     prop_height = max(556, math.ceil(max(prop_num, 1) / 2) * 206)
     img_height = prop_height + 474
 
-    badge = Image.open(TEXTURE_DIR / "badge.png").convert("RGBA")
-    banner = Image.open(TEXTURE_DIR / "banner.png").convert("RGBA")
-    susume = Image.open(TEXTURE_DIR / "susume.png").convert("RGBA")
-    top_img = Image.open(TEXTURE_DIR / "bg_top.jpg").convert("RGB")
-    footer_img = Image.open(TEXTURE_DIR / "bg_footer.jpg").convert("RGB")
+    badge = _load_texture("badge.png", "RGBA")
+    banner = _load_texture("banner.png", "RGBA")
+    susume = _load_texture("susume.png", "RGBA")
+    top_img = _load_texture("bg_top.jpg", "RGB")
+    footer_img = _load_texture("bg_footer.jpg", "RGB")
+    products = products[:8]
 
     img = Image.new("RGBA", (1000, img_height))
     img.paste(top_img, (0, 0))
-    bg_center = Image.open(TEXTURE_DIR / "bg_center.jpg").resize((1000, prop_height))
+    bg_center = _load_texture("bg_center.jpg", "RGB").resize((1000, prop_height))
     img.paste(bg_center, (0, 321))
     img.paste(footer_img, (0, prop_height + 321))
     img.paste(banner, (196, 252), banner)
@@ -97,13 +113,13 @@ async def render_merchant_image(snapshot: MerchantSnapshot) -> bytes:
         _text(draw, (500, 520), "暂未解析到商品明细", (255, 255, 63), FONT_TITLE, "mm")
 
     start_height = 277
-    for index, product in enumerate(products[:8]):
+    icons = await asyncio.gather(*(_fetch_icon(product.image) for product in products))
+    for index, (product, icon) in enumerate(zip(products, icons, strict=True)):
         row = index // 2
         col = index - row * 2
         prop_img = Image.new("RGBA", (512, 256), (255, 255, 255, 0))
         prop_img.paste(badge, (0, 0), badge)
 
-        icon = await _fetch_icon(product.image)
         if icon is not None:
             icon = _fit_icon(icon)
             icon_x = 131 - icon.size[0] // 2

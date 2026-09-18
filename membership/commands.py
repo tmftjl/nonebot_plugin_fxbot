@@ -17,8 +17,9 @@ from .guard import membership_guard
 from .models import MembershipGroup
 from ..config import get_manager as get_config_manager
 from ..plugin import Plugin
+from .contact import renewal_contact_text
 from .service import MembershipError, membership_service
-from ..adapter import selfBot
+from ..adapter import selfBot, normalize_id, event_user_id, event_group_id, event_plain_text
 from ..permission import PermLevel, PermScene
 from ..console.auth import rotate_console_token
 
@@ -50,7 +51,7 @@ class _MembershipCommandStore:
 
         for bot_id, groups in groups_by_bot.items():
             for item in groups:
-                group_id = _normalize_id(
+                group_id = normalize_id(
                     item.get("group_id") if isinstance(item, dict) else getattr(item, "group_id", None)
                 )
                 if not group_id or group_id not in rows:
@@ -139,44 +140,6 @@ manual_check_cmd = P.on_regex(
 )
 
 
-def _normalize_id(value: Any) -> str | None:
-    """标准化 ID。"""
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text if text and text != "0" else None
-
-
-def _gid(event: Any) -> str | None:
-    """提取群 ID。"""
-    if hasattr(event, "get_group_id"):
-        try:
-            return _normalize_id(event.get_group_id())
-        except Exception:
-            pass
-    return _normalize_id(getattr(event, "group_id", None))
-
-
-def _uid(event: Any) -> str | None:
-    """提取用户 ID。"""
-    if hasattr(event, "get_user_id"):
-        try:
-            return _normalize_id(event.get_user_id())
-        except Exception:
-            pass
-    return _normalize_id(getattr(event, "user_id", None))
-
-
-def _plain_text(event: Event) -> str:
-    """提取事件纯文本。"""
-    if hasattr(event, "get_plaintext"):
-        try:
-            return str(event.get_plaintext()).strip()
-        except Exception:
-            pass
-    return str(event.get_message()).strip()
-
-
 def _as_utc(value: datetime | None) -> datetime | None:
     """将 datetime 转为 UTC aware 对象。"""
     if value is None:
@@ -209,9 +172,7 @@ def _membership_cfg() -> dict[str, Any]:
 
 def _console_url(token: str) -> str:
     """生成控制台登录地址。"""
-    cfg = get_config_manager().get_system()
-    console_cfg = cfg["console"]
-    path = str(console_cfg["mount_path"])
+    path = "/fxbot"
     host = str(get_driver().config.host)
     port = int(get_driver().config.port)
     return f"http://{host}:{port}{path}?token={token}"
@@ -229,7 +190,7 @@ def _row_unit_cn(unit: str) -> str:
 
 def _is_private(event: Any) -> bool:
     """判断是否为私聊事件。"""
-    return _gid(event) is None
+    return event_group_id(event) is None
 
 
 async def _find_code(code: str):
@@ -256,7 +217,7 @@ async def _handle_generate_code(matcher: Matcher, event: Event) -> None:
     """处理生成续费码命令。"""
     if not _is_private(event):
         await matcher.finish("为安全起见，请在私聊生成续费码")
-    matched = _plain_text(event)
+    matched = event_plain_text(event)
     match = re.match(r"^ww生成续费码(\d+)(天|月|年)$", matched)
     if not match:
         await matcher.finish("格式错误")
@@ -279,11 +240,11 @@ async def _handle_generate_code(matcher: Matcher, event: Event) -> None:
 @renew_cmd.handle()
 async def _handle_renew(matcher: Matcher, bot: Bot, event: Event) -> None:
     """处理群续费命令。"""
-    group_id = _gid(event)
+    group_id = normalize_id(event_group_id(event))
     if not group_id:
         await matcher.finish("续费码只能在群聊中使用哦")
 
-    matched = _plain_text(event)
+    matched = event_plain_text(event)
     match = re.match(r"^ww续费(\d+)(天|月|年)-([A-Za-z0-9_]+)$", matched)
     if not match:
         await matcher.finish("格式错误")
@@ -301,7 +262,7 @@ async def _handle_renew(matcher: Matcher, bot: Bot, event: Event) -> None:
         result = await membership_service.redeem_code(
             code,
             group_id,
-            operator_user_id=_uid(event),
+            operator_user_id=normalize_id(event_user_id(event)),
             managed_by_bot=str(bot.self_id),
         )
         await membership_guard.invalidate(group_id)
@@ -314,7 +275,7 @@ async def _handle_renew(matcher: Matcher, bot: Bot, event: Event) -> None:
 @expiry_cmd.handle()
 async def _handle_expiry(matcher: Matcher, event: Event) -> None:
     """处理到期查询命令。"""
-    group_id = _gid(event)
+    group_id = normalize_id(event_group_id(event))
     if not group_id:
         await matcher.finish("该指令需在群聊中使用")
 
@@ -338,10 +299,9 @@ async def _handle_expiry(matcher: Matcher, event: Event) -> None:
         else:
             status = f"有效(剩余{days}天)"
 
-    contact_info = str(_membership_cfg()["contact_info"] or "")
     reply = f"本群会员状态：{status}\n到期时间：{_format_cn(group.expires_at)}"
-    if contact_info:
-        reply += f"\n{contact_info}"
+    if group.expires_at is not None:
+        reply += f"\n{renewal_contact_text()}"
     await matcher.finish(reply)
 
 

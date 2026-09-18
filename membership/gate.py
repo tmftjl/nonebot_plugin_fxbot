@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from typing import Any
 from datetime import datetime, timezone
 from collections import deque
 
@@ -13,53 +12,13 @@ from nonebot.exception import IgnoredException
 
 from .guard import membership_guard
 from ..config import get_manager as get_config_manager
-from ..adapter import selfBot, bind_bot
+from .contact import renewal_contact_text
+from ..adapter import selfBot, bind_bot, normalize_id, event_user_id, event_group_id, event_plain_text
 from ..permission.message_policy import should_process_fxbot_message
 
 _RENEW_COMMAND_RE = re.compile(r"^(?:ww到期|ww(?:拉群|续费)|ww续费\d+(?:天|月|年)-[A-Za-z0-9_]+)$")
 _PROMPTED_EVENT_IDS: set[int] = set()
 _PROMPTED_EVENT_ORDER: deque[int] = deque(maxlen=1024)
-
-
-def _normalize_id(value: Any) -> str | None:
-    """标准化 ID。"""
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text if text and text != "0" else None
-
-
-def _uid(event: Any) -> str | None:
-    """提取用户 ID。"""
-    if hasattr(event, "get_user_id"):
-        try:
-            return _normalize_id(event.get_user_id())
-        except Exception:
-            pass
-    return _normalize_id(getattr(event, "user_id", None))
-
-
-def _gid(event: Any) -> str | None:
-    """提取群 ID。"""
-    if hasattr(event, "get_group_id"):
-        try:
-            return _normalize_id(event.get_group_id())
-        except Exception:
-            pass
-    return _normalize_id(getattr(event, "group_id", None))
-
-
-def _plain_text(event: Any) -> str:
-    """提取事件纯文本。"""
-    if hasattr(event, "get_plaintext"):
-        try:
-            return str(event.get_plaintext()).strip()
-        except Exception:
-            pass
-    try:
-        return str(event.get_message()).strip()
-    except Exception:
-        return ""
 
 
 def _membership_enabled() -> bool:
@@ -124,16 +83,12 @@ def _expire_prompt_threshold() -> int | None:
 
 def _expiring_prompt(days: int, expires_at: datetime) -> str:
     """生成快到期提示。"""
-    cfg = get_config_manager().get_system()
-    contact = str(cfg["membership"]["contact_info"] or "").strip()
     expires_text = _as_utc(expires_at).astimezone().strftime("%Y-%m-%d %H:%M:%S")  # type: ignore[union-attr]
     if days <= 0:
-        message = f"本群会员今天到期，到期时间：{expires_text}，请及时续费。"
+        message = f"本群会员今天到期，到期时间：{expires_text}。"
     else:
-        message = f"本群会员将在 {days} 天后到期，到期时间：{expires_text}，请及时续费。"
-    if contact:
-        message += f"\n{contact}"
-    return message
+        message = f"本群会员将在 {days} 天后到期，到期时间：{expires_text}。"
+    return f"{message}\n{renewal_contact_text()}"
 
 
 def _event_prompted(event: Event) -> bool:
@@ -188,16 +143,16 @@ async def _fxbot_membership_gate(bot: Bot, event: Event) -> None:
     if not _membership_enabled():
         return
 
-    bot_id = _normalize_id(getattr(bot, "self_id", None))
+    bot_id = normalize_id(getattr(bot, "self_id", None))
     if bot_id and bot_id in _free_bot_ids():
         return
 
-    group_id = _gid(event)
+    group_id = normalize_id(event_group_id(event))
     if not group_id:
         return
 
-    text = _plain_text(event)
-    user_id = _uid(event) or ""
+    text = event_plain_text(event)
+    user_id = normalize_id(event_user_id(event)) or ""
     is_renew_command = _RENEW_COMMAND_RE.fullmatch(text) is not None
 
     try:

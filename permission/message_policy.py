@@ -9,18 +9,15 @@ from nonebot.adapters import Bot, Event
 from nonebot.exception import IgnoredException
 
 from ..config import get_manager as get_config_manager
-from ..adapter import selfBot, bind_bot, event_is_tome, event_message, event_is_group
+from ..adapter import selfBot, bind_bot, event_message
 
 
 def should_process_fxbot_message(bot: Bot, event: Event) -> bool:
-    cfg = get_config_manager().get_system()
-    if not bool(cfg["message"]["qq_group_requires_mention"]):
-        return True
-    return not (event_is_group(event) and not event_is_tome(event))
+    return True
 
 
 def _ignored_mention_bot_ids() -> set[str]:
-    value: Any = get_config_manager().get_system()["message"]["ignored_mention_bot_ids"]
+    value: Any = get_config_manager().get_system()["system"]["ignored_mention_bot_ids"]
     if not isinstance(value, (list, tuple, set)):
         return set()
     return {str(item).strip() for item in value if item is not None and str(item).strip()}

@@ -14,8 +14,9 @@ from ..db import with_session
 from .guard import membership_guard
 from .models import MembershipGroup, utc_now
 from ..config import get_manager as get_config_manager
+from .contact import renewal_contact_text
 from .service import membership_service
-from ..adapter import selfBot
+from ..adapter import bind_bot
 
 
 @dataclass
@@ -55,7 +56,7 @@ class _MembershipTaskStore:
                 group_in_session.expired_at = utc_now()
                 group_in_session.updated_at = utc_now()
                 result.expired += 1
-                if auto_leave and await _leave_group(group.managed_by_bot, group.group_id):
+                if auto_leave and await _leave_group(group.managed_by_bot, group.group_id, expires_at):
                     result.left += 1
                 if delay:
                     await asyncio.sleep(delay)
@@ -88,13 +89,20 @@ def _membership_cfg() -> dict[str, Any]:
     return cfg["membership"]
 
 
-async def _leave_group(bot_id: str | None, group_id: str) -> bool:
+async def _leave_group(bot_id: str | None, group_id: str, expires_at: datetime) -> bool:
     """让 Bot 退出指定群。"""
     bot = get_bots().get(str(bot_id)) if bot_id else None
     if bot is None:
         return False
     try:
-        await selfBot.leave_group(group_id)
+        client = bind_bot(bot)
+        try:
+            expires_text = _as_utc(expires_at).astimezone().strftime("%Y-%m-%d %H:%M:%S")
+            message = f"本群会员已到期，到期时间：{expires_text}。\n{renewal_contact_text()}"
+            await client.send_group_message(group_id, message)
+        except Exception as exc:
+            logger.warning(f"[MembershipTask] 群 {group_id} 到期提醒发送失败: {exc}")
+        await client.leave_group(group_id)
         return True
     except Exception as exc:
         logger.warning(f"[MembershipTask] 群 {group_id} 退群失败: {exc}")
