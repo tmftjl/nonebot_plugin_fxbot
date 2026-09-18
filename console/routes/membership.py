@@ -116,9 +116,13 @@ async def get_membership_data() -> dict[str, Any]:
 
 @router.get("/codes")
 async def list_codes() -> dict[str, Any]:
-    """列出续费码。"""
+    """列出仍可使用的续费码。"""
     rows = await membership_service.list_codes()
-    return {row.code: _code_to_console(row) for row in rows}
+    return {
+        row.code: _code_to_console(row)
+        for row in rows
+        if row.status == "active" and row.used_count < row.max_use
+    }
 
 
 @router.post("/generate")
