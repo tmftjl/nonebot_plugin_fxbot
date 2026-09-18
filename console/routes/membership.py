@@ -6,14 +6,45 @@ from typing import Any
 from datetime import datetime, timezone, timedelta
 
 from fastapi import Depends, APIRouter, HTTPException
-from nonebot import get_bots
+from nonebot import logger, get_bots
 
 from ..auth import bearer_auth
-from ...adapter import selfBot
+from ...adapter import bind_bot
 from ...membership.guard import membership_guard
+from ...membership.contact import renewal_contact_text
 from ...membership.service import MembershipError, membership_service
 
 router = APIRouter(prefix="/membership", tags=["fxbot-membership"], dependencies=[Depends(bearer_auth)])
+
+
+def _candidate_bots(managed_by_bot: str | None) -> list[Any]:
+    """优先使用记录 Bot，失败时遍历其他在线 Bot。"""
+    bots = {str(bot_id): bot for bot_id, bot in get_bots().items()}
+    preferred_id = str(managed_by_bot or "")
+    candidates = [bots[preferred_id]] if preferred_id in bots else []
+    candidates.extend(bot for bot_id, bot in bots.items() if bot_id != preferred_id)
+    return candidates
+
+
+async def _send_group_message(row: Any, message: str) -> str:
+    """发送群消息并在成功时更新管理 Bot。"""
+    errors: list[str] = []
+    for bot in _candidate_bots(row.managed_by_bot):
+        bot_id = str(getattr(bot, "self_id", ""))
+        try:
+            await bind_bot(bot).send_group_message(row.group_id, message)
+        except Exception as exc:
+            errors.append(f"{bot_id}: {exc}")
+            continue
+        if bot_id and bot_id != row.managed_by_bot:
+            await membership_service.update_managed_bot(row.group_id, bot_id)
+        return bot_id
+    logger.warning(f"[MembershipConsole] 群 {row.group_id} 所有在线 Bot 发送失败: {'; '.join(errors)}")
+    raise HTTPException(
+        status_code=409,
+        detail="所有在线 Bot 都无法向该群发送消息",
+        headers={"X-FxBot-Delete-Record": "true"},
+    )
 
 
 def _duration_unit(unit: str) -> str:
@@ -150,12 +181,18 @@ async def remind_group(payload: dict[str, Any]) -> dict[str, int]:
     row = await membership_service.get_group(group_id)
     if row is None:
         raise HTTPException(status_code=404, detail="群不存在")
-    bot = get_bots().get(str(row.managed_by_bot or ""))
-    if bot is None:
-        raise HTTPException(status_code=503, detail="托管 Bot 不在线")
     expires = row.expires_at.isoformat() if row.expires_at else "-"
-    await selfBot.send_group_message(group_id, f"本群会员到期时间：{expires}")
+    await _send_group_message(row, f"本群会员到期时间：{expires}。\n{renewal_contact_text()}")
     return {"sent": 1}
+
+
+@router.delete("/groups/{group_id}")
+async def delete_group_record(group_id: str) -> dict[str, int]:
+    """只删除会员记录，不执行退群。"""
+    if not await membership_service.delete_group(group_id):
+        raise HTTPException(status_code=404, detail="群不存在")
+    await membership_guard.invalidate(group_id)
+    return {"deleted": 1}
 
 
 @router.post("/notify")
@@ -169,17 +206,19 @@ async def notify_groups(payload: dict[str, Any]) -> dict[str, int]:
         raise HTTPException(status_code=400, detail="通知文本不能为空")
 
     sent = 0
-    bots = get_bots()
+    failed = 0
     for group_id in group_ids:
         row = await membership_service.get_group(group_id)
         if row is None:
             continue
-        bot = bots.get(str(row.managed_by_bot or ""))
-        if bot is None:
+        try:
+            await _send_group_message(row, text)
+        except HTTPException as exc:
+            if exc.status_code == 409:
+                failed += 1
             continue
-        await selfBot.send_group_message(group_id, text)
         sent += 1
-    return {"sent": sent}
+    return {"sent": sent, "failed": failed}
 
 
 @router.post("/leave")
@@ -192,7 +231,7 @@ async def leave_group(payload: dict[str, Any]) -> dict[str, int]:
     bot = get_bots().get(str(row.managed_by_bot or ""))
     if bot is None:
         raise HTTPException(status_code=503, detail="托管 Bot 不在线")
-    await selfBot.leave_group(group_id)
+    await bind_bot(bot).leave_group(group_id)
     await membership_service.delete_group(group_id)
     await membership_guard.invalidate(group_id)
     return {"left": 1}

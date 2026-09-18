@@ -12,6 +12,7 @@ function getApiErrorMessage(e: any): string {
   const detail = e?.response?.data?.detail
   if (status === 404) return detail || '群不存在或不在会员库'
   if (status === 503) return detail || '托管 Bot 离线或不可用'
+  if (status === 409) return detail || '所有在线 Bot 都无法发送消息'
   if (status === 400) return detail || '请求参数错误'
   if (status === 401) return '未授权，检查访问令牌'
   return detail || e?.message || String(e)
@@ -356,6 +357,32 @@ const handleRemind = async (row: GroupRecord) => {
     ElMessage.success('提醒已发送')
   } catch (e: any) {
     if (e === 'cancel' || e === 'close') return
+    if (e?.response?.status === 409) {
+      const expired = row.status === 'expired' || (row.expiry && daysRemaining(row.expiry) < 0)
+      if (!expired) {
+        ElMessageBox.alert(
+          '该会员群当前未过期，但没有 Bot 在该群中，无法发送提醒。',
+          '无法发送提醒',
+          { type: 'warning' }
+        )
+        return
+      }
+      try {
+        await ElMessageBox.confirm(
+          '该会员群已过期，且当前没有 Bot 在该群中，无法发送提醒。是否删除会员记录？',
+          '过期记录处理',
+          { type: 'warning', confirmButtonText: '删除记录', cancelButtonText: '保留记录' }
+        )
+        await renewalApi.deleteRecord(parseInt(row.gid))
+        ElMessage.success('会员记录已删除')
+        await loadData()
+      } catch (deleteError: any) {
+        if (deleteError !== 'cancel' && deleteError !== 'close') {
+          ElMessage.error('删除失败: ' + getApiErrorMessage(deleteError))
+        }
+      }
+      return
+    }
     const msg = getApiErrorMessage(e)
     ElMessageBox.alert(msg, '发送提醒失败', { type: 'error' })
   }

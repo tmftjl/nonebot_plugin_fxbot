@@ -106,6 +106,8 @@ export const renewalApi = {
   }) => api.post<{ group_id: string; expiry: string; id?: number }>('/membership/extend', payload),
   remind: (groupId: number) =>
     api.post<{ sent: number }>('/membership/remind', { group_id: groupId }),
+  deleteRecord: (groupId: number) =>
+    api.delete<{ deleted: number }>(`/membership/groups/${groupId}`),
   leave: (groupId: number) =>
     api.post<{ left: number }>('/membership/leave', { group_id: groupId }),
   notify: (groupIds: number[], text: string, images?: string[]) =>

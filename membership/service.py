@@ -103,6 +103,16 @@ class MembershipService:
         return True
 
     @with_session
+    async def update_managed_bot(self, session: AsyncSession, group_id: str, bot_id: str) -> bool:
+        """更新会员群当前可用的管理 Bot。"""
+        group = await self.get_group(group_id, session=session)
+        if group is None:
+            return False
+        group.managed_by_bot = str(bot_id)
+        group.updated_at = utc_now()
+        return True
+
+    @with_session
     async def extend_group(
         self,
         session: AsyncSession,
