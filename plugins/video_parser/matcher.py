@@ -180,8 +180,9 @@ async def _handle_video(matcher: Matcher, event: Event, session: Uninfo, state: 
         await matcher.finish(f"解析失败：平台接口返回 {exc.response.status_code}")
     except MatcherException:
         raise
-    except Exception as exc:  # noqa: BLE001 - 将未预期解析错误转换为用户提示
-        await matcher.finish(f"解析失败：{type(exc).__name__}: {exc}")
+    except Exception as exc:  # noqa: BLE001 - 未预期错误只记日志，不把内部异常回显给用户
+        # 发送阶段的失败（如平台 API 超时时的 NetworkError）也会落到这里
+        logger.opt(exception=True).warning(f"[video_parser] 解析出现未预期错误：{type(exc).__name__}: {exc}")
     finally:
         cleanup_download_dir(download_dir)
 
