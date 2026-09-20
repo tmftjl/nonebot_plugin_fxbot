@@ -1,7 +1,11 @@
 __pycache__/
 temp/
-.agents/
+
+# Agent 本机配置整体忽略。开发规范 skill 的事实源是 .agents/skills/（入库）；
+# .claude/skills/ 只是指向它的 junction（不入库），Codex 与 Claude Code 共用同一批文件。
 .claude/
+.agents/*
+!.agents/skills/
 .codex/
 
 # Python
