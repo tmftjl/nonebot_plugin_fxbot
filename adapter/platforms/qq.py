@@ -81,6 +81,14 @@ class QQOfficialMessageAdapter(PlatformAdapter):
     def build_message(self, bot: Bot, segments: list[Any]) -> Any:
         return Message(segments)
 
+    def reply_sender_id(self, event: Any) -> str | None:
+        """读取被引用消息的发送者 OpenID。"""
+        author = getattr(getattr(event, "reply", None), "author", None)
+        for field in ("id", "user_openid", "member_openid"):
+            if value := getattr(author, field, None):
+                return str(value)
+        return None
+
     async def send_message_to_target(self, bot: Bot, target: dict[str, Any], message: Any) -> Any:
         if target.get("group_openid") is not None:
             return await bot.send_to_group(group_openid=str(target["group_openid"]), message=message)

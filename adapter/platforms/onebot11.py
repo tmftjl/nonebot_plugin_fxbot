@@ -97,6 +97,12 @@ class OneBotV11MessageAdapter(PlatformAdapter):
     async def get_message(self, bot, message_id):
         return await self._api(bot, "get_msg", message_id=message_id)
 
+    def reply_sender_id(self, event: Any) -> str | None:
+        """读取被引用消息的发送者 QQ 号。"""
+        sender = getattr(getattr(event, "reply", None), "sender", None)
+        user_id = getattr(sender, "user_id", None)
+        return str(user_id) if user_id is not None else None
+
     async def get_group_info(self, bot, group_id):
         return await self._api(bot, "get_group_info", group_id=int(group_id))
 

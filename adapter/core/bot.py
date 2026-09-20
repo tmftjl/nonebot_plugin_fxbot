@@ -65,6 +65,10 @@ class PlatformAdapter(ABC):
         result = await self.get_message(bot, message_id)
         return result.get("message") if isinstance(result, dict) else None
 
+    def reply_sender_id(self, event: Any) -> str | None:
+        """读取被引用消息的发送者 ID；平台无法提供时返回 None。"""
+        return None
+
     def is_mention_segment(self, segment: Any) -> bool:
         return False
 
@@ -456,6 +460,9 @@ class PlatformBot:
 
     async def get_replied_message(self, message_id: int) -> Any:
         return await self.adapter.get_replied_message(self.raw, message_id)
+
+    def reply_sender_id(self, event: Any) -> str | None:
+        return self.adapter.reply_sender_id(event)
 
     def extract_image_sources(self, message: Any) -> list[str]:
         return self.adapter.extract_image_sources(message)

@@ -65,6 +65,11 @@ class OneBotV12MessageAdapter(PlatformAdapter):
 
         return Message(segments)
 
+    def reply_sender_id(self, event: Any) -> str | None:
+        """读取被引用消息的发送者 ID。"""
+        user_id = getattr(getattr(event, "reply", None), "user_id", None)
+        return str(user_id) if user_id is not None else None
+
     async def send_message_to_target(self, bot: Bot, target: dict[str, Any], message: Any) -> Any:
         if target.get("group_id") is not None:
             return await self._api(

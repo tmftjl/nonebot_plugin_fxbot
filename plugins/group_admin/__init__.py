@@ -240,9 +240,20 @@ async def _set_admin(bot: Bot, group_id: str, user_id: str, *, operator_id: str,
         return ServiceResult(False, f"操作失败: {exc}")
 
 
-async def _recall_message(bot: Bot, group_id: str, message_id: int, *, operator_id: str) -> ServiceResult:
+async def _recall_message(
+    bot: Bot,
+    group_id: str,
+    message_id: int,
+    *,
+    operator_id: str,
+    target_id: str | None = None,
+) -> ServiceResult:
     """撤回消息。"""
-    guard = await _guard(bot, group_id, operator_id, op_name="撤回")
+    if target_id is not None and str(target_id) == str(operator_id):
+        # 撤回自己发的消息不构成越级，只校验 Bot 自身权限
+        guard = await _bot_guard(bot, group_id, op_name="撤回")
+    else:
+        guard = await _guard(bot, group_id, operator_id, target_id=target_id, op_name="撤回")
     if not guard.success:
         return guard
     try:
@@ -787,7 +798,14 @@ async def _handle_recall_msg(matcher: Matcher, bot: Bot, event: Event, session: 
                 f"group={group_id} event={getattr(event, 'id', None)}"
             )
             return
-    result = await _recall_message(bot, group_id, message_id, operator_id=session.user.id)
+        await matcher.finish("请回复目标消息后再使用")
+    result = await _recall_message(
+        bot,
+        group_id,
+        message_id,
+        operator_id=session.user.id,
+        target_id=selfBot.reply_sender_id(event),
+    )
     await matcher.finish(("✅ " if result.success else "❌ ") + result.message)
 
 
