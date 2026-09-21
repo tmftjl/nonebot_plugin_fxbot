@@ -356,19 +356,19 @@ async def _handle_mute(matcher: Matcher, bot: Bot, event: Event, session: Uninfo
         else:
             if target_name:
                 fail_list.append(target_name)
-                fail_reasons.append(f"{target_name}: {result.message}")
+                fail_reasons.append(result.message)
             else:
                 fail_list.append(result.message)
                 fail_reasons.append(result.message)
     lines: list[str] = []
     if success_count:
-        lines.append(f"✅ 已禁言 {success_count} 人，时长: {_format_duration(duration)}")
+        lines.append(f"✅ 已禁言，时长: {_format_duration(duration)}")
         if len(success_list) <= 5:
             lines.append(f"成功: {', '.join(map(str, success_list))}")
     if fail_list:
-        lines.append(f"❌ 失败 {len(fail_list)} 人")
+        lines.append(f"❌ {', '.join(fail_list)}")
         if len(fail_list) <= 5:
-            lines.append("失败: " + "; ".join(fail_reasons))
+            lines.append("；".join(fail_reasons))
     await matcher.finish("\n".join(lines) if lines else "❌ 操作失败")
 
 
@@ -397,6 +397,7 @@ async def _handle_unmute(
     success_list: list[str] = []
     success_count = 0
     fail_list: list[str] = []
+    fail_reasons: list[str] = []
     for target_id in target_ids:
         try:
             target_name = await selfBot.get_group_member_name(group_id, target_id, event)
@@ -409,15 +410,16 @@ async def _handle_unmute(
                 success_list.append(target_name)
         else:
             fail_list.append(target_name or result.message)
+            fail_reasons.append(result.message)
     lines: list[str] = []
     if success_count:
-        lines.append(f"✅ 已解除禁言 {success_count} 人")
+        lines.append("✅ 已解除禁言")
         if len(success_list) <= 5:
             lines.append(f"成功: {', '.join(map(str, success_list))}")
     if fail_list:
-        lines.append(f"❌ 失败 {len(fail_list)} 人")
+        lines.append(f"❌ {', '.join(fail_list)}")
         if len(fail_list) <= 5:
-            lines.append(f"失败: {', '.join(map(str, fail_list))}")
+            lines.append("；".join(fail_reasons))
     await matcher.finish("\n".join(lines) if lines else "❌ 操作失败")
 
 
