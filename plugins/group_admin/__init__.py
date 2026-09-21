@@ -53,6 +53,18 @@ def _plain_text(event: Any) -> str:
     return str(event.get_message()).strip()
 
 
+def _message_text_segments(event: Any) -> str:
+    """提取文本消息段，排除 @ 段中的平台用户 ID。"""
+    try:
+        return "".join(
+            str((getattr(segment, "data", {}) or {}).get("text") or "")
+            for segment in event.get_message()
+            if getattr(segment, "type", "") == "text"
+        ).strip()
+    except Exception:
+        return _plain_text(event)
+
+
 def _extract_target_id(event: Any, fallback: str = "") -> str | None:
     """从消息中提取 @ 目标或 QQ 号。"""
     try:
@@ -337,8 +349,9 @@ async def _handle_mute(matcher: Matcher, bot: Bot, event: Event, session: Uninfo
     target_ids = _extract_target_ids(event, arguments)
     if not target_ids:
         await matcher.finish("请 @ 目标成员或提供 QQ 号")
-    duration_match = re.search(r"\d+\s*(?:秒|s|分|分钟|m|时|小时|h|天|d)", arguments, re.I)
-    bare_seconds_match = re.match(r"\d{1,4}(?=\s)", arguments)
+    duration_text = re.sub(r"^[#＃]禁言\s*", "", _message_text_segments(event))
+    duration_match = re.search(r"\d+\s*(?:秒|s|分|分钟|m|时|小时|h|天|d)", duration_text, re.I)
+    bare_seconds_match = re.match(r"\d{1,4}(?=\s)", duration_text)
     duration = _parse_duration((duration_match or bare_seconds_match).group(0), 600) if (
         duration_match or bare_seconds_match
     ) else 60
