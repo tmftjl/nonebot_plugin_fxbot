@@ -16,6 +16,7 @@ from nonebot.adapters import Bot, Event
 from .config import cfg_waves_analyze
 from ...plugin import Plugin
 from ...adapter import (
+    selfBot,
     build_message,
     fetch_image_bytes,
     build_message_segment,
@@ -111,12 +112,14 @@ async def _handle_waves_analyze(matcher: Matcher, bot: Bot, event: Event, groups
 
     image_sources = await image_sources_from_event_or_reply(bot, event)
     if not image_sources:
+        if await selfBot.get_reply_info(event) is not None:
+            await matcher.finish("无法获取该引用图片，请引用最近20条消息内的图片")
         await matcher.finish("未获取到图片，请发送带图片的消息或回复/引用带图消息")
 
     results = await asyncio.gather(*[asyncio.create_task(fetch_image_bytes(source)) for source in image_sources])
     image_bytes = [item for item in results if item]
     if not image_bytes:
-        await matcher.finish("未能读取到有效的图片数据")
+        await matcher.finish("无法获取该引用图片，请引用时间最近的图片")
 
     images_b64 = await _encode_images_to_b64(image_bytes)
     result_image, tip = await _post_score(images_b64, command_str)

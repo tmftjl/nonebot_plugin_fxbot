@@ -7,6 +7,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 from pathlib import Path
 from contextvars import ContextVar
+from dataclasses import dataclass
 
 from nonebot.log import logger
 from nonebot.exception import IgnoredException
@@ -18,6 +19,14 @@ class PlatformError(IgnoredException):
 
 class UnsupportedCapability(PlatformError):
     """当前平台不具备指定能力。"""
+
+
+@dataclass(slots=True)
+class ReplyInfo:
+    """平台无关的引用消息信息；只含轻量元数据，取图走 reply_image_sources。"""
+
+    message_id: int | str | None = None
+    sender_id: str | None = None
 
 
 class PlatformAdapter(ABC):
@@ -61,13 +70,45 @@ class PlatformAdapter(ABC):
     ) -> bool:
         return await self._unsupported("转发消息")
 
-    async def get_replied_message(self, bot: Any, message_id: int) -> Any:
+    async def get_replied_message(self, bot: Any, message_id: int | str) -> Any:
         result = await self.get_message(bot, message_id)
         return result.get("message") if isinstance(result, dict) else None
 
     def reply_sender_id(self, event: Any) -> str | None:
         """读取被引用消息的发送者 ID；平台无法提供时返回 None。"""
         return None
+
+    def remember_event(self, bot: Any, event: Any, message: Any) -> None:
+        """记录平台允许缓存的消息轻量信息。"""
+
+    def has_reply_reference(self, event: Any) -> bool:
+        """判断事件是否包含引用目标。"""
+        return getattr(event, "reply", None) is not None
+
+    def reply_target(self, event: Any) -> tuple[Any, int | str | None]:
+        """返回引用目标的消息对象与消息 ID，两者都可能为 None。"""
+        reply = getattr(event, "reply", None)
+        message_id = getattr(reply, "message_id", None) or self.extract_reply_message_id(self.event_message(event))
+        return reply, message_id
+
+    async def get_reply_info(self, bot: Any, event: Any) -> ReplyInfo | None:
+        """读取平台无关的引用消息元数据，不发起消息查询。"""
+        _, message_id = self.reply_target(event)
+        if not self.has_reply_reference(event) and message_id is None:
+            return None
+        return ReplyInfo(message_id=message_id, sender_id=self.reply_sender_id(event))
+
+    async def reply_image_sources(self, bot: Any, event: Any) -> list[str | bytes]:
+        """读取被引用消息中的图片源；平台只给得消息 ID 时按需查询。"""
+        reply, message_id = self.reply_target(event)
+        sources = self.extract_raw_image_sources(getattr(reply, "message", None))
+        if sources or message_id is None:
+            return sources
+        try:
+            replied = await self.get_replied_message(bot, message_id)
+        except Exception:
+            return []
+        return self.extract_raw_image_sources(replied)
 
     def is_mention_segment(self, segment: Any) -> bool:
         return False
@@ -97,7 +138,7 @@ class PlatformAdapter(ABC):
     ) -> Any:
         return await self._unsupported("撤回消息")
 
-    async def get_message(self, bot: Any, message_id: int) -> Any:
+    async def get_message(self, bot: Any, message_id: int | str) -> Any:
         return await self._unsupported("获取消息")
 
     async def get_group_info(self, bot: Any, group_id: str) -> Any:
@@ -458,16 +499,19 @@ class PlatformBot:
     async def send_forward_messages(self, event: Any, messages: list[Any], *, nickname: str = "FxBot") -> bool:
         return await self.adapter.send_forward_messages(self.raw, event, messages, nickname=nickname)
 
-    async def get_replied_message(self, message_id: int) -> Any:
+    async def get_replied_message(self, message_id: int | str) -> Any:
         return await self.adapter.get_replied_message(self.raw, message_id)
 
-    def reply_sender_id(self, event: Any) -> str | None:
-        return self.adapter.reply_sender_id(event)
+    async def get_reply_info(self, event: Any) -> ReplyInfo | None:
+        return await self.adapter.get_reply_info(self.raw, event)
+
+    async def reply_image_sources(self, event: Any) -> list[str | bytes]:
+        return await self.adapter.reply_image_sources(self.raw, event)
 
     def extract_image_sources(self, message: Any) -> list[str]:
         return self.adapter.extract_image_sources(message)
 
-    def extract_reply_message_id(self, message: Any) -> int | None:
+    def extract_reply_message_id(self, message: Any) -> int | str | None:
         return self.adapter.extract_reply_message_id(message)
 
     async def delete_message(
@@ -479,7 +523,7 @@ class PlatformBot:
     ):
         return await self.adapter.delete_message(self.raw, message_id, group_id=group_id, user_id=user_id)
 
-    async def get_message(self, message_id: int):
+    async def get_message(self, message_id: int | str):
         return await self.adapter.get_message(self.raw, message_id)
 
     async def get_group_info(self, group_id: str):

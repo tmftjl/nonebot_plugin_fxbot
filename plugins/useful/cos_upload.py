@@ -3,20 +3,15 @@
 from __future__ import annotations
 
 import hashlib
-from typing import Any
 from pathlib import Path
 from datetime import datetime
 
 from nonebot import logger
 from nonebot.matcher import Matcher
-from nonebot.adapters import Bot, Event
+from nonebot.adapters import Event
 
 from ...plugin import Plugin
-from ...adapter import (
-    get_replied_message,
-    extract_image_sources,
-    extract_reply_message_id,
-)
+from ...adapter import selfBot, event_message
 from ...utils.tz import SHANGHAI_TZ, today_str
 from ...permission import PermLevel, PermScene
 from ...utils.http import get_shared_async_client
@@ -32,16 +27,6 @@ P = Plugin(
     level=PermLevel.LOW,
     scene=PermScene.ALL,
 )
-
-
-def _message(event: Event) -> Any:
-    """提取事件消息。"""
-    if hasattr(event, "get_message"):
-        try:
-            return event.get_message()
-        except Exception:
-            return getattr(event, "message", None)
-    return getattr(event, "message", None)
 
 
 def _image_filename(url: str) -> str:
@@ -90,21 +75,14 @@ cos_list_cmd = P.on_regex(
 
 
 @cos_upload_cmd.handle()
-async def _handle_cos_upload(matcher: Matcher, bot: Bot, event: Event) -> None:
+async def _handle_cos_upload(matcher: Matcher, event: Event) -> None:
     """上传消息或回复中的 COS 图片。"""
-    message = _message(event)
-    image_urls: list[str] = []
-
-    reply_id = extract_reply_message_id(message)
-    if reply_id is not None:
-        try:
-            replied = await get_replied_message(bot, reply_id)
-            image_urls.extend(extract_image_sources(replied))
-        except Exception as exc:
-            logger.warning(f"[cos_upload] 获取回复消息失败: {exc}")
-
-    image_urls.extend(extract_image_sources(message))
-    image_urls = list(dict.fromkeys(image_urls))
+    sources: list[str | bytes] = selfBot.extract_image_sources(event_message(event))
+    sources += await selfBot.reply_image_sources(event)
+    # 该命令走 HTTP 下载并按 URL 命名，跳过 base64 内联图
+    image_urls = [
+        source for source in dict.fromkeys(sources) if isinstance(source, str) and not source.startswith("base64://")
+    ]
     if not image_urls:
         await matcher.finish("❌ 未找到图片\n请发送带图消息或回复包含图片的消息")
 

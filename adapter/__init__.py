@@ -26,6 +26,7 @@ from .uninfo import (
     get_session_persist_id,
 )
 from .core.bot import (
+    ReplyInfo,
     PlatformBot,
     PlatformError,
     PlatformAdapter,
@@ -176,16 +177,7 @@ async def image_sources_from_event_or_reply(bot, event):
     sources = extract_raw_image_sources(event_message(event))
     if sources:
         return sources
-    reply = getattr(event, "reply", None)
-    if reply and (sources := extract_raw_image_sources(getattr(reply, "message", None))):
-        return sources
-    reply_id = extract_reply_message_id(event_message(event))
-    if reply_id is None:
-        return []
-    try:
-        return extract_raw_image_sources(await get_replied_message(bot, reply_id))
-    except Exception:
-        return []
+    return await get_platform_adapter(bot).reply_image_sources(bot, event)
 
 
 async def send_ark_message(bot, event, ark_data):
@@ -231,6 +223,7 @@ __all__ = [
     "send_ark_message",
     "send_text_to_target",
     "PlatformAdapter",
+    "ReplyInfo",
     "PlatformError",
     "UnsupportedCapability",
     "get_platform_adapter",

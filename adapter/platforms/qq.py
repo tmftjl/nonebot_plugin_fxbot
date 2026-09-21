@@ -13,7 +13,8 @@ from nonebot.adapters.qq import Bot as QQBot, Message, MessageSegment
 from nonebot.adapters.qq.event import GroupMemberAddEvent
 from nonebot.adapters.qq.models import SetMemberMuteState
 
-from ..core.bot import PlatformAdapter, UnsupportedCapability, _image_bytes
+from ..recent import remember_event, recent_message_ids, recent_image_sources
+from ..core.bot import ReplyInfo, PlatformAdapter, UnsupportedCapability, _image_bytes
 
 
 class QQOfficialMessageAdapter(PlatformAdapter):
@@ -88,6 +89,38 @@ class QQOfficialMessageAdapter(PlatformAdapter):
             if value := getattr(author, field, None):
                 return str(value)
         return None
+
+    def remember_event(self, bot: Any, event: Any, message: Any) -> None:
+        remember_event(bot, event, message)
+
+    def has_reply_reference(self, event: Any) -> bool:
+        if super().has_reply_reference(event):
+            return True
+        scene = getattr(event, "message_scene", None)
+        return any(
+            isinstance(value, str) and value.startswith("ref_msg_idx=") for value in (getattr(scene, "ext", None) or [])
+        )
+
+    async def get_reply_info(self, bot: Any, event: Any) -> ReplyInfo | None:
+        if not self.has_reply_reference(event):
+            return None
+        reply = getattr(event, "reply", None)
+        cached_ids = recent_message_ids(bot, event)
+        return ReplyInfo(
+            message_id=getattr(reply, "message_id", None) or (cached_ids[0] if cached_ids else None),
+            sender_id=self.reply_sender_id(event),
+        )
+
+    async def reply_image_sources(self, bot: Any, event: Any) -> list[str]:
+        if not self.has_reply_reference(event):
+            return []
+        reply = getattr(event, "reply", None)
+        sources = [
+            attachment.url
+            for attachment in (getattr(reply, "attachments", None) or [])
+            if getattr(attachment, "url", None) and str(getattr(attachment, "content_type", "")).startswith("image/")
+        ]
+        return sources or recent_image_sources(bot, event)
 
     async def send_message_to_target(self, bot: Bot, target: dict[str, Any], message: Any) -> Any:
         if target.get("group_openid") is not None:

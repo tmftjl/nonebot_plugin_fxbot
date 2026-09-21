@@ -243,7 +243,7 @@ async def _set_admin(bot: Bot, group_id: str, user_id: str, *, operator_id: str,
 async def _recall_message(
     bot: Bot,
     group_id: str,
-    message_id: int,
+    message_id: int | str,
     *,
     operator_id: str,
     target_id: str | None = None,
@@ -263,7 +263,9 @@ async def _recall_message(
         return ServiceResult(False, f"操作失败: {exc}")
 
 
-async def _set_essence(bot: Bot, group_id: str, message_id: int, *, operator_id: str, enable: bool) -> ServiceResult:
+async def _set_essence(
+    bot: Bot, group_id: str, message_id: int | str, *, operator_id: str, enable: bool
+) -> ServiceResult:
     """设置或取消精华消息。"""
     guard = await _guard(bot, group_id, operator_id, op_name="设置精华")
     if not guard.success:
@@ -691,16 +693,6 @@ async def _handle_remove_title(matcher: Matcher, bot: Bot, event: Event, session
     await matcher.finish(("✅ " if result.success else "❌ ") + result.message)
 
 
-def _reply_message_id(event: Event) -> int | None:
-    """从回复消息中提取 message_id。"""
-    reply = getattr(event, "reply", None)
-    message_id = getattr(reply, "message_id", None) if reply is not None else None
-    try:
-        return int(message_id) if message_id is not None else None
-    except Exception:
-        return None
-
-
 set_admin_cmd = P.on_regex(
     r"^[#＃]设置管理\s*(.+)",
     name="set_admin",
@@ -790,21 +782,20 @@ async def _handle_recall_msg(matcher: Matcher, bot: Bot, event: Event, session: 
     group_id = session.scene.id if session.scene.is_group else None
     if not group_id:
         await matcher.finish("请在群聊中使用")
-    message_id = _reply_message_id(event)
-    if message_id is None:
-        if getattr(event, "reply", None) is not None:
-            logger.info(
-                f"[group_admin] 引用消息未提供 message_id，跳过撤回: "
-                f"group={group_id} event={getattr(event, 'id', None)}"
-            )
-            return
+    reply = await selfBot.get_reply_info(event)
+    if reply is None:
         await matcher.finish("请回复目标消息后再使用")
+    if reply.message_id is None:
+        logger.info(
+            f"[group_admin] 引用消息未提供 message_id，跳过撤回: group={group_id} event={getattr(event, 'id', None)}"
+        )
+        await matcher.finish("无法获取该引用消息，请引用最近20条消息内的目标")
     result = await _recall_message(
         bot,
         group_id,
-        message_id,
+        reply.message_id,
         operator_id=session.user.id,
-        target_id=selfBot.reply_sender_id(event),
+        target_id=reply.sender_id,
     )
     await matcher.finish(("✅ " if result.success else "❌ ") + result.message)
 
@@ -815,11 +806,11 @@ async def _handle_set_essence(matcher: Matcher, bot: Bot, event: Event, session:
     group_id = session.scene.id if session.scene.is_group else None
     if not group_id:
         await matcher.finish("请在群聊中使用")
-    message_id = _reply_message_id(event)
-    if message_id is None:
+    reply = await selfBot.get_reply_info(event)
+    if reply is None or reply.message_id is None:
         await matcher.finish("请回复目标消息后再使用")
     try:
-        result = await _set_essence(bot, group_id, message_id, operator_id=session.user.id, enable=True)
+        result = await _set_essence(bot, group_id, reply.message_id, operator_id=session.user.id, enable=True)
     except UnsupportedCapability:
         await matcher.finish()
     await matcher.finish(("✅ " if result.success else "❌ ") + result.message)
@@ -831,11 +822,11 @@ async def _handle_unset_essence(matcher: Matcher, bot: Bot, event: Event, sessio
     group_id = session.scene.id if session.scene.is_group else None
     if not group_id:
         await matcher.finish("请在群聊中使用")
-    message_id = _reply_message_id(event)
-    if message_id is None:
+    reply = await selfBot.get_reply_info(event)
+    if reply is None or reply.message_id is None:
         await matcher.finish("请回复目标消息后再使用")
     try:
-        result = await _set_essence(bot, group_id, message_id, operator_id=session.user.id, enable=False)
+        result = await _set_essence(bot, group_id, reply.message_id, operator_id=session.user.id, enable=False)
     except UnsupportedCapability:
         await matcher.finish()
     await matcher.finish(("✅ " if result.success else "❌ ") + result.message)

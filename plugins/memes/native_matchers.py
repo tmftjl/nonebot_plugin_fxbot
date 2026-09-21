@@ -46,7 +46,7 @@ from .recorder import (
     get_meme_generation_times,
     get_meme_generation_records,
 )
-from ...adapter import Uninfo, QryItrface, selfBot
+from ...adapter import Uninfo, QryItrface, selfBot, fetch_image_bytes
 from .exception import MemeGeneratorException
 from .protection import protection_manager
 from ...permission import PermLevel, PermScene
@@ -274,26 +274,13 @@ async def extract_inputs(
 
     reply_has_image = False
     try:
-        reply = getattr(event, "reply", None)
-        if reply:
-            reply_msg = getattr(reply, "message", None)
-            if isinstance(reply_msg, dict) and "image" in reply_msg:
-                for img_seg in reply_msg.get("image") or []:
-                    data = await _download_image_from_segment(img_seg)
-                    if data:
-                        images.append(data)
-                        image_user_ids.append(None)  # 回复中的图片没有对应用户ID
-                        image_from_mentions.append(False)
-                        reply_has_image = True
-            elif isinstance(reply_msg, Message):
-                for seg in reply_msg:
-                    if getattr(seg, "type", None) == "image":
-                        data = await _download_image_from_segment(seg)
-                        if data:
-                            images.append(data)
-                            image_user_ids.append(None)  # 回复中的图片没有对应用户ID
-                            image_from_mentions.append(False)
-                            reply_has_image = True
+        for source in await selfBot.reply_image_sources(event):
+            data = await fetch_image_bytes(source)
+            if data:
+                images.append(data)
+                image_user_ids.append(None)  # 回复中的图片没有对应用户ID
+                image_from_mentions.append(False)
+                reply_has_image = True
     except Exception:
         pass
 
