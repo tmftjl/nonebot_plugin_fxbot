@@ -797,7 +797,15 @@ async def _handle_recall_msg(matcher: Matcher, bot: Bot, event: Event, session: 
         operator_id=session.user.id,
         target_id=reply.sender_id,
     )
-    await matcher.finish(("✅ " if result.success else "❌ ") + result.message)
+    if not result.success:
+        await matcher.finish("❌ " + result.message)
+    command_message_id = getattr(event, "id", None) or getattr(event, "message_id", None)
+    if command_message_id is not None:
+        try:
+            await selfBot.delete_message(command_message_id, group_id=group_id)
+        except Exception:
+            logger.opt(exception=True).warning("[group_admin] 撤回命令消息失败")
+    await matcher.finish()
 
 
 @set_essence_cmd.handle()
