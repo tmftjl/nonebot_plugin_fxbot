@@ -317,7 +317,7 @@ async def _set_title(
 
 
 mute_cmd = P.on_regex(
-    r"^[#＃]禁言\s*(\d+)?\s*(.+)?",
+    r"^[#＃]禁言\s*(.*)",
     name="mute_member",
     display_name="禁言",
     priority=5,
@@ -333,12 +333,15 @@ async def _handle_mute(matcher: Matcher, bot: Bot, event: Event, session: Uninfo
     group_id = session.scene.id if session.scene.is_group else None
     if not group_id:
         await matcher.finish("请在群聊中使用")
-    qq_text = str(groups[0] or "").strip() if groups else ""
-    time_text = str(groups[1] or "").strip() if groups and len(groups) > 1 else ""
-    target_ids = _extract_target_ids(event, qq_text)
+    arguments = str(groups[0] or "").strip() if groups else ""
+    target_ids = _extract_target_ids(event, arguments)
     if not target_ids:
         await matcher.finish("请 @ 目标成员或提供 QQ 号")
-    duration = _parse_duration(time_text or "10分", 600)
+    duration_match = re.search(r"\d+\s*(?:秒|s|分|分钟|m|时|小时|h|天|d)", arguments, re.I)
+    bare_seconds_match = re.match(r"\d{1,4}(?=\s)", arguments)
+    duration = _parse_duration((duration_match or bare_seconds_match).group(0), 600) if (
+        duration_match or bare_seconds_match
+    ) else 60
     success_list: list[str] = []
     success_count = 0
     fail_list: list[str] = []
