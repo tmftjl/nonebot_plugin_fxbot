@@ -274,7 +274,8 @@ async def extract_inputs(
 
     reply_has_image = False
     try:
-        for source in await selfBot.reply_image_sources(event):
+        reply = await selfBot.get_reply_info(event)
+        for source in reply.image_sources if reply is not None else []:
             data = await fetch_image_bytes(source)
             if data:
                 images.append(data)

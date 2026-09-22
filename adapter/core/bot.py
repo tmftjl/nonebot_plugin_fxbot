@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 from pathlib import Path
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import field, dataclass
 
 from nonebot.log import logger
 from nonebot.exception import IgnoredException
@@ -23,10 +23,11 @@ class UnsupportedCapability(PlatformError):
 
 @dataclass(slots=True)
 class ReplyInfo:
-    """平台无关的引用消息信息；只含轻量元数据，取图走 reply_image_sources。"""
+    """平台无关的引用消息信息。"""
 
     message_id: int | str | None = None
     sender_id: str | None = None
+    image_sources: list[str | bytes] = field(default_factory=list)
 
 
 class PlatformAdapter(ABC):
@@ -92,23 +93,18 @@ class PlatformAdapter(ABC):
         return reply, message_id
 
     async def get_reply_info(self, bot: Any, event: Any) -> ReplyInfo | None:
-        """读取平台无关的引用消息元数据，不发起消息查询。"""
-        _, message_id = self.reply_target(event)
+        """读取平台无关的引用消息信息。"""
+        reply, message_id = self.reply_target(event)
         if not self.has_reply_reference(event) and message_id is None:
             return None
-        return ReplyInfo(message_id=message_id, sender_id=self.reply_sender_id(event))
-
-    async def reply_image_sources(self, bot: Any, event: Any) -> list[str | bytes]:
-        """读取被引用消息中的图片源；平台只给得消息 ID 时按需查询。"""
-        reply, message_id = self.reply_target(event)
         sources = self.extract_raw_image_sources(getattr(reply, "message", None))
-        if sources or message_id is None:
-            return sources
-        try:
-            replied = await self.get_replied_message(bot, message_id)
-        except Exception:
-            return []
-        return self.extract_raw_image_sources(replied)
+        if not sources and message_id is not None:
+            try:
+                replied = await self.get_replied_message(bot, message_id)
+                sources = self.extract_raw_image_sources(replied)
+            except Exception:
+                pass
+        return ReplyInfo(message_id=message_id, sender_id=self.reply_sender_id(event), image_sources=sources)
 
     def is_mention_segment(self, segment: Any) -> bool:
         return False
@@ -504,9 +500,6 @@ class PlatformBot:
 
     async def get_reply_info(self, event: Any) -> ReplyInfo | None:
         return await self.adapter.get_reply_info(self.raw, event)
-
-    async def reply_image_sources(self, event: Any) -> list[str | bytes]:
-        return await self.adapter.reply_image_sources(self.raw, event)
 
     def extract_image_sources(self, message: Any) -> list[str]:
         return self.adapter.extract_image_sources(message)

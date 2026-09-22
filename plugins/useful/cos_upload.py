@@ -78,7 +78,8 @@ cos_list_cmd = P.on_regex(
 async def _handle_cos_upload(matcher: Matcher, event: Event) -> None:
     """上传消息或回复中的 COS 图片。"""
     sources: list[str | bytes] = selfBot.extract_image_sources(event_message(event))
-    sources += await selfBot.reply_image_sources(event)
+    reply = await selfBot.get_reply_info(event)
+    sources += reply.image_sources if reply is not None else []
     # 该命令走 HTTP 下载并按 URL 命名，跳过 base64 内联图
     image_urls = [
         source for source in dict.fromkeys(sources) if isinstance(source, str) and not source.startswith("base64://")

@@ -13,7 +13,7 @@ from nonebot.adapters.qq import Bot as QQBot, Message, MessageSegment
 from nonebot.adapters.qq.event import GroupMemberAddEvent
 from nonebot.adapters.qq.models import SetMemberMuteState
 
-from ..recent import remember_event, recent_message_ids, recent_image_sources
+from ..recent import recent_reply, remember_event
 from ..core.bot import ReplyInfo, PlatformAdapter, UnsupportedCapability, _image_bytes
 
 
@@ -105,22 +105,19 @@ class QQOfficialMessageAdapter(PlatformAdapter):
         if not self.has_reply_reference(event):
             return None
         reply = getattr(event, "reply", None)
-        cached_ids = recent_message_ids(bot, event)
-        return ReplyInfo(
-            message_id=getattr(reply, "message_id", None) or (cached_ids[0] if cached_ids else None),
-            sender_id=self.reply_sender_id(event),
-        )
-
-    async def reply_image_sources(self, bot: Any, event: Any) -> list[str]:
-        if not self.has_reply_reference(event):
-            return []
-        reply = getattr(event, "reply", None)
+        cached = recent_reply(bot, event)
         sources = [
             attachment.url
             for attachment in (getattr(reply, "attachments", None) or [])
             if getattr(attachment, "url", None) and str(getattr(attachment, "content_type", "")).startswith("image/")
         ]
-        return sources or recent_image_sources(bot, event)
+        if not sources and cached:
+            sources = list(cached.get("images", ()))
+        return ReplyInfo(
+            message_id=getattr(reply, "message_id", None) or (cached.get("id") if cached else None),
+            sender_id=self.reply_sender_id(event) or (cached.get("sender_id") if cached else None),
+            image_sources=sources,
+        )
 
     async def send_message_to_target(self, bot: Bot, target: dict[str, Any], message: Any) -> Any:
         if target.get("group_openid") is not None:

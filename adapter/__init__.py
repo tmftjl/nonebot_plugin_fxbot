@@ -177,7 +177,8 @@ async def image_sources_from_event_or_reply(bot, event):
     sources = extract_raw_image_sources(event_message(event))
     if sources:
         return sources
-    return await get_platform_adapter(bot).reply_image_sources(bot, event)
+    reply = await get_platform_adapter(bot).get_reply_info(bot, event)
+    return reply.image_sources if reply is not None else []
 
 
 async def send_ark_message(bot, event, ark_data):

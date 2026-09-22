@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 from collections import deque, defaultdict
 
-_RECENT_LIMIT = 20
+_RECENT_LIMIT = 21  # 当前事件会先入队，额外一位确保此前 20 条仍可引用
 _recent: dict[str, deque[dict[str, Any]]] = defaultdict(lambda: deque(maxlen=_RECENT_LIMIT))
 
 
@@ -37,8 +37,12 @@ def _ext_value(event: Any, name: str) -> str:
     return ""
 
 
-def _message_idx(event: Any) -> str:
-    return _value(event, "msg_idx") or _ext_value(event, "msg_idx")
+def _message_indices(event: Any) -> list[str]:
+    """提取当前消息的全部可引用索引，不混入被引用消息索引。"""
+    values = [_ext_value(event, "msg_idx"), _value(event, "msg_idx")]
+    if not _ext_value(event, "ref_msg_idx"):
+        values.extend(_value(element, "msg_idx") for element in (getattr(event, "msg_elements", None) or []))
+    return list(dict.fromkeys(value for value in values if value))
 
 
 def _reply_idx(event: Any) -> str:
@@ -57,32 +61,42 @@ def _images(message: Any) -> list[str]:
     return result
 
 
+def _event_images(event: Any) -> list[str]:
+    return [
+        str(attachment.url)
+        for attachment in (getattr(event, "attachments", None) or [])
+        if getattr(attachment, "url", None) and str(getattr(attachment, "content_type", "")).startswith("image/")
+    ]
+
+
+def _sender_id(event: Any) -> str:
+    author = getattr(event, "author", None)
+    return _value(author, "id", "user_openid", "member_openid")
+
+
 def remember_event(bot: Any, event: Any, message: Any) -> None:
     """记录消息 ID、图片 URL和少量元数据。"""
     key = _key(bot, event)
     message_id = _value(event, "id", "message_id")
-    msg_idx = _message_idx(event)
-    if not key or not message_id or not msg_idx:
+    msg_indices = _message_indices(event)
+    if not key or not message_id or not msg_indices:
         return
-    _recent[key].append({"id": message_id, "msg_idx": msg_idx, "images": _images(message)})
+    images = list(dict.fromkeys([*_images(message), *_event_images(event)]))
+    item = {"id": message_id, "msg_indices": msg_indices, "sender_id": _sender_id(event), "images": images}
+    existing = next((stored for stored in _recent[key] if stored.get("id") == message_id), None)
+    if existing is not None:
+        existing.update(item)
+    else:
+        _recent[key].append(item)
 
 
-def recent_message_ids(bot: Any, event: Any) -> list[str]:
-    """按引用索引返回当前会话缓存的原消息 ID。"""
+def recent_reply(bot: Any, event: Any) -> dict[str, Any] | None:
+    """按引用索引精确返回当前会话缓存的原消息。"""
     key = _key(bot, event)
     reply_idx = _reply_idx(event)
     if not key or not reply_idx:
-        return []
-    return [item["id"] for item in reversed(_recent.get(key, ())) if item.get("msg_idx") == reply_idx]
-
-
-def recent_image_sources(bot: Any, event: Any) -> list[str]:
-    """按引用索引返回当前会话缓存的原消息图片 URL。"""
-    key = _key(bot, event)
-    reply_idx = _reply_idx(event)
-    if not key or not reply_idx:
-        return []
-    for item in reversed(_recent.get(key, ())):
-        if item.get("msg_idx") == reply_idx:
-            return list(item["images"])
-    return []
+        return None
+    return next(
+        (item for item in reversed(_recent.get(key, ())) if reply_idx in item.get("msg_indices", ())),
+        None,
+    )
