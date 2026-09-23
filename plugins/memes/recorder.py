@@ -8,7 +8,6 @@ from sqlalchemy import ColumnElement
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db import with_session
-from .utils import remove_timezone
 from .models import MemeGenerationRecord
 from ...adapter import (
     Session,
@@ -43,7 +42,7 @@ class _MemeRecordStore:
         db_session.add(
             MemeGenerationRecord(
                 session_persist_id=session_persist_id,
-                time=remove_timezone(datetime.now(timezone.utc)),
+                time=datetime.now(timezone.utc),
                 meme_key=meme_key,
             )
         )
@@ -98,9 +97,9 @@ def filter_statement(
     if meme_key:
         whereclause.append(MemeGenerationRecord.meme_key == meme_key)
     if time_start:
-        whereclause.append(MemeGenerationRecord.time >= remove_timezone(time_start))
+        whereclause.append(MemeGenerationRecord.time >= time_start)
     if time_stop:
-        whereclause.append(MemeGenerationRecord.time <= remove_timezone(time_stop))
+        whereclause.append(MemeGenerationRecord.time <= time_stop)
     return whereclause
 
 

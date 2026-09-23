@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from sqlmodel import Field, SQLModel, NaiveDatetime
+from datetime import datetime
+
+from sqlmodel import Field, SQLModel
 
 
 class MemeGenerationRecord(SQLModel, table=True):
@@ -12,6 +14,5 @@ class MemeGenerationRecord(SQLModel, table=True):
 
     id: int | None = Field(default=None, primary_key=True)
     session_persist_id: int = Field(nullable=False)
-    # 记录器将 UTC 时间转换为无时区值后存储，显式声明以匹配该存储语义。
-    time: NaiveDatetime = Field(nullable=False)
+    time: datetime = Field(nullable=False)
     meme_key: str = Field(max_length=64, nullable=False)
