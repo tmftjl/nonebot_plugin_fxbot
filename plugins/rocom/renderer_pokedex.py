@@ -18,7 +18,8 @@ POKEDEX_DIR = RESOURCE_DIR / "pokedex"
 FONT_DIR = RESOURCE_DIR / "fonts"
 PET_ICON_DIR = RUNTIME_RESOURCE_DIR / "rocomicon"
 SKILL_ICON_DIR = RUNTIME_RESOURCE_DIR / "skillicon"
-CHARACTER_ICON_DIR = RUNTIME_RESOURCE_DIR / "characteristicicon"
+# 上游 RocomUID 已将特性图标合并到 skillicon 目录。
+CHARACTER_ICON_DIR = SKILL_ICON_DIR
 
 RC_28 = load_font(FONT_DIR / "rocom_origin.ttf", 28)
 RC_30 = load_font(FONT_DIR / "rocom_origin.ttf", 30)

@@ -32,7 +32,6 @@ DEFAULT_URLS = [
 ENDPOINTS = {
     "resource/rocomicon": RESOURCE_DIR / "rocomicon",
     "resource/skillicon": RESOURCE_DIR / "skillicon",
-    "resource/characteristicicon": RESOURCE_DIR / "characteristicicon",
     "resource/headicon": RESOURCE_DIR / "headicon",
 }
 
