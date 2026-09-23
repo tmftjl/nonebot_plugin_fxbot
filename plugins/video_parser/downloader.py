@@ -191,19 +191,25 @@ async def _merge_av(video_path: Path, audio_path: Path, output_path: Path) -> Pa
     """使用 ffmpeg 合并音视频。"""
     if output_path.exists() and output_path.stat().st_size > 0:
         return output_path
-    process = await asyncio.create_subprocess_exec(
-        "ffmpeg",
-        "-y",
-        "-i",
-        str(video_path),
-        "-i",
-        str(audio_path),
-        "-c",
-        "copy",
-        str(output_path),
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL,
-    )
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise DownloadError("服务器未安装 FFmpeg，暂时无法处理该视频")
+    try:
+        process = await asyncio.create_subprocess_exec(
+            ffmpeg,
+            "-y",
+            "-i",
+            str(video_path),
+            "-i",
+            str(audio_path),
+            "-c",
+            "copy",
+            str(output_path),
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+    except FileNotFoundError as exc:
+        raise DownloadError("服务器未安装 FFmpeg，暂时无法处理该视频") from exc
     code = await process.wait()
     if code != 0 or not output_path.exists() or output_path.stat().st_size == 0:
         raise DownloadError("ffmpeg 合并音视频失败")
