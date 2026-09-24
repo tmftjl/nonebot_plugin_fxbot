@@ -43,7 +43,10 @@ def mount_console() -> None:
         @router.get("")
         async def index() -> FileResponse:
             """返回控制台首页。"""
-            return FileResponse(index_file, media_type="text/html")
+            # 外壳引用的产物名带内容哈希，外壳一旦被缓存住就会一直加载旧包。
+            response = FileResponse(index_file, media_type="text/html")
+            response.headers["Cache-Control"] = "no-cache"
+            return response
     else:
         logger.warning("[FxBot] 控制台前端 dist 不存在，仅挂载 API，不执行前端构建")
 
