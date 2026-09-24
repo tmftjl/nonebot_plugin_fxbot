@@ -157,7 +157,7 @@ const loadData = async () => {
     const [data, codesData, config, botsData] = await Promise.all([
       dataApi.getAll(),
       renewalApi.getCodes().catch(() => ({ generatedCodes: [] })),
-      configApi.getAll().catch(() => ({})),
+      configApi.getAll().catch(() => null),
       metaApi.getBots().catch(() => ({ bots: [] }))
     ])
 

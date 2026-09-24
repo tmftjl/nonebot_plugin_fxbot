@@ -3,7 +3,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { statsApi } from '@/api'
-import type { StatsToday, BotStats } from '@/types/api'
+import type { StatsToday } from '@/types/api'
 
 const loading = ref(false)
 const stats = ref<StatsToday>({ bots: {} })

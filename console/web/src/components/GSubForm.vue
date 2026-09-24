@@ -90,7 +90,8 @@ const getFormValue = (field: string) => {
   return formData.value[field]
 }
 
-const setFormValue = (field: string, value: any) => {
+const setFormValue = (field: string | undefined, value: unknown) => {
+  if (!field) return
   formData.value[field] = value
 }
 </script>
@@ -141,7 +142,7 @@ const setFormValue = (field: string, value: any) => {
               :model-value="getFormValue(schema.field)"
               :placeholder="schema.componentProps?.placeholder"
               clearable
-              @update:model-value="(v) => setFormValue(schema.field, v)"
+              @update:model-value="(v: string) => setFormValue(schema.field, v)"
             />
             <div v-if="schema.bottomHelpMessage" class="help-text">{{ schema.bottomHelpMessage }}</div>
           </el-form-item>
@@ -157,7 +158,7 @@ const setFormValue = (field: string, value: any) => {
               type="password"
               show-password
               clearable
-              @update:model-value="(v) => setFormValue(schema.field, v)"
+              @update:model-value="(v: string) => setFormValue(schema.field, v)"
             />
             <div v-if="schema.bottomHelpMessage" class="help-text">{{ schema.bottomHelpMessage }}</div>
           </el-form-item>
@@ -172,7 +173,7 @@ const setFormValue = (field: string, value: any) => {
               :min="schema.componentProps?.min"
               :max="schema.componentProps?.max"
               :step="schema.componentProps?.step"
-              @update:model-value="(v) => setFormValue(schema.field, v)"
+              @update:model-value="(v: number | undefined) => setFormValue(schema.field, v)"
             />
             <div v-if="schema.bottomHelpMessage" class="help-text">{{ schema.bottomHelpMessage }}</div>
           </el-form-item>
@@ -184,7 +185,7 @@ const setFormValue = (field: string, value: any) => {
           >
             <el-switch
               :model-value="getFormValue(schema.field)"
-              @update:model-value="(v) => setFormValue(schema.field, v)"
+              @update:model-value="(v: boolean) => setFormValue(schema.field, v)"
             />
             <div v-if="schema.bottomHelpMessage" class="help-text">{{ schema.bottomHelpMessage }}</div>
           </el-form-item>
@@ -199,7 +200,7 @@ const setFormValue = (field: string, value: any) => {
               :placeholder="schema.componentProps?.placeholder || '请选择'"
               clearable
               style="width: 100%"
-              @update:model-value="(v) => setFormValue(schema.field, v)"
+              @update:model-value="(v: unknown) => setFormValue(schema.field, v)"
             >
               <el-option
                 v-for="opt in schema.componentProps?.options || []"

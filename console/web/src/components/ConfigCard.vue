@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, type ComponentPublicInstance } from 'vue'
 import { QuestionFilled } from '@element-plus/icons-vue'
 import type { SchemaItem, ConfigCard } from '@/types/schema'
 import GSubForm from './GSubForm.vue'
@@ -88,7 +88,8 @@ const getTooltipContent = (schema: SchemaItem) => {
 const arrayInputs = ref<Record<string, string>>({})
 const arrayInputEls = ref<Record<string, any>>({})
 
-const setArrayInputEl = (field: string, el: any) => {
+const setArrayInputEl = (field: string | undefined, el: Element | ComponentPublicInstance | null) => {
+  if (!field) return
   arrayInputEls.value[field] = el
 }
 
@@ -111,12 +112,13 @@ const handleArrayInputConfirm = (field: string | undefined, currentTags: unknown
   arrayInputs.value[field] = ''
 }
 
-const removeArrayItem = (field: string | undefined, currentTags: unknown, index: number) => {
+const removeArrayItem = (field: string | undefined, currentTags: unknown, index: number | string) => {
   if (!field) return
   const tags = normalizeStringArray(currentTags)
-  if (index < 0 || index >= tags.length) return
+  const numericIndex = Number(index)
+  if (numericIndex < 0 || numericIndex >= tags.length) return
   const next = tags.slice()
-  next.splice(index, 1)
+  next.splice(numericIndex, 1)
   setValue(field, next)
 }
 
@@ -174,7 +176,7 @@ const handleArrayInputBackspace = (field: string | undefined, currentTags: unkno
                   <div v-if="schema.component === 'Switch'" class="control-wrapper">
                     <el-switch
                       :model-value="getValue(schema.field)"
-                      @update:model-value="(v) => setValue(schema.field, v)"
+                      @update:model-value="(v: boolean) => setValue(schema.field, v)"
                     />
                   </div>
 
@@ -184,7 +186,7 @@ const handleArrayInputBackspace = (field: string | undefined, currentTags: unkno
                       :model-value="getValue(schema.field)"
                       :placeholder="schema.componentProps?.placeholder"
                       clearable
-                      @update:model-value="(v) => setValue(schema.field, v)"
+                      @update:model-value="(v: string) => setValue(schema.field, v)"
                     />
                   </div>
 
@@ -196,7 +198,7 @@ const handleArrayInputBackspace = (field: string | undefined, currentTags: unkno
                       type="password"
                       show-password
                       clearable
-                      @update:model-value="(v) => setValue(schema.field, v)"
+                      @update:model-value="(v: string) => setValue(schema.field, v)"
                     />
                   </div>
 
@@ -209,7 +211,7 @@ const handleArrayInputBackspace = (field: string | undefined, currentTags: unkno
                       :step="schema.componentProps?.step"
                       controls-position="right"
                       style="width: 100%"
-                      @update:model-value="(v) => setValue(schema.field, v)"
+                      @update:model-value="(v: number | undefined) => setValue(schema.field, v)"
                     />
                   </div>
 
@@ -220,7 +222,7 @@ const handleArrayInputBackspace = (field: string | undefined, currentTags: unkno
                       :placeholder="schema.componentProps?.placeholder"
                       type="textarea"
                       :rows="schema.componentProps?.rows || 3"
-                      @update:model-value="(v) => setValue(schema.field, v)"
+                      @update:model-value="(v: string) => setValue(schema.field, v)"
                     />
                   </div>
 
@@ -233,7 +235,7 @@ const handleArrayInputBackspace = (field: string | undefined, currentTags: unkno
                       :filterable="schema.componentProps?.filterable || false"
                       :clearable="schema.componentProps?.allowClear !== false"
                       style="width: 100%"
-                      @update:model-value="(v) => setValue(schema.field, v)"
+                      @update:model-value="(v: unknown) => setValue(schema.field, v)"
                     >
                       <el-option
                         v-for="opt in schema.componentProps?.options || []"
@@ -248,7 +250,7 @@ const handleArrayInputBackspace = (field: string | undefined, currentTags: unkno
                   <div v-else-if="schema.component === 'RadioGroup'" class="control-wrapper">
                     <el-radio-group
                       :model-value="getValue(schema.field)"
-                      @update:model-value="(v) => setValue(schema.field, v)"
+                      @update:model-value="(v: unknown) => setValue(schema.field, v)"
                     >
                       <el-radio
                         v-for="opt in schema.componentProps?.options || []"
@@ -271,7 +273,7 @@ const handleArrayInputBackspace = (field: string | undefined, currentTags: unkno
                       default-first-option
                       :placeholder="schema.componentProps?.placeholder || '输入后按回车添加'"
                       style="width: 100%"
-                      @update:model-value="(v) => setValue(schema.field, v)"
+                      @update:model-value="(v: unknown) => setValue(schema.field, v)"
                     />
                   </div>
 
@@ -298,7 +300,7 @@ const handleArrayInputBackspace = (field: string | undefined, currentTags: unkno
                                 size="small"
                                 class="array-tag"
                                 type="info"
-                                @close="removeArrayItem(schema.field, getValue(schema.field), idx)"
+                                @close="removeArrayItem(schema.field, getValue(schema.field), Number(idx))"
                             >
                                 {{ tag }}
                             </el-tag>
@@ -321,7 +323,7 @@ const handleArrayInputBackspace = (field: string | undefined, currentTags: unkno
                       :model-value="getValue(schema.field)"
                       :placeholder="schema.componentProps?.placeholder"
                       clearable
-                      @update:model-value="(v) => setValue(schema.field, v)"
+                      @update:model-value="(v: string) => setValue(schema.field, v)"
                     />
                   </div>
                 </el-form-item>

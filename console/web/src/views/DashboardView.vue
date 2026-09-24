@@ -38,7 +38,7 @@ const loadData = async () => {
   try {
     const [data, config] = await Promise.all([
       dataApi.getAll(),
-      configApi.getAll().catch(() => ({}))
+      configApi.getAll().catch(() => null)
     ])
 
     const noticeDays = Number(config?.membership?.expire_notice_days)

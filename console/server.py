@@ -9,7 +9,7 @@ from nonebot import logger, get_app
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from .routes import bots, meta, config, membership, permissions
+from .routes import bots, logs, meta, config, membership, permissions
 
 _mounted = False
 
@@ -28,6 +28,7 @@ def mount_console() -> None:
     router.include_router(config.router)
     router.include_router(bots.router)
     router.include_router(meta.router)
+    router.include_router(logs.router)
 
     @router.get("/health")
     async def health() -> dict[str, bool]:

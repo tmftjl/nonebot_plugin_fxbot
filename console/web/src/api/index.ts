@@ -2,7 +2,7 @@
 import axios, { type AxiosInstance, type AxiosResponse } from 'axios'
 import type { ApiResponse, PermissionConfig, StatsToday } from '@/types/api'
 
-function getToken(): string {
+export function getToken(): string {
   try {
     const params = new URLSearchParams(window.location.search)
     const token = params.get('token')

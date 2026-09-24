@@ -59,6 +59,10 @@ async def init() -> None:
     if _initialized:
         return
 
+    # 第一件事就装上日志缓冲，否则会漏掉下面这行启动日志和整段启动流水；
+    # 该模块只装 loguru sink，不读配置、不碰数据库和 FastAPI，放在最前面是安全的
+    _import_startup_module("console.log_stream")
+
     logger.info("[FxBot] 开始初始化")
     get_config_manager().bootstrap()
 

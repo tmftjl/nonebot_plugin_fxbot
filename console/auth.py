@@ -1,4 +1,4 @@
-"""6 字符以上随机 token 生成和 Bearer 认证。"""
+"""6 字符以上随机 token 生成和 Bearer 认证（SSE 事件流额外支持查询参数携带）。"""
 
 from __future__ import annotations
 
@@ -39,17 +39,38 @@ def rotate_console_token() -> str:
     return token
 
 
+def _check_token(token: str) -> None:
+    """比对 token，不匹配时抛 403。"""
+    # compare_digest 遇到含非 ASCII 的 str 会抛 TypeError（变成 500），统一编码成 bytes 比对
+    if not secrets.compare_digest(token.encode(), get_console_token().encode()):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="认证 token 无效")
+
+
 def verify_bearer_token(request: Request) -> None:
     """校验 Bearer token。"""
     auth_header = request.headers.get("authorization", "")
     prefix = "Bearer "
     if not auth_header.startswith(prefix):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="缺少认证 token")
-    token = auth_header[len(prefix) :].strip()
-    if not secrets.compare_digest(token, get_console_token()):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="认证 token 无效")
+    _check_token(auth_header[len(prefix) :].strip())
 
 
 async def bearer_auth(request: Request) -> None:
     """FastAPI 依赖形式的 Bearer 认证。"""
     verify_bearer_token(request)
+
+
+async def sse_auth(request: Request) -> None:
+    """SSE 专用认证：优先 Authorization 头，回落到查询参数。
+
+    浏览器原生 EventSource 无法设置请求头，事件流只能靠查询参数携带 token。
+    """
+    auth_header = request.headers.get("authorization", "")
+    prefix = "Bearer "
+    if auth_header.startswith(prefix):
+        _check_token(auth_header[len(prefix) :].strip())
+        return
+    token = request.query_params.get("token", "")
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="缺少认证 token")
+    _check_token(token)
