@@ -44,6 +44,10 @@ class QQOfficialMessageAdapter(PlatformAdapter):
     def user_avatar(self, bot, user_id):
         return f"https://q.qlogo.cn/qqapp/{getattr(bot, 'self_id', '')}/{user_id}/100"
 
+    def supports_media_url(self) -> bool:
+        """QQ 官方平台的图片段由腾讯服务器代下 URL，第三方站点可能拒绝它。"""
+        return False
+
     def build_segment(self, bot: Bot, seg_type: str, data: Any = None) -> Any:
         if seg_type == "text":
             return MessageSegment.text(str(data))

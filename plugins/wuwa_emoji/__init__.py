@@ -11,7 +11,7 @@ from nonebot.matcher import Matcher
 from nonebot.adapters import Event
 
 from .store import get_characters, match_character, refresh_characters, setup_wuwa_emoji_tasks
-from .client import WuwaEmojiError, CharacterEmptyError, fetch_random_image
+from .client import WuwaEmojiError, CharacterEmptyError, download_image, fetch_random_image
 from ...plugin import Plugin
 from ...adapter import selfBot
 from ...permission import PermLevel, PermScene
@@ -90,13 +90,15 @@ async def _handle_random(matcher: Matcher, state: T_State) -> None:
     target = str(state.get(_TARGET_KEY) or "")
     try:
         image_url = await fetch_random_image(target or None)
+        # 平台自己下不到这个媒体地址（QQ 官方平台由腾讯服务器代下），只能由我们下好再发字节
+        image_data = image_url if selfBot.supports_media_url() else await download_image(image_url)
     except CharacterEmptyError:
         await matcher.finish(f"{target}暂时没有可用的表情")
     except WuwaEmojiError:
         logger.opt(exception=True).warning(f"[wuwa_emoji] 随机表情请求失败：target={target or '(任意角色)'}")
         await matcher.finish()
     else:
-        await matcher.finish(selfBot.build_message(selfBot.build_segment("image", image_url)))
+        await matcher.finish(selfBot.build_message(selfBot.build_segment("image", image_data)))
 
 
 @refresh_cmd.handle()

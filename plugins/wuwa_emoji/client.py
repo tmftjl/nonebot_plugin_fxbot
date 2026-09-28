@@ -5,9 +5,11 @@ from __future__ import annotations
 from typing import Any
 
 from .config import cfg_api_base, cfg_api_token
-from ...utils.http import get_shared_async_client
+from ...utils.http import get_shared_async_client, get_bytes_with_browser_fallback
 
 REQUEST_TIMEOUT_SECONDS = 15.0
+MEDIA_DOWNLOAD_TIMEOUT_SECONDS = 60.0
+MAX_IMAGE_BYTES = 16 * 1024 * 1024
 CHARACTER_EMPTY_CODE = "CHARACTER_EMPTY"
 
 
@@ -82,3 +84,19 @@ async def fetch_random_image(character: str | None = None) -> str:
         raise WuwaEmojiError("鸣潮表情接口未返回图片地址")
     # 返回的是带 ticket 的临时地址，有效期仅 15 分钟，调用方不可缓存
     return url
+
+
+async def download_image(url: str) -> bytes:
+    """下载表情图片数据。
+
+    仅用于平台无法自行下载该地址的场景：媒体站点对非浏览器客户端一律返回
+    挑战页，所以必须走浏览器 TLS 指纹，且不能缓存（图片本身也不可复用）。
+    """
+    try:
+        return await get_bytes_with_browser_fallback(
+            url,
+            timeout=MEDIA_DOWNLOAD_TIMEOUT_SECONDS,
+            max_bytes=MAX_IMAGE_BYTES,
+        )
+    except Exception as exc:
+        raise WuwaEmojiError(f"鸣潮表情图片下载失败：{exc}") from exc

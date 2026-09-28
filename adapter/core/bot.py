@@ -48,6 +48,10 @@ class PlatformAdapter(ABC):
     def message_segment_class(self) -> type | None:
         return None
 
+    def supports_media_url(self) -> bool:
+        """图片段能否只携带 URL 交给平台自行下载。"""
+        return True
+
     def extract_group_member_add(self, event: Any) -> dict[str, str] | None:
         """识别成员入群事件并返回统一的群 ID、成员 ID。"""
         return None
@@ -466,6 +470,9 @@ class PlatformBot:
 
     def message_segment_class(self) -> type | None:
         return self.adapter.message_segment_class()
+
+    def supports_media_url(self) -> bool:
+        return self.adapter.supports_media_url()
 
     def is_mention_segment(self, segment: Any) -> bool:
         return self.adapter.is_mention_segment(segment)
