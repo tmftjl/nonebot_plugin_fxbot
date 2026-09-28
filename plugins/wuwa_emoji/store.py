@@ -9,6 +9,7 @@ import asyncio
 
 from nonebot import logger, get_driver
 
+from .alias import normalize, load_alias_map, build_alias_index, resolve_alias_path
 from .client import WuwaEmojiError, fetch_characters
 from .config import cfg_character_cache_ttl
 from ...utils.paths import cache_dir
@@ -17,6 +18,8 @@ CACHE_PATH = cache_dir("wuwa_emoji") / "characters.json"
 
 _lock = asyncio.Lock()
 _memory: tuple[float, list[dict[str, str]]] | None = None
+_alias_index: dict[str, str] = {}
+_alias_source: tuple[str, int] | None = None
 _refresh_task: asyncio.Task[None] | None = None
 _startup_hook_registered = False
 
@@ -49,13 +52,42 @@ def _write_disk(fetched_at: float, items: list[dict[str, str]]) -> None:
         tmp_path.unlink(missing_ok=True)
 
 
+def _remember(fetched_at: float, items: list[dict[str, str]]) -> tuple[float, list[dict[str, str]]]:
+    """更新内存缓存，并作废别名索引。
+
+    别名索引与角色列表必须同源，分开更新会出现「别名指向已下架角色」的窗口，
+    所以所有对 _memory 的写入都收口到这里、并强制下一次查询重建索引。
+    """
+    global _memory, _alias_source
+    _memory = (fetched_at, items)
+    _alias_source = None
+    return _memory
+
+
+def _sync_alias_index(items: list[dict[str, str]]) -> None:
+    """按来源文件的路径与 mtime 重建别名索引。
+
+    别名表由社群自动维护，不能只在角色列表过期时才重读；但也不值得每条消息都重新
+    解析，所以用「路径 + mtime」判断是否需要重建，文件一改下一条命令就生效。
+    """
+    global _alias_index, _alias_source
+    path = resolve_alias_path()
+    try:
+        mtime = path.stat().st_mtime_ns
+    except OSError:
+        mtime = 0
+    if _alias_source == (str(path), mtime):
+        return
+    _alias_index = build_alias_index(items, load_alias_map(path))
+    _alias_source = (str(path), mtime)
+
+
 async def refresh_characters() -> list[dict[str, str]]:
     """强制重新拉取角色列表并覆盖缓存，失败时抛出异常。"""
-    global _memory
     async with _lock:
         items = await fetch_characters()
-        _memory = (time.time(), items)
-        _write_disk(_memory[0], items)
+        fetched_at, items = _remember(time.time(), items)
+        _write_disk(fetched_at, items)
         return items
 
 
@@ -87,12 +119,15 @@ def get_characters() -> list[dict[str, str]]:
     同优先级的其他 matcher 以及后续的 AI 兜底路由。
     """
     global _memory
-    cached = _memory or _read_disk()
+    cached = _memory
     if cached is None:
-        _schedule_refresh()
-        return []
+        cached = _read_disk()
+        if cached is None:
+            _schedule_refresh()
+            return []
+        # 只有从磁盘恢复时才重建别名索引，别让每条消息都白算一遍
+        cached = _remember(*cached)
 
-    _memory = cached
     fetched_at, items = cached
     if time.time() - fetched_at >= cfg_character_cache_ttl():
         _schedule_refresh()
@@ -100,17 +135,36 @@ def get_characters() -> list[dict[str, str]]:
 
 
 def match_character(items: list[dict[str, str]], name: str) -> dict[str, str] | None:
-    """按角色名或 slug 匹配角色，大小写无关。"""
-    target = name.strip().casefold()
+    """按角色名或 slug 匹配角色，忽略大小写、空白与间隔号。"""
+    target = normalize(name)
     if not target:
         return None
     for item in items:
-        if str(item.get("name") or "").casefold() == target:
+        if normalize(str(item.get("name") or "")) == target:
             return item
     for item in items:
-        if str(item.get("slug") or "").casefold() == target:
+        if normalize(str(item.get("slug") or "")) == target:
             return item
     return None
+
+
+def lookup_character(name: str) -> dict[str, str] | None:
+    """解析用户输入的角色称呼，返回角色条目，未命中返回 None。
+
+    优先级是正式名 / slug 高于别名：这样「心月狐」这类既是正式角色名、又是别人
+    别名的词会稳定落到正式角色上，不会被别名表抢走。
+    """
+    items = get_characters()
+    item = match_character(items, name)
+    if item is not None:
+        return item
+
+    # 正式名没命中才碰别名表，顺带确认来源文件是否更新过，普通角色名零额外开销
+    _sync_alias_index(items)
+    target = _alias_index.get(normalize(name))
+    if target is None:
+        return None
+    return match_character(items, target)
 
 
 async def _startup_warmup() -> None:

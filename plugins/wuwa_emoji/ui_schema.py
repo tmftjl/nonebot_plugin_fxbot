@@ -8,6 +8,7 @@ DEFAULTS: dict[str, Any] = {
     "api_base": "https://emoji.wuwa.games/apis/api.random-emoji.wuwa.games/v1alpha1",
     "api_token": "",
     "character_cache_ttl": 86400,
+    "alias_path": "",
 }
 
 
@@ -42,6 +43,16 @@ def get_ui_schema() -> dict[str, Any]:
                         "default": DEFAULTS["character_cache_ttl"],
                         "helpMessage": "角色列表缓存的有效秒数，默认 86400（一天）。",
                         "componentProps": {"min": 0, "step": 300},
+                    },
+                    {
+                        "field": "alias_path",
+                        "label": "角色别名表路径",
+                        "component": "Input",
+                        "default": DEFAULTS["alias_path"],
+                        "helpMessage": (
+                            "留空使用插件内置的别名表。填 XutheringWavesUID 的 char_alias.json 绝对路径"
+                            "可跟随其自动维护，文件一改下一条命令即生效；路径不可读时自动退回内置表。"
+                        ),
                     },
                 ],
             },

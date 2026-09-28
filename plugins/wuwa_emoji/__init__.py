@@ -10,7 +10,7 @@ from nonebot.typing import T_State
 from nonebot.matcher import Matcher
 from nonebot.adapters import Event
 
-from .store import get_characters, match_character, refresh_characters, setup_wuwa_emoji_tasks
+from .store import lookup_character, refresh_characters, setup_wuwa_emoji_tasks
 from .client import WuwaEmojiError, CharacterEmptyError, download_image, fetch_random_image
 from ...plugin import Plugin
 from ...adapter import selfBot
@@ -52,8 +52,8 @@ def random_emoji_rule() -> Rule:
             state[_TARGET_KEY] = ""
             return True
 
-        # 角色名来自接口而非硬编码；未命中时静默返回 False，让行给图库等其他 matcher
-        item = match_character(get_characters(), name)
+        # 正式名、slug、别名都来自数据而非硬编码；未命中时静默返回 False，让行给图库等其他 matcher
+        item = lookup_character(name)
         if item is None:
             return False
 

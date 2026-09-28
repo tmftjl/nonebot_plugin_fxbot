@@ -32,3 +32,8 @@ def cfg_character_cache_ttl() -> int:
     except (TypeError, ValueError):
         return int(DEFAULTS["character_cache_ttl"])
     return max(value, 0)
+
+
+def cfg_alias_path() -> str:
+    """获取外部角色别名表路径，未配置时返回空串。"""
+    return str(get_config().get("alias_path") or "").strip()
