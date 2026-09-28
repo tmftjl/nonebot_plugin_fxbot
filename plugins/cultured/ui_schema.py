@@ -6,8 +6,7 @@ from typing import Any
 
 DEFAULTS: dict[str, Any] = {
     "random_picture_open": True,
-    "poke_repo": "https://cnb.cool/denfenglai/poke.git",
-    "fallback_api": "https://ciallo.hxxn.cc/?name={name}",
+    "poke_repo": "https://github.com/tmftjl/poke_repo.git",
     "custom_commands": {},
 }
 
@@ -35,13 +34,6 @@ def get_ui_schema() -> dict[str, Any]:
                         "component": "Input",
                         "default": DEFAULTS["poke_repo"],
                         "helpMessage": "本地图库仓库地址。",
-                    },
-                    {
-                        "field": "fallback_api",
-                        "label": "兜底图片 API",
-                        "component": "Input",
-                        "default": DEFAULTS["fallback_api"],
-                        "helpMessage": "找不到本地图片时使用的远程图片接口。",
                     },
                     {
                         "field": "custom_commands",

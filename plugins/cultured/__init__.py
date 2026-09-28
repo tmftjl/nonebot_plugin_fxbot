@@ -110,15 +110,6 @@ def _api_handlers() -> list[tuple[str, Callable[[], Any]]]:
     return handlers
 
 
-def _pick_face_image(name: str):
-    """优先使用本地图库，缺失时退回备用 API。"""
-    path = random_local_image(name)
-    if path is not None:
-        return selfBot.build_segment("image", path)
-    fallback = str(load_cfg()["fallback_api"])
-    return selfBot.build_segment("image", fallback.format(name=name))
-
-
 api_cmd = P.on_regex(
     r"^(?:#|＃|/)?(?:来张|看看|随机).+",
     name="pictures_api",
@@ -194,4 +185,6 @@ async def _handle_picture(matcher: Matcher, event: Event) -> None:
     match = re.match(r"^(?:#|＃|/)?(?:来张|看看|随机)\s*(\S+)", text)
     name = match.group(1) if match else ""
     if name in face_list():
-        await matcher.finish(selfBot.build_message(_pick_face_image(name)))
+        path = random_local_image(name)
+        if path is not None:
+            await matcher.finish(selfBot.build_message(selfBot.build_segment("image", path)))
