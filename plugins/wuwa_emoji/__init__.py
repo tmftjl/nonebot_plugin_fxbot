@@ -24,10 +24,7 @@ P = Plugin(
     scene=PermScene.ALL,
 )
 
-GENERIC_ALIASES = {"wuwa", "鸣潮"}
-# 前缀与图库（plugins/cultured）保持同一套：两处各写一遍就会像刷新命令那样漏掉斜杠
-PREFIX = r"[#＃/]?"
-TRIGGER_PATTERN = re.compile(rf"^{PREFIX}(?:来张|看看|随机)\s*(\S+)$")
+TRIGGER_PATTERN = re.compile(r"^/?ww随机\s*(\S*)$")
 
 _TARGET_KEY = "_wuwa_emoji_target"
 
@@ -50,11 +47,11 @@ def random_emoji_rule() -> Rule:
             return False
 
         name = match.group(1)
-        if name.casefold() in GENERIC_ALIASES:
+        if not name:
             state[_TARGET_KEY] = ""
             return True
 
-        # 正式名、slug、别名都来自数据而非硬编码；未命中时静默返回 False，让行给图库等其他 matcher
+        # 正式名、slug、别名都来自数据而非硬编码；未命中时静默返回 False，让行给其他 matcher
         item = lookup_character(name)
         if item is None:
             return False
@@ -76,7 +73,7 @@ random_cmd = P.on_message(
 )
 
 refresh_cmd = P.on_regex(
-    rf"^{PREFIX}(?:wuwa|鸣潮)(?:表情)?刷新$",
+    r"^/?ww(?:表情)?刷新$",
     name="refresh_characters",
     display_name="刷新鸣潮角色",
     priority=5,
