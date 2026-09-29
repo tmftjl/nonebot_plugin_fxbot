@@ -226,8 +226,9 @@ def _reprioritize_protected_mentions(
     images: list[bytes],
     image_user_ids: list[Optional[str]],
     image_from_mentions: list[bool],
+    has_fallback: bool,
 ) -> tuple[list[bytes], list[Optional[str]], list[bool]]:
-    """调整受保护用户被 @ 时的头像优先级。"""
+    """调整受保护用户被 @ 时的头像优先级，单图表情下受保护用户不参与素材竞争。"""
     if (
         meme.params_type.max_images <= 0
         or not protection_manager.is_protected(meme.key)
@@ -246,6 +247,8 @@ def _reprioritize_protected_mentions(
 
     indexed = list(zip(images, image_user_ids, image_from_mentions))
     if meme.params_type.max_images == 1:
+        if has_fallback and meme.params_type.min_images == 1 and len(protected_indices) == len(indexed):
+            return [], [], []
         ordered = [item for i, item in enumerate(indexed) if i not in protected_indices] + [
             item for i, item in enumerate(indexed) if i in protected_indices
         ]
@@ -335,14 +338,14 @@ async def extract_inputs(
             image_user_ids.insert(0, str(session.user.id))  # 发送者的头像
             image_from_mentions.insert(0, False)
 
+        images, image_user_ids, image_from_mentions = _reprioritize_protected_mentions(
+            meme, images, image_user_ids, image_from_mentions, bool(session.user.avatar)
+        )
+
         if meme.params_type.min_images == 1 and len(images) == 0 and session.user.avatar:
             images.append(await download_url(session.user.avatar))
             image_user_ids.append(str(session.user.id))  # 发送者的头像
             image_from_mentions.append(False)
-
-        images, image_user_ids, image_from_mentions = _reprioritize_protected_mentions(
-            meme, images, image_user_ids, image_from_mentions
-        )
 
     return texts, images, image_user_ids
 
