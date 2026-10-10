@@ -469,7 +469,7 @@ title_cmd = P.on_regex(
     display_name="设置头衔",
     priority=5,
     block=True,
-    level=PermLevel.ADMIN,
+    level=PermLevel.SUPERUSER,
     scene=PermScene.GROUP,
 )
 
