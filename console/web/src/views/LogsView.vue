@@ -15,6 +15,9 @@ interface LogEntry {
 
 type LevelFilter = 'ALL' | 'DEBUG' | 'INFO' | 'WARNING' | 'ERROR'
 
+const MAX_LOGS = 2000
+const FLUSH_MS = 100
+
 const logs = ref<LogEntry[]>([])
 const levelFilter = ref<LevelFilter>('ALL')
 const keyword = ref('')
@@ -28,6 +31,8 @@ let lastSeq: number | null = null
 let lastBoot: string | null = null
 let lostCount = 0
 let userAtBottom = true
+let pending: LogEntry[] = []
+let flushTimer: number | null = null
 
 const levelRank: Record<LogEntry['level'], number> = {
   TRACE: 0,
@@ -77,36 +82,54 @@ const scrollToBottom = () => {
   })
 }
 
-const appendLog = (entry: LogEntry) => {
-  // boot 变化说明服务端重启了，而 seq 每次重启都从 1 重新计数；不重置 lastSeq 的话
-  // 新日志会被下面的「重复」判断全部丢弃，页面从此静默
-  if (entry.boot !== lastBoot) {
-    logs.value = []
-    lossNotice.value = ''
-    newLogCount.value = 0
-    lastSeq = null
-    lostCount = 0
-    lastBoot = entry.boot
+// 进页面时会整段重放缓冲区（最多 2000 条），逐条写进响应式数组会让列表每来一条就
+// 重渲染并强制回流一次，重放期间页面直接卡死；按帧攒批，一次合并进列表
+const flushPending = () => {
+  flushTimer = null
+  const batch = pending
+  pending = []
+  let appended = 0
+  for (const entry of batch) {
+    // boot 变化说明服务端重启了，而 seq 每次重启都从 1 重新计数；不重置 lastSeq 的话
+    // 新日志会被下面的「重复」判断全部丢弃，页面从此静默
+    if (entry.boot !== lastBoot) {
+      logs.value = []
+      lossNotice.value = ''
+      newLogCount.value = 0
+      lastSeq = null
+      lostCount = 0
+      lastBoot = entry.boot
+    }
+    if (!Number.isFinite(entry.seq) || (lastSeq !== null && entry.seq <= lastSeq)) continue
+    if (lastSeq !== null && entry.seq !== lastSeq + 1) {
+      lostCount += entry.seq - lastSeq - 1
+      if (!lossNotice.value) ElMessage.warning('日志有丢失')
+      lossNotice.value = `日志有丢失（累计 ${lostCount} 条）`
+    }
+    lastSeq = entry.seq
+    logs.value.push(entry)
+    appended += 1
   }
-  if (!Number.isFinite(entry.seq) || lastSeq !== null && entry.seq <= lastSeq) return
-  if (lastSeq !== null && entry.seq !== lastSeq + 1) {
-    lostCount += entry.seq - lastSeq - 1
-    if (!lossNotice.value) ElMessage.warning('日志有丢失')
-    lossNotice.value = `日志有丢失（累计 ${lostCount} 条）`
-  }
-  lastSeq = entry.seq
-  logs.value.push(entry)
-  if (logs.value.length > 2000) logs.value.splice(0, logs.value.length - 2000)
+  if (!appended) return
+  if (logs.value.length > MAX_LOGS) logs.value.splice(0, logs.value.length - MAX_LOGS)
   if (!paused.value && userAtBottom) {
     scrollToBottom()
   } else {
-    newLogCount.value += 1
+    newLogCount.value += appended
   }
+}
+
+const scheduleFlush = () => {
+  if (flushTimer === null) flushTimer = window.setTimeout(flushPending, FLUSH_MS)
 }
 
 const handleMessage = (event: MessageEvent<string>) => {
   try {
-    appendLog(JSON.parse(event.data) as LogEntry)
+    const entry = JSON.parse(event.data) as LogEntry
+    // 页面在后台时定时器会被节流，攒到超过缓冲上限就丢最旧的，seq 断档会走丢失提示
+    if (pending.length >= MAX_LOGS) pending.splice(0, pending.length - MAX_LOGS + 1)
+    pending.push(entry)
+    scheduleFlush()
   } catch {
     ElMessage.warning('收到无法解析的日志')
   }
@@ -145,6 +168,9 @@ onMounted(() => {
 onUnmounted(() => {
   eventSource?.close()
   eventSource = null
+  if (flushTimer !== null) window.clearTimeout(flushTimer)
+  flushTimer = null
+  pending = []
 })
 </script>
 
