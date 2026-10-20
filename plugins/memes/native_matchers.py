@@ -87,6 +87,12 @@ def _split_text(text: str) -> list[str]:
         return text.split()
 
 
+def _merge_reply_texts(current: list[str], quoted: list[str], max_texts: int) -> list[str]:
+    if current or max_texts <= 0:
+        return current
+    return [text for text in quoted if text.strip()][:max_texts]
+
+
 def _build_trigger_map() -> dict[str, list[str]]:
     mapping: dict[str, list[str]] = {}
     for meme in meme_manager.get_memes():
@@ -127,7 +133,18 @@ def meme_trigger_rule() -> Rule:
         if not msg:
             return False
 
-        seg: MessageSegment = msg[0]
+        index = 0
+        while index < len(msg) and msg[index].type == "reply":
+            index += 1
+        if getattr(event, "message_type", None) == 103 and getattr(event, "reply", None) is None:
+            while index < len(msg) and msg[index].is_text() and not str(msg[index]).strip():
+                index += 1
+            if index < len(msg) and selfBot.adapter.is_mention_segment(msg[index]):
+                index += 1
+        if index >= len(msg):
+            return False
+
+        seg: MessageSegment = msg[index]
         if not seg.is_text():
             return False
 
@@ -149,7 +166,7 @@ def meme_trigger_rule() -> Rule:
 
         arg_text = parts[1] if len(parts) > 1 else ""
         new_msg = msg.copy()
-        new_msg.pop(0)
+        del new_msg[: index + 1]
         if arg_text:
             head = new_msg.__class__(arg_text.lstrip())
             for s in reversed(head):
@@ -262,6 +279,27 @@ def _reprioritize_protected_mentions(
     return images, image_user_ids, image_from_mentions
 
 
+async def _collect_reply_inputs(event: Event) -> tuple[list[str], list[bytes], bool]:
+    try:
+        reply = await selfBot.get_reply_info(event)
+    except Exception:
+        logger.opt(exception=True).warning("读取引用消息失败")
+        return [], [], False
+    if reply is None:
+        return [], [], False
+
+    images: list[bytes] = []
+    for source in reply.image_sources:
+        try:
+            data = await fetch_image_bytes(source)
+        except Exception:
+            logger.warning("引用图片下载失败", exc_info=True)
+            continue
+        if data:
+            images.append(data)
+    return reply.texts, images, bool(reply.image_sources)
+
+
 async def extract_inputs(
     event: Event,
     matcher: Matcher,
@@ -269,34 +307,28 @@ async def extract_inputs(
     interface: QryItrface,
     meme: Optional[MemeInfo],
     msg: Message,
+    *,
+    reply_inputs: Optional[tuple[list[str], list[bytes], bool]] = None,
 ) -> tuple[list[str], list[bytes], list[Optional[str]]]:
     texts: list[str] = []
     images: list[bytes] = []
     image_user_ids: list[Optional[str]] = []  # 记录每个图片对应的用户ID
     image_from_mentions: list[bool] = []  # 记录图片是否由 @ 头像产生
 
-    reply_has_image = False
-    try:
-        reply = await selfBot.get_reply_info(event)
-        for source in reply.image_sources if reply is not None else []:
-            data = await fetch_image_bytes(source)
-            if data:
-                images.append(data)
-                image_user_ids.append(None)  # 回复中的图片没有对应用户ID
-                image_from_mentions.append(False)
-                reply_has_image = True
-    except Exception:
-        pass
+    reply_texts, reply_images, has_reply_image = (
+        reply_inputs if reply_inputs is not None else await _collect_reply_inputs(event)
+    )
 
-    has_actual_image = reply_has_image or any(getattr(seg, "type", None) == "image" for seg in msg)
+    has_actual_image = has_reply_image or any(getattr(seg, "type", None) == "image" for seg in msg)
+    has_reply = selfBot.has_reply_reference(event)
 
     for seg in msg:
         seg_type = getattr(seg, "type", None)
 
         if selfBot.is_mention_segment(seg):
-            if has_actual_image:
-                continue
             target = selfBot.mention_target(seg)
+            if has_reply or has_actual_image:
+                continue
             if not target:
                 continue
             avatar = await _avatar_bytes_of(matcher, session, interface, str(target))
@@ -315,6 +347,8 @@ async def extract_inputs(
         elif seg.is_text():
             for token in _split_text(str(seg)):
                 if token.startswith("@") and token[1:]:
+                    if has_reply:
+                        continue
                     avatar = await _avatar_bytes_of(matcher, session, interface, token[1:])
                     if avatar:
                         images.append(avatar)
@@ -332,20 +366,33 @@ async def extract_inputs(
                 if token:
                     texts.append(token)
 
-    if meme is not None:
-        if meme.params_type.min_images == 2 and len(images) == 1 and session.user.avatar:
-            images.insert(0, await download_url(session.user.avatar))
-            image_user_ids.insert(0, str(session.user.id))  # 发送者的头像
-            image_from_mentions.insert(0, False)
+    if meme is None:
+        return texts, images, image_user_ids
 
-        images, image_user_ids, image_from_mentions = _reprioritize_protected_mentions(
-            meme, images, image_user_ids, image_from_mentions, bool(session.user.avatar)
-        )
+    if meme.params_type.min_images > 0 and not images and not reply_images:
+        if has_reply_image or (has_reply and not reply_texts):
+            await matcher.finish()
 
-        if meme.params_type.min_images == 1 and len(images) == 0 and session.user.avatar:
-            images.append(await download_url(session.user.avatar))
-            image_user_ids.append(str(session.user.id))  # 发送者的头像
-            image_from_mentions.append(False)
+    texts = _merge_reply_texts(texts, reply_texts, meme.params_type.max_texts)
+
+    selected_reply_images = reply_images[: max(0, meme.params_type.max_images - len(images))]
+    images[:0] = selected_reply_images
+    image_user_ids[:0] = [None] * len(selected_reply_images)
+    image_from_mentions[:0] = [False] * len(selected_reply_images)
+
+    if meme.params_type.min_images == 2 and len(images) == 1 and session.user.avatar:
+        images.insert(0, await download_url(session.user.avatar))
+        image_user_ids.insert(0, str(session.user.id))  # 发送者的头像
+        image_from_mentions.insert(0, False)
+
+    images, image_user_ids, image_from_mentions = _reprioritize_protected_mentions(
+        meme, images, image_user_ids, image_from_mentions, bool(session.user.avatar)
+    )
+
+    if meme.params_type.min_images == 1 and len(images) == 0 and not has_reply_image and session.user.avatar:
+        images.append(await download_url(session.user.avatar))
+        image_user_ids.append(str(session.user.id))  # 发送者的头像
+        image_from_mentions.append(False)
 
     return texts, images, image_user_ids
 
@@ -969,7 +1016,11 @@ async def _random(
     interface: QryItrface,
     arg: Message = CommandArg(),
 ):
-    base_texts, base_images, _ = await extract_inputs(event, matcher, session, interface, None, arg)
+    reply_inputs = await _collect_reply_inputs(event)
+    base_texts, base_images, _ = await extract_inputs(
+        event, matcher, session, interface, None, arg, reply_inputs=reply_inputs
+    )
+    reply_texts, reply_images, has_reply_image = reply_inputs
 
     candidates: list[MemeInfo] = []
     user_key = get_user_id(session)
@@ -977,8 +1028,9 @@ async def _random(
         if not meme_manager.check(user_key, meme.key):
             continue
         images_num = len(base_images)
-        texts_num = len(base_texts)
-        if session.user.avatar and images_num == 0 and meme.params_type.min_images == 1:
+        images_num += min(len(reply_images), max(0, meme.params_type.max_images - images_num))
+        texts_num = len(_merge_reply_texts(base_texts, reply_texts, meme.params_type.max_texts))
+        if session.user.avatar and images_num == 0 and meme.params_type.min_images == 1 and not has_reply_image:
             images_num = 1
         if session.user.avatar and meme.params_type.min_images == 2 and images_num == 1:
             images_num = 2
@@ -994,7 +1046,7 @@ async def _random(
         await matcher.finish("没有找到符合条件的表情")
 
     meme = random.choice(candidates)
-    texts, images, _ = await extract_inputs(event, matcher, session, interface, meme, arg)
+    texts, images, _ = await extract_inputs(event, matcher, session, interface, meme, arg, reply_inputs=reply_inputs)
     texts = await normalize_meme_params(matcher, meme, texts, images)
 
     try:

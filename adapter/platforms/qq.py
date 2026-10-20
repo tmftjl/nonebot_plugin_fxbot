@@ -7,14 +7,42 @@ import base64
 from typing import Any
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
+from functools import wraps
 
 from nonebot.adapters import Bot
-from nonebot.adapters.qq import Bot as QQBot, Message, MessageSegment
+from nonebot.adapters.qq import Bot as QQBot, Message, MessageSegment, bot as qq_bot_module
 from nonebot.adapters.qq.event import GroupMemberAddEvent
 from nonebot.adapters.qq.models import SetMemberMuteState
 
-from ..recent import recent_reply, remember_event
+from ..recent import recent_reply, remember_sent, remember_event
 from ..core.bot import ReplyInfo, PlatformAdapter, UnsupportedCapability, _image_bytes
+
+
+class _GroupMessagesReturn(qq_bot_module.PostGroupMessagesReturn):
+    """发送响应里的引用索引，用于缓存 bot 自己发出的消息。"""
+
+    ext_info: dict[str, Any] | None = None
+
+
+qq_bot_module.PostGroupMessagesReturn = _GroupMessagesReturn
+_send_to_group = QQBot.send_to_group
+
+
+@wraps(_send_to_group)
+async def _send_to_group_and_remember(self: Any, *args: Any, **kwargs: Any) -> Any:
+    result = await _send_to_group(self, *args, **kwargs)
+    group_openid = kwargs.get("group_openid") or (args[0] if args else "")
+    message = kwargs.get("message") or (args[1] if len(args) > 1 else None)
+    if isinstance(message, str):
+        message = Message([MessageSegment.text(message)])
+    elif isinstance(message, MessageSegment):
+        message = Message([message])
+    ext_info = getattr(result, "ext_info", None) or {}
+    remember_sent(self, str(group_openid or ""), message, getattr(result, "id", None), ext_info.get("ref_idx"))
+    return result
+
+
+QQBot.send_to_group = _send_to_group_and_remember
 
 
 class QQOfficialMessageAdapter(PlatformAdapter):
@@ -88,16 +116,40 @@ class QQOfficialMessageAdapter(PlatformAdapter):
 
     def reply_sender_id(self, event: Any) -> str | None:
         """读取被引用消息的发送者 OpenID。"""
-        author = getattr(getattr(event, "reply", None), "author", None)
+        return self._author_id(getattr(getattr(event, "reply", None), "author", None))
+
+    def _author_id(self, author: Any) -> str | None:
         for field in ("id", "user_openid", "member_openid"):
             if value := getattr(author, field, None):
                 return str(value)
         return None
 
+    def _quoted_elements(self, event: Any) -> list[Any]:
+        """message_type=103 时，被引用内容由 msg_elements 定义。"""
+        if getattr(event, "message_type", None) != 103:
+            return []
+        elements = list(getattr(event, "msg_elements", None) or [])
+        ref_idx = next(
+            (
+                value.removeprefix("ref_msg_idx=")
+                for value in (getattr(getattr(event, "message_scene", None), "ext", None) or [])
+                if isinstance(value, str) and value.startswith("ref_msg_idx=")
+            ),
+            "",
+        )
+        matched = [element for element in elements if getattr(element, "msg_idx", None) == ref_idx]
+        if matched:
+            return matched
+        if any(getattr(element, "msg_idx", None) for element in elements):
+            return []
+        return elements
+
     def remember_event(self, bot: Any, event: Any, message: Any) -> None:
         remember_event(bot, event, message)
 
     def has_reply_reference(self, event: Any) -> bool:
+        if getattr(event, "message_type", None) == 103:
+            return True
         if super().has_reply_reference(event):
             return True
         scene = getattr(event, "message_scene", None)
@@ -108,19 +160,35 @@ class QQOfficialMessageAdapter(PlatformAdapter):
     async def get_reply_info(self, bot: Any, event: Any) -> ReplyInfo | None:
         if not self.has_reply_reference(event):
             return None
+        quoted = self._quoted_elements(event)
         reply = getattr(event, "reply", None)
+        if not quoted and reply is not None:
+            quoted = [reply]
         cached = recent_reply(bot, event)
         sources = [
-            attachment.url
-            for attachment in (getattr(reply, "attachments", None) or [])
+            str(attachment.url)
+            for item in quoted
+            for attachment in (getattr(item, "attachments", None) or [])
             if getattr(attachment, "url", None) and str(getattr(attachment, "content_type", "")).startswith("image/")
         ]
         if not sources and cached:
             sources = list(cached.get("images", ()))
+        texts: list[str] = []
+        for item in quoted:
+            content = getattr(item, "content", None)
+            if isinstance(content, str):
+                texts.extend(self.extract_raw_texts(Message(content)))
+        if not texts and cached:
+            texts = list(cached.get("texts", ()))
+        sender_id = self.reply_sender_id(event) or next(
+            filter(None, (self._author_id(getattr(item, "author", None)) for item in quoted)),
+            None,
+        )
         return ReplyInfo(
             message_id=getattr(reply, "message_id", None) or (cached.get("id") if cached else None),
-            sender_id=self.reply_sender_id(event) or (cached.get("sender_id") if cached else None),
+            sender_id=sender_id or (cached.get("sender_id") if cached else None),
             image_sources=sources,
+            texts=["\n".join(texts)] if texts else [],
         )
 
     async def send_message_to_target(self, bot: Bot, target: dict[str, Any], message: Any) -> Any:

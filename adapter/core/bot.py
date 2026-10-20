@@ -28,6 +28,10 @@ class ReplyInfo:
     message_id: int | str | None = None
     sender_id: str | None = None
     image_sources: list[str | bytes] = field(default_factory=list)
+    texts: list[str] = field(default_factory=list)
+
+
+_SCENE_TYPES = frozenset({"group", "private", "channel", "guild"})
 
 
 class PlatformAdapter(ABC):
@@ -101,14 +105,21 @@ class PlatformAdapter(ABC):
         reply, message_id = self.reply_target(event)
         if not self.has_reply_reference(event) and message_id is None:
             return None
-        sources = self.extract_raw_image_sources(getattr(reply, "message", None))
-        if not sources and message_id is not None:
+        reply_message = getattr(reply, "message", None)
+        if reply_message is None and message_id is not None:
             try:
-                replied = await self.get_replied_message(bot, message_id)
-                sources = self.extract_raw_image_sources(replied)
+                reply_message = await self.get_replied_message(bot, message_id)
+            except UnsupportedCapability:
+                reply_message = None
             except Exception:
-                pass
-        return ReplyInfo(message_id=message_id, sender_id=self.reply_sender_id(event), image_sources=sources)
+                logger.opt(exception=True).warning("[adapter] 获取引用消息失败")
+                reply_message = None
+        return ReplyInfo(
+            message_id=message_id,
+            sender_id=self.reply_sender_id(event),
+            image_sources=self.extract_raw_image_sources(reply_message),
+            texts=self.extract_raw_texts(reply_message),
+        )
 
     def is_mention_segment(self, segment: Any) -> bool:
         return False
@@ -227,7 +238,7 @@ class PlatformAdapter(ABC):
         return getattr(event, "message", None)
 
     def event_message_type(self, event: Any) -> str:
-        return str(getattr(event, "message_type", "") or getattr(event, "detail_type", "") or "").lower()
+        return event_message_type(event)
 
     def event_is_group(self, event: Any) -> bool:
         return self.event_message_type(event) == "group" or (
@@ -318,6 +329,14 @@ class PlatformAdapter(ABC):
                 result.append(source)
         return result
 
+    def extract_raw_texts(self, message: Any) -> list[str]:
+        text = "".join(
+            str((getattr(segment, "data", {}) or {}).get("text") or "")
+            for segment in list(message or [])
+            if getattr(segment, "type", "") == "text"
+        ).strip()
+        return [text] if text else []
+
     def extract_reply_message_id(self, message: Any) -> int | str | None:
         for segment in list(message or []):
             if getattr(segment, "type", "") != "reply":
@@ -373,7 +392,14 @@ def event_plain_text(event: Any) -> str:
 
 
 def event_message_type(event: Any) -> str:
-    return str(getattr(event, "message_type", "") or getattr(event, "detail_type", "") or "").lower()
+    """读取会话类型；QQ 的 message_type 是数字内容类型，不是会话类型。"""
+    for name in ("message_type", "detail_type"):
+        value = getattr(event, name, None)
+        if isinstance(value, str):
+            value = value.lower()
+            if value in _SCENE_TYPES:
+                return value
+    return ""
 
 
 def event_is_group(event: Any) -> bool:
@@ -482,6 +508,9 @@ class PlatformBot:
 
     def mention_target(self, segment: Any) -> str | None:
         return self.adapter.mention_target(segment)
+
+    def has_reply_reference(self, event: Any) -> bool:
+        return self.adapter.has_reply_reference(event)
 
     async def send_group_message(self, group_id: str, message: Any):
         return await self.adapter.send_group_message(self.raw, str(group_id), message)
