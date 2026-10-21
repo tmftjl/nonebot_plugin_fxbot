@@ -124,6 +124,12 @@ class QQOfficialMessageAdapter(PlatformAdapter):
                 return str(value)
         return None
 
+    def _author_name(self, author: Any) -> str:
+        for field in ("username", "nickname", "user_name", "name"):
+            if value := getattr(author, field, None):
+                return str(value)
+        return ""
+
     def _quoted_elements(self, event: Any) -> list[Any]:
         """message_type=103 时，被引用内容由 msg_elements 定义。"""
         if getattr(event, "message_type", None) != 103:
@@ -184,9 +190,14 @@ class QQOfficialMessageAdapter(PlatformAdapter):
             filter(None, (self._author_id(getattr(item, "author", None)) for item in quoted)),
             None,
         )
+        sender_name = self.reply_sender_name(event) or next(
+            filter(None, (self._author_name(getattr(item, "author", None)) for item in quoted)),
+            "",
+        )
         return ReplyInfo(
             message_id=getattr(reply, "message_id", None) or (cached.get("id") if cached else None),
             sender_id=sender_id or (cached.get("sender_id") if cached else None),
+            sender_name=sender_name or (cached.get("sender_name") if cached else "") or "",
             image_sources=sources,
             texts=["\n".join(texts)] if texts else [],
         )

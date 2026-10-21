@@ -1,4 +1,4 @@
-"""AI 人格切换命令。"""
+"""AI 对话命令：人格切换和清空历史。"""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from nonebot.matcher import Matcher
 from nonebot.adapters import Bot, Event
 
 from ..config import get_manager as get_config_manager
+from .service import chat_service
 from ..adapter import selfBot, normalize_id, event_user_id, event_group_id, event_plain_text
 from .personas import load_personas, get_bound_persona, set_bound_persona
 from .message_adapter import session_id_for_event
@@ -80,26 +81,38 @@ async def _group_role(group_id: str, user_id: str, event: Any) -> str:
         return ""
 
 
+async def _can_manage(event: Any) -> bool:
+    """私聊或特权账号可用；群聊要求群主/管理员。"""
+    group_id = normalize_id(event_group_id(event))
+    if not group_id:
+        return True
+    user_id = normalize_id(event_user_id(event)) or ""
+    return _is_privileged(user_id) or await _group_role(group_id, user_id, event) in {"owner", "admin"}
+
+
 async def _persona_rule(bot: Bot, event: Event) -> bool:
     """人格切换命令匹配规则。"""
     return _persona_name(event_plain_text(event)) is not None
 
 
+async def _clear_rule(bot: Bot, event: Event) -> bool:
+    """清空对话命令匹配规则。"""
+    return _strip_prefix(event_plain_text(event).strip()) == "清空对话"
+
+
 persona_cmd = on_message(rule=Rule(_persona_rule), priority=5, block=True)
+clear_cmd = on_message(rule=Rule(_clear_rule), priority=5, block=True)
 
 
 @persona_cmd.handle()
 async def _handle_persona(bot: Bot, event: Event, matcher: Matcher) -> None:
     """切换当前群或当前私聊用户的人格。"""
     group_id = normalize_id(event_group_id(event))
-    user_id = normalize_id(event_user_id(event)) or ""
     session_id = session_id_for_event(event)
     scope = "本群" if group_id else ""
 
-    if group_id and not _is_privileged(user_id):
-        role = await _group_role(group_id, user_id, event)
-        if role not in {"owner", "admin"}:
-            await matcher.finish("只有群主或管理员可以切换本群人格")
+    if not await _can_manage(event):
+        await matcher.finish("只有群主或管理员可以切换本群人格")
 
     name = _persona_name(event_plain_text(event)) or ""
     personas = load_personas()
@@ -127,3 +140,12 @@ async def _handle_persona(bot: Bot, event: Event, matcher: Matcher) -> None:
         logger.opt(exception=True).warning(f"[Chat] 保存人格绑定失败: session={session_id}")
         await matcher.finish("人格设置失败，请稍后再试")
     await matcher.finish(f"{scope}人格已切换为「{name}」")
+
+
+@clear_cmd.handle()
+async def _handle_clear(bot: Bot, event: Event, matcher: Matcher) -> None:
+    """清空当前会话的 AI 历史。"""
+    if not await _can_manage(event):
+        await matcher.finish("只有群主或管理员可以清空本群对话")
+    await chat_service.clear_session(session_id_for_event(event))
+    await matcher.finish("已清空当前对话历史")

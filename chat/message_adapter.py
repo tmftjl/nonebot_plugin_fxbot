@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import io
 import base64
+import asyncio
 from typing import Any
 
+from PIL import Image, ImageOps
 from nonebot import logger
 
 from .types import ChatRequest, InboundSegment
@@ -23,6 +26,8 @@ from ..utils.http import ResponseTooLargeError, read_limited, ensure_public_http
 
 _MAX_IMAGE_COUNT = 4
 _MAX_IMAGE_BYTES = 5 * 1024 * 1024
+_MAX_IMAGE_SIDE = 1024
+_MAX_IMAGE_BYTES_SENT = 1024 * 1024
 _MAX_REDIRECTS = 3
 _MAX_QUOTED_CHARS = 500
 
@@ -40,6 +45,28 @@ def _image_mime(data: bytes) -> str:
     if data.startswith(b"BM"):
         return "image/bmp"
     return "image/jpeg"
+
+
+def _compress_image(data: bytes) -> bytes:
+    """缩小过大的图片，减少模型请求体积；无法解码时原样返回。"""
+    try:
+        image = ImageOps.exif_transpose(Image.open(io.BytesIO(data)))
+        image.load()
+    except Exception:
+        return data
+    if max(image.size) <= _MAX_IMAGE_SIDE and len(data) <= _MAX_IMAGE_BYTES_SENT:
+        return data
+    if image.mode in {"RGBA", "LA", "P"}:
+        rgba = image.convert("RGBA")
+        background = Image.new("RGB", rgba.size, (255, 255, 255))
+        background.paste(rgba, mask=rgba.getchannel("A"))
+        image = background
+    elif image.mode != "RGB":
+        image = image.convert("RGB")
+    image.thumbnail((_MAX_IMAGE_SIDE, _MAX_IMAGE_SIDE))
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG", quality=85, optimize=True)
+    return buffer.getvalue() or data
 
 
 async def _fetch_remote_image(url: str) -> bytes:
@@ -100,16 +127,27 @@ async def resolve_images(event: Any, reply: ReplyInfo | None = None) -> list[str
             logger.warning(f"[Chat] 图片加载失败，已跳过: {exc}")
             continue
         if data:
+            data = await asyncio.to_thread(_compress_image, data)
             images.append(f"data:{_image_mime(data)};base64,{base64.b64encode(data).decode('ascii')}")
     return images
 
 
+def _quoted_sender(reply: ReplyInfo) -> str:
+    """引用消息的发言人标识，拿不到昵称时只显示 ID。"""
+    name = " ".join(str(reply.sender_name or "").split())[:32]
+    if name and reply.sender_id:
+        return f"{name}({reply.sender_id})"
+    return name or str(reply.sender_id or "")
+
+
 def _quoted_text(reply: ReplyInfo | None) -> str:
-    """提取引用消息正文；压成单行并限长，避免被用来伪造多段消息。"""
+    """提取引用消息正文和发言人；压成单行并限长，避免被用来伪造多段消息。"""
     if reply is None:
         return ""
-    text = " ".join(" ".join(str(part) for part in reply.texts).split())
-    return text[:_MAX_QUOTED_CHARS]
+    text = " ".join(" ".join(str(part) for part in reply.texts).split())[:_MAX_QUOTED_CHARS]
+    sender = _quoted_sender(reply)
+    label = f"[引用 {sender}]" if sender else "[引用]"
+    return f"{label} {text}" if text else label
 
 
 async def _reply_info(bot: Any, event: Any) -> ReplyInfo | None:

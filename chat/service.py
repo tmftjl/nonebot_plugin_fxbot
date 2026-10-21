@@ -56,7 +56,7 @@ def _build_user_content(request: ChatRequest) -> str | list[dict[str, Any]]:
     """构造用户消息内容，群聊带上发言人标识，引用和图片一并附带。"""
     text = request.text
     if request.quoted_text:
-        text = f"[引用] {request.quoted_text}\n{text}" if text else f"[引用] {request.quoted_text}"
+        text = f"{request.quoted_text}\n{text}" if text else request.quoted_text
     if request.is_group:
         label = _speaker_label(request.user_id, request.user_name)
         if text:
@@ -101,8 +101,9 @@ async def _describe_image(provider: Any, url: str) -> str:
             ],
             max_tokens=256,
         )
-    except Exception:
-        logger.opt(exception=True).warning("[Chat] 图片描述生成失败")
+    except Exception as exc:
+        logger.opt(exception=True).debug("[Chat] 图片描述生成失败")
+        logger.warning(f"[Chat] 图片描述生成失败，已跳过: {type(exc).__name__}: {exc}")
         return ""
     return _clean_description(response.content)
 
@@ -143,8 +144,12 @@ class ChatService:
 
     async def process(self, request: ChatRequest, runtime: ToolRuntime | None = None) -> ChatResponse:
         """处理一次对话请求。"""
-        async with self.session_store.lock(request.session_id):
-            return await self._process(request, runtime)
+        return await self._process(request, runtime)
+
+    async def clear_session(self, session_id: str) -> None:
+        """清空会话历史。"""
+        async with self.session_store.lock(session_id):
+            self.session_store.clear(session_id)
 
     async def record_group_message(
         self,
@@ -168,8 +173,9 @@ class ChatService:
         if images and bool(chat_cfg["image_description"]):
             try:
                 provider = await provider_manager.get_provider()
-            except Exception:
-                logger.opt(exception=True).warning("[Chat] 群聊图片描述跳过：Provider 不可用")
+            except Exception as exc:
+                logger.opt(exception=True).debug("[Chat] 群聊图片描述跳过：Provider 不可用")
+                logger.warning(f"[Chat] 群聊图片描述跳过：Provider 不可用（{type(exc).__name__}）")
             else:
                 descriptions = await _describe_images(provider, images)
         placeholders = [f"[图片: {desc}]" if desc else "[图片]" for desc in descriptions]
@@ -186,23 +192,17 @@ class ChatService:
             )
 
     async def _process(self, request: ChatRequest, runtime: ToolRuntime | None) -> ChatResponse:
-        """在会话锁内完成一轮对话。"""
+        """完成一轮对话；模型调用不持有会话锁，期间到达的群消息按真实顺序落库。"""
         chat_cfg = get_config_manager().get_system()["chat"]
         limit = int(chat_cfg["group_history"] if request.is_group else chat_cfg["max_history"])
         provider = await provider_manager.get_provider()
         runtime = runtime or ToolRuntime()
-        messages = self.session_store.get(request.session_id)
+        user_content = _build_user_content(request)
         persona_name = request.metadata.get("persona_name") if isinstance(request.metadata, dict) else None
         bound_persona = get_bound_persona(request.session_id)
         persona_text = get_persona_text(str(persona_name or bound_persona or chat_cfg["persona"]))
         if request.is_group:
             persona_text = f"{persona_text}{_GROUP_CHAT_HINT}".strip()
-        if persona_text:
-            if not messages or messages[0].get("role") != "system":
-                messages.insert(0, {"role": "system", "content": persona_text})
-            else:
-                messages[0] = {"role": "system", "content": persona_text}
-        messages.append({"role": "user", "content": _build_user_content(request)})
 
         # 描述与主对话并发执行，避免图片消息多等一次模型调用
         description_task = (
@@ -211,6 +211,19 @@ class ChatService:
             else None
         )
         try:
+            async with self.session_store.lock(request.session_id):
+                history = [m for m in self.session_store.get(request.session_id) if m.get("role") != "system"]
+                while history and history[0].get("role") != "user":
+                    history.pop(0)
+                epoch = self.session_store.epoch(request.session_id)
+                entry = _strip_images([{"role": "user", "content": user_content}])[0]
+                self.session_store.append(request.session_id, entry, limit=limit)
+
+            messages = history
+            if persona_text:
+                messages.insert(0, {"role": "system", "content": persona_text})
+            messages.append({"role": "user", "content": user_content})
+
             tools = await _allowed_tools(runtime)
             response = await provider.chat(messages=messages, tools=tools or None)
             max_tool_rounds = int(chat_cfg["max_tool_rounds"])
@@ -248,12 +261,12 @@ class ChatService:
                 logger.warning(f"[Chat] 达到最大工具轮数，已丢弃残留工具调用: session={request.session_id}")
             response = _finalize_response(response)
             descriptions = await description_task if description_task is not None else []
-            messages.append(response.to_message_dict())
-            self.session_store.replace(
-                request.session_id,
-                _strip_images(messages, descriptions),
-                limit=limit,
-            )
+            if descriptions:
+                stripped = _strip_images([{"role": "user", "content": user_content}], descriptions)[0]
+                entry["content"] = stripped["content"]
+            async with self.session_store.lock(request.session_id):
+                if self.session_store.epoch(request.session_id) == epoch:
+                    self.session_store.append(request.session_id, response.to_message_dict(), limit=limit)
             return ChatResponse(text=response.content, raw=response)
         finally:
             if description_task is not None and not description_task.done():

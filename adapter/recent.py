@@ -85,6 +85,10 @@ def _sender_id(event: Any) -> str:
     return _value(author, "id", "user_openid", "member_openid")
 
 
+def _sender_name(event: Any) -> str:
+    return _value(getattr(event, "author", None), "username", "nickname", "user_name", "name")
+
+
 def remember_event(bot: Any, event: Any, message: Any) -> None:
     """记录消息 ID、图片 URL和少量元数据。"""
     key = _key(bot, event)
@@ -97,6 +101,7 @@ def remember_event(bot: Any, event: Any, message: Any) -> None:
         "id": message_id,
         "msg_indices": msg_indices,
         "sender_id": _sender_id(event),
+        "sender_name": _sender_name(event),
         "images": images,
         "texts": _texts(message),
     }

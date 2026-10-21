@@ -27,6 +27,7 @@ class ReplyInfo:
 
     message_id: int | str | None = None
     sender_id: str | None = None
+    sender_name: str = ""
     image_sources: list[str | bytes] = field(default_factory=list)
     texts: list[str] = field(default_factory=list)
 
@@ -87,6 +88,19 @@ class PlatformAdapter(ABC):
         """读取被引用消息的发送者 ID；平台无法提供时返回 None。"""
         return None
 
+    def reply_sender_name(self, event: Any) -> str:
+        """读取被引用消息的发送者昵称；平台无法提供时返回空串。"""
+        reply = getattr(event, "reply", None)
+        for holder, keys in (
+            (getattr(reply, "sender", None), ("card", "nickname", "user_name")),
+            (getattr(reply, "author", None), ("username", "nickname", "user_name")),
+        ):
+            for key in keys:
+                value = holder.get(key) if isinstance(holder, dict) else getattr(holder, key, None)
+                if value:
+                    return str(value)
+        return ""
+
     def remember_event(self, bot: Any, event: Any, message: Any) -> None:
         """记录平台允许缓存的消息轻量信息。"""
 
@@ -117,6 +131,7 @@ class PlatformAdapter(ABC):
         return ReplyInfo(
             message_id=message_id,
             sender_id=self.reply_sender_id(event),
+            sender_name=self.reply_sender_name(event),
             image_sources=self.extract_raw_image_sources(reply_message),
             texts=self.extract_raw_texts(reply_message),
         )
