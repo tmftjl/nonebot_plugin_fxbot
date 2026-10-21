@@ -14,6 +14,7 @@ from .storage import PermissionStorage, get_storage, scan_plugins_for_permission
 
 _CHECKER_EXPORTS = {
     "PermissionChecker",
+    "check_permission",
     "permission_for",
     "permission_for_cmd",
     "permission_for_plugin",
@@ -38,6 +39,7 @@ __all__ = [
     "PermissionStorage",
     "PolicyChain",
     "PolicyResult",
+    "check_permission",
     "get_storage",
     "permission_for",
     "permission_for_cmd",

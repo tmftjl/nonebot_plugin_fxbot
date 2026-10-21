@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import socket
+import asyncio
+import ipaddress
+from urllib.parse import urlsplit
 from collections.abc import Mapping, AsyncIterator
 
 import httpx
@@ -11,6 +15,24 @@ _client: httpx.AsyncClient | None = None
 
 class ResponseTooLargeError(RuntimeError):
     """响应体超出调用方给出的上限。"""
+
+
+async def ensure_public_http_url(url: str) -> None:
+    """校验 URL 只指向公网 http(s) 主机，避免把下载变成 SSRF。"""
+    parsed = urlsplit(str(url or ""))
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError(f"不支持的 URL 协议: {parsed.scheme or '(空)'}")
+    host = parsed.hostname
+    if not host:
+        raise ValueError("URL 缺少主机名")
+    try:
+        infos = await asyncio.to_thread(socket.getaddrinfo, host, parsed.port or 0, type=socket.SOCK_STREAM)
+    except OSError as exc:
+        raise ValueError(f"无法解析主机名: {host}") from exc
+    for info in infos:
+        address = str(info[4][0]).split("%", 1)[0]
+        if not ipaddress.ip_address(address).is_global:
+            raise ValueError(f"拒绝访问非公网地址: {address}")
 
 
 async def get_shared_async_client() -> httpx.AsyncClient:
@@ -104,7 +126,7 @@ async def get_bytes_with_browser_fallback(
             headers=headers,
         ) as response:
             response.raise_for_status()
-            return await _read_limited(response.aiter_bytes(), response.headers.get("content-length"), max_bytes)
+            return await read_limited(response.aiter_bytes(), response.headers.get("content-length"), max_bytes)
     except httpx.HTTPError as exc:
         return await _get_bytes_with_curl(
             url,
@@ -135,7 +157,7 @@ async def _get_bytes_with_curl(
         async with curl_cffi.AsyncSession(allow_redirects=follow_redirects, impersonate="chrome") as session:
             response = await session.get(url, headers=dict(headers or {}), timeout=timeout, stream=True)
             response.raise_for_status()
-            return await _read_limited(
+            return await read_limited(
                 response.aiter_content(chunk_size=1024 * 1024),
                 response.headers.get("content-length"),
                 max_bytes,
@@ -147,7 +169,7 @@ async def _get_bytes_with_curl(
         raise RuntimeError(f"HTTP 请求失败，浏览器 TLS 兜底请求也未成功：{exc}") from cause
 
 
-async def _read_limited(
+async def read_limited(
     chunks: AsyncIterator[bytes],
     content_length: str | None,
     max_bytes: int | None,

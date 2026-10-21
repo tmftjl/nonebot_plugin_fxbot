@@ -54,9 +54,10 @@ def tool(
     description: str,
     parameters: dict[str, Any],
     args_model: Any = None,
+    permission: str = "",
     registry: ToolRegistry = default_registry,
 ):
-    """注册 AI 工具的装饰器。"""
+    """注册 AI 工具的装饰器；permission 复用命令权限，格式为 plugin:command。"""
 
     def decorator(func: ToolHandler) -> ToolHandler:
         registry.register(
@@ -66,6 +67,7 @@ def tool(
                 parameters=parameters,
                 handler=func,
                 args_model=args_model,
+                permission=permission,
             )
         )
         return func

@@ -29,6 +29,8 @@ SYSTEM_DEFAULTS = {
         "provider": "",
         "providers": {},
         "max_history": 20,
+        "group_history": 50,
+        "image_description": True,
         "max_tool_rounds": 3,
     },
 }

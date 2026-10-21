@@ -175,3 +175,8 @@ def permission_for_plugin(plugin: str, *, category: str = "sub") -> Permission:
 def permission_for_cmd(plugin: str, command: str, *, category: str = "sub") -> Permission:
     """构造命令级权限。"""
     return permission_for(f"{plugin}:{command}", category=category)
+
+
+async def check_permission(feature: str, bot: Bot, event: Event) -> bool:
+    """按 feature（plugin 或 plugin:command）检查当前事件是否放行。"""
+    return await _global_checker.check(feature, bot, event)

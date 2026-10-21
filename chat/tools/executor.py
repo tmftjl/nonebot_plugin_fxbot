@@ -8,9 +8,23 @@ from typing import Any
 
 from nonebot import logger
 
-from .types import ToolError, ToolContext
+from .types import ToolSpec, ToolError, ToolContext
 from .runtime import ToolRuntime
 from .registry import ToolRegistry, default_registry
+from ...permission import check_permission
+
+
+async def tool_allowed(spec: ToolSpec, runtime: ToolRuntime) -> bool:
+    """判断当前调用者是否有权使用该工具；无 bot/event 时按无权限处理。"""
+    if not spec.permission:
+        return True
+    if runtime.bot is None or runtime.event is None:
+        return False
+    try:
+        return await check_permission(spec.permission, runtime.bot, runtime.event)
+    except Exception:
+        logger.opt(exception=True).warning(f"[Tool] 权限检查失败: {spec.name}")
+        return False
 
 
 async def execute_tool(
@@ -25,6 +39,8 @@ async def execute_tool(
     spec = registry.get(name)
     if spec is None:
         return {"ok": False, "error": f"工具不存在: {name}"}
+    if not await tool_allowed(spec, runtime):
+        return {"ok": False, "error": "权限不足，无法执行该操作"}
 
     try:
         args = json.loads(arguments) if isinstance(arguments, str) else dict(arguments or {})

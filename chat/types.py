@@ -22,8 +22,10 @@ class ChatRequest:
     user_id: str
     group_id: str | None
     text: str
+    user_name: str = ""
     segments: list[InboundSegment] = field(default_factory=list)
     images: list[str] = field(default_factory=list)
+    quoted_text: str = ""
     platform: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
 

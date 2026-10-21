@@ -48,3 +48,4 @@ class ToolSpec:
     parameters: dict[str, Any]
     handler: ToolHandler
     args_model: type[BaseModel] | None = None  # type: ignore[name-defined]
+    permission: str = ""

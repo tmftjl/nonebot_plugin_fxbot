@@ -28,24 +28,34 @@ class ChatSessionStore:
 
     def __init__(self, max_messages: int = 20) -> None:
         self.max_messages = max_messages
-        self._store: dict[str, deque[dict[str, Any]]] = defaultdict(lambda: deque(maxlen=self.max_messages))
+        self._store: dict[str, deque[dict[str, Any]]] = {}
         self._locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
     def lock(self, session_id: str) -> asyncio.Lock:
         """返回会话级互斥锁，避免并发消息互相覆盖历史。"""
         return self._locks[session_id]
 
+    def _deque(self, session_id: str, limit: int | None) -> deque[dict[str, Any]]:
+        """按当前上限获取队列，上限变化时重建以立即生效。"""
+        size = max(int(self.max_messages if limit is None else limit), 0)
+        current = self._store.get(session_id)
+        if current is None or current.maxlen != size:
+            current = deque(current or (), maxlen=size)
+            self._store[session_id] = current
+        return current
+
     def get(self, session_id: str) -> list[dict[str, Any]]:
         """获取会话历史。"""
-        return list(self._store[session_id])
+        return list(self._store.get(session_id, ()))
 
-    def append(self, session_id: str, message: dict[str, Any]) -> None:
+    def append(self, session_id: str, message: dict[str, Any], *, limit: int | None = None) -> None:
         """追加一条消息。"""
-        self._store[session_id].append(message)
+        self._deque(session_id, limit).append(message)
 
-    def replace(self, session_id: str, messages: list[dict[str, Any]]) -> None:
+    def replace(self, session_id: str, messages: list[dict[str, Any]], *, limit: int | None = None) -> None:
         """替换会话历史。"""
-        self._store[session_id] = deque(_trim(messages, self.max_messages), maxlen=self.max_messages)
+        size = max(int(self.max_messages if limit is None else limit), 0)
+        self._store[session_id] = deque(_trim(messages, size), maxlen=size)
 
     def clear(self, session_id: str) -> None:
         """清空会话历史。"""

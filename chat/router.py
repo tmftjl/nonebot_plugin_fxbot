@@ -12,15 +12,17 @@ from nonebot.adapters import Bot, Event
 from ..config import get_manager as get_config_manager
 from .service import chat_service
 from ..adapter import (
+    normalize_id,
     event_is_tome,
     event_message,
     event_user_id,
     event_group_id,
+    event_user_name,
     event_plain_text,
     extract_raw_image_sources,
 )
 from .tool_runtime import default_runtime_factory
-from .message_adapter import adapt_message_event
+from .message_adapter import resolve_images, adapt_message_event, session_id_for_event
 from ..permission.message_policy import should_process_fxbot_message
 
 
@@ -51,14 +53,19 @@ def _has_image(event: Any) -> bool:
         return False
 
 
+def _allowed_group_id(cfg: dict[str, Any], event: Any) -> str | None:
+    """返回允许使用 AI 的群 ID，不在白名单内时返回 None。"""
+    group_id = event_group_id(event)
+    if not group_id:
+        return None
+    allowlist = _id_allowlist(cfg, "group_allowlist")
+    return group_id if not allowlist or group_id in allowlist else None
+
+
 def _match_context(cfg: dict[str, Any], event: Any) -> bool:
     """按会话类型判断是否允许进入 AI 兜底。"""
-    group_id = event_group_id(event)
-    if group_id:
-        if not _is_to_me(event):
-            return False
-        allowlist = _id_allowlist(cfg, "group_allowlist")
-        return not allowlist or group_id in allowlist
+    if event_group_id(event):
+        return bool(_allowed_group_id(cfg, event)) and _is_to_me(event)
     if not bool(cfg["private_enabled"]):
         return False
     allowlist = _id_allowlist(cfg, "private_allowlist")
@@ -83,7 +90,41 @@ async def _ai_fallback_rule(bot: Bot, event: Event) -> bool:
     return True
 
 
+async def _context_rule(bot: Bot, event: Event) -> bool:
+    """记录未 @ Bot 的群消息，作为后续对话的上下文。"""
+    if not should_process_fxbot_message(bot, event):
+        return False
+    cfg = _chat_cfg()
+    if not bool(cfg["enabled"]) or int(cfg["group_history"]) <= 0:
+        return False
+    if not _allowed_group_id(cfg, event) or _is_to_me(event):
+        return False
+    text = event_plain_text(event)
+    prefix = tuple(str(item) for item in cfg["command_prefixes"])
+    if text and text.startswith(prefix):
+        return False
+    return bool(text) or _has_image(event)
+
+
+# 优先级高于 AI 兜底：先记录群聊上下文，再由兜底决定是否回复
+context_router = on_message(rule=Rule(_context_rule), priority=98, block=False)
 ai_router = on_message(rule=Rule(_ai_fallback_rule), priority=99, block=True)
+
+
+@context_router.handle()
+async def _handle_context(bot: Bot, event: Event) -> None:
+    """把普通群消息写入 AI 会话历史。"""
+    user_id = normalize_id(event_user_id(event)) or ""
+    has_image = _has_image(event)
+    images = await resolve_images(event) if has_image and bool(_chat_cfg()["image_description"]) else []
+    await chat_service.record_group_message(
+        session_id_for_event(event),
+        user_id,
+        event_user_name(event, user_id),
+        event_plain_text(event),
+        images=images,
+        has_image=has_image,
+    )
 
 
 @ai_router.handle()

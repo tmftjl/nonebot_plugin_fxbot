@@ -177,11 +177,26 @@ def _system_config_tab() -> dict[str, Any]:
                     },
                     {
                         "field": "max_history",
-                        "label": "最大历史轮数",
+                        "label": "私聊历史条数",
                         "component": "InputNumber",
                         "default": SYSTEM_DEFAULTS["chat"]["max_history"],
-                        "helpMessage": "保留给 AI 的会话轮数。",
+                        "helpMessage": "私聊会话保留给 AI 的消息条数。",
                         "componentProps": {"min": 0},
+                    },
+                    {
+                        "field": "group_history",
+                        "label": "群聊历史条数",
+                        "component": "InputNumber",
+                        "default": SYSTEM_DEFAULTS["chat"]["group_history"],
+                        "helpMessage": "群聊保留的消息条数，包含未 @Bot 的群消息；填 0 表示不记录群聊历史。",
+                        "componentProps": {"min": 0},
+                    },
+                    {
+                        "field": "image_description",
+                        "label": "图片转文字",
+                        "component": "Switch",
+                        "default": SYSTEM_DEFAULTS["chat"]["image_description"],
+                        "helpMessage": "收到图片时额外调用一次模型生成文字描述并写入历史；关闭后只记 [图片]。",
                     },
                     {
                         "field": "max_tool_rounds",
