@@ -12,11 +12,15 @@ from nonebot import logger
 from google.genai import types
 
 from ..base import ChatProvider, EmbeddingProvider
-from ..entities import LLMResponse
+from ..entities import LLMResponse, ProviderType
 from ..register import register_provider
 
 
-@register_provider("gemini_chat", "Google Gemini API")
+@register_provider(
+    "gemini_chat",
+    "Google Gemini API",
+    default_config={"base_url": "https://generativelanguage.googleapis.com", "timeout": 60},
+)
 class GeminiProvider(ChatProvider):
     """Gemini 对话 Provider。"""
 
@@ -245,7 +249,12 @@ class GeminiProvider(ChatProvider):
             return []
 
 
-@register_provider("gemini_embedding", "Google Gemini Embedding")
+@register_provider(
+    "gemini_embedding",
+    "Google Gemini Embedding",
+    provider_type=ProviderType.EMBEDDING,
+    default_config={"base_url": "https://generativelanguage.googleapis.com", "timeout": 60, "embedding_dim": 768},
+)
 class GeminiEmbeddingProvider(EmbeddingProvider):
     """Gemini 嵌入 Provider。"""
 

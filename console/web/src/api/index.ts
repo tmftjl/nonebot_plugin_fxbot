@@ -1,6 +1,12 @@
 // -*- coding: utf-8 -*-
 import axios, { type AxiosInstance, type AxiosResponse } from 'axios'
-import type { ApiResponse, PermissionConfig, StatsToday } from '@/types/api'
+import type {
+  ApiResponse,
+  ProviderListData,
+  ProviderPayload,
+  PermissionConfig,
+  StatsToday,
+} from '@/types/api'
 
 export function getToken(): string {
   try {
@@ -115,6 +121,16 @@ export const renewalApi = {
   runJob: () => api.post<{ expired: number; left: number }>('/membership/job/run'),
 }
 
+// AI Provider API
+export const providerApi = {
+  list: () => api.get<ApiResponse<ProviderListData>>('/ai_chat/providers'),
+  create: (payload: ProviderPayload) => api.post<ApiResponse>('/ai_chat/provider', payload),
+  update: (name: string, payload: ProviderPayload) =>
+    api.put<ApiResponse>(`/ai_chat/provider/${encodeURIComponent(name)}`, payload),
+  remove: (name: string) => api.delete<ApiResponse>(`/ai_chat/provider/${encodeURIComponent(name)}`),
+  setDefault: (name: string) => api.post<ApiResponse>(`/ai_chat/provider/${encodeURIComponent(name)}/default`),
+}
+
 // 插件/命令显示名 API
 export const metaApi = {
   getPlugins: () => api.get<Record<string, string>>('/plugins'),
@@ -126,8 +142,10 @@ export const metaApi = {
     }
   },
   getPersonas: () => api.get<Record<string, string>>('/ai_chat/personas'),
-  createPersona: (key: string, desc: string) => api.post<{ success: boolean }>('/ai_chat/persona', { key, desc }),
-  updatePersona: (key: string, desc: string) => api.put<{ success: boolean }>(`/ai_chat/persona/${encodeURIComponent(key)}`, { desc }),
+  createPersona: (key: string, desc: string) =>
+    api.post<{ success: boolean; message?: string }>('/ai_chat/persona', { key, desc }),
+  updatePersona: (key: string, desc: string) =>
+    api.put<{ success: boolean; message?: string }>(`/ai_chat/persona/${encodeURIComponent(key)}`, { desc }),
   deletePersona: (key: string) => api.delete<{ success: boolean }>(`/ai_chat/persona/${encodeURIComponent(key)}`),
   getKnowledgeStats: (personaName: string) => api.get<{ persona_name: string; count: number }>(`/ai_chat/knowledge/${encodeURIComponent(personaName)}/stats`),
   importKnowledgeText: (personaName: string, text: string, source: string = 'webui_import') =>

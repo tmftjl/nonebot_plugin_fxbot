@@ -22,6 +22,9 @@ SYSTEM_DEFAULTS = {
     "chat": {
         "enabled": False,
         "command_prefixes": ["#", "/", "."],
+        "private_enabled": False,
+        "private_allowlist": [],
+        "persona": "default",
         "provider": "",
         "providers": {},
         "max_history": 20,

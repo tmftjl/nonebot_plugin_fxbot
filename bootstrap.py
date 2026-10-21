@@ -85,6 +85,7 @@ async def init() -> None:
     _import_startup_module("membership.commands")
     _import_startup_module("system_control")
     _import_startup_module("chat.router")
+    _import_startup_module("chat.commands")
 
     try:
         from .membership.tasks import setup_membership_tasks

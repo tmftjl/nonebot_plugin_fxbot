@@ -12,6 +12,7 @@ dependencies = [
     "sqlalchemy",
     "aiosqlite",
     "httpx[socks]",
+    "openai>=1.0.0",
     "fastapi",
     "Pillow>=9.2",
     "playwright>=1.40",

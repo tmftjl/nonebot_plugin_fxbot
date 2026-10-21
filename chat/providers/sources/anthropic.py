@@ -14,7 +14,11 @@ from ..entities import LLMResponse
 from ..register import register_provider
 
 
-@register_provider("anthropic_chat", "Anthropic Claude API")
+@register_provider(
+    "anthropic_chat",
+    "Anthropic Claude API",
+    default_config={"base_url": "https://api.anthropic.com", "timeout": 60},
+)
 class AnthropicProvider(ChatProvider):
     """Anthropic Claude 对话 Provider。"""
 
@@ -26,6 +30,13 @@ class AnthropicProvider(ChatProvider):
             timeout=float(config["timeout"]),
         )
         self.model_name = str(config["model"])
+
+    async def close(self) -> None:
+        """关闭 Anthropic 异步客户端。"""
+        try:
+            await self.client.close()
+        except Exception:
+            logger.opt(exception=True).warning(f"[{self.provider_id}] 关闭客户端失败")
 
     def _convert_to_anthropic_format(
         self,

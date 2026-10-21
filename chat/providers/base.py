@@ -29,6 +29,9 @@ class BaseProvider(abc.ABC):
         """设置当前模型名。"""
         self.model_name = model
 
+    async def close(self) -> None:
+        """释放 Provider 持有的资源，默认无操作。"""
+
     def meta(self) -> ProviderMeta:
         """返回 Provider 元数据。"""
         return ProviderMeta(

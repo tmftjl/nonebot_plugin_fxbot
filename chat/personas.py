@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import json
 from pathlib import Path
 from dataclasses import dataclass
 
@@ -77,17 +79,24 @@ def get_persona_text(name: str | None = None) -> str:
     return persona.details if persona else ""
 
 
-def save_persona_text(name: str, text: str) -> Path:
-    """保存人格内容。"""
+def save_persona_text(name: str, text: str, *, overwrite: bool = True) -> Path:
+    """保存人格内容；overwrite=False 时同名人格已存在会抛出 FileExistsError。"""
     key = str(name or "").strip()
     if not key:
         raise ValueError("人格名称不能为空")
-    if any(ch in key for ch in '/\\:*?"<>|') or key in {".", ".."}:
-        raise ValueError("人格名称非法")
+    if any(ch in key for ch in '/\\:*?"<>|\x00') or key in {".", ".."}:
+        raise ValueError('人格名称不能包含 / \\ : * ? " < > |')
+    content = str(text or "").strip()
+    if not content:
+        raise ValueError("人格描述不能为空")
+    if "\x00" in content:
+        raise ValueError("人格描述包含非法字符")
     dir_path = get_personas_dir()
     _ensure_default_persona(dir_path)
+    if not overwrite and any((dir_path / f"{key}{ext}").exists() for ext in (".md", ".txt")):
+        raise FileExistsError(key)
     path = dir_path / f"{key}.md"
-    path.write_text(str(text or "").strip(), encoding="utf-8")
+    path.write_text(content, encoding="utf-8")
     return path
 
 
@@ -111,3 +120,41 @@ def delete_persona(name: str) -> int:
 def list_personas() -> dict[str, str]:
     """返回人格名称到内容的映射。"""
     return {key: item.details for key, item in load_personas().items()}
+
+
+def _bindings_path() -> Path:
+    """返回会话人格绑定的存储路径。"""
+    return config_dir("ai_chat") / "bindings.json"
+
+
+def load_persona_bindings() -> dict[str, str]:
+    """读取会话到人格的绑定。"""
+    try:
+        raw = json.loads(_bindings_path().read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except Exception:
+        logger.opt(exception=True).warning("[AI Chat] 读取人格绑定失败")
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    return {str(key): str(value).strip() for key, value in raw.items() if str(value).strip()}
+
+
+def get_bound_persona(session_id: str) -> str:
+    """读取会话绑定的人格名。"""
+    return load_persona_bindings().get(str(session_id), "")
+
+
+def set_bound_persona(session_id: str, name: str | None) -> None:
+    """写入或清除会话绑定的人格名。"""
+    bindings = load_persona_bindings()
+    key = str(session_id)
+    if name:
+        bindings[key] = str(name)
+    else:
+        bindings.pop(key, None)
+    path = _bindings_path()
+    temp = path.with_name(f"{path.name}.tmp")
+    temp.write_text(json.dumps(bindings, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(temp, path)

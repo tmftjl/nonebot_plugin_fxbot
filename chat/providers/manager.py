@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from nonebot import logger
@@ -41,6 +42,7 @@ class ProviderManager:
         if self._initialized:
             return
         self._providers: dict[str, BaseProvider] = {}
+        self._lock = asyncio.Lock()
         self._initialized = True
         self.import_sources()
 
@@ -48,34 +50,40 @@ class ProviderManager:
         """导入所有 Provider source 以触发注册装饰器。"""
         from . import sources  # noqa: F401
 
-    def get_provider(self, name: str = "") -> ChatProvider:
-        """获取对话 Provider。"""
-        provider_name, config = self._resolve_config(name, capability="chat")
-        if provider_name in self._providers:
-            provider = self._providers[provider_name]
-            if isinstance(provider, ChatProvider):
-                return provider
+    async def get_provider(self, name: str = "") -> ChatProvider:
+        """获取对话 Provider，配置变化时自动重建。"""
+        async with self._lock:
+            provider_name, config = self._resolve_config(name, capability="chat")
+            cached = self._providers.get(provider_name)
+            if isinstance(cached, ChatProvider) and cached.config == config:
+                return cached
+            if cached is not None:
+                self._providers.pop(provider_name, None)
+                await self._release(cached)
 
-        provider = self._create_provider(provider_name, config)
-        if not isinstance(provider, ChatProvider):
-            raise TypeError(f"Provider {provider_name} 不是 ChatProvider")
-        self._providers[provider_name] = provider
-        return provider
+            provider = self._create_provider(provider_name, config)
+            if not isinstance(provider, ChatProvider):
+                raise TypeError(f"Provider {provider_name} 不是 ChatProvider")
+            self._providers[provider_name] = provider
+            return provider
 
-    def get_embedding_provider(self, name: str = "") -> EmbeddingProvider:
-        """获取嵌入 Provider。"""
-        provider_name, config = self._resolve_config(name, capability="embedding")
-        cache_key = f"embedding:{provider_name}"
-        if cache_key in self._providers:
-            provider = self._providers[cache_key]
-            if isinstance(provider, EmbeddingProvider):
-                return provider
+    async def get_embedding_provider(self, name: str = "") -> EmbeddingProvider:
+        """获取嵌入 Provider，配置变化时自动重建。"""
+        async with self._lock:
+            provider_name, config = self._resolve_config(name, capability="embedding")
+            cache_key = f"embedding:{provider_name}"
+            cached = self._providers.get(cache_key)
+            if isinstance(cached, EmbeddingProvider) and cached.config == config:
+                return cached
+            if cached is not None:
+                self._providers.pop(cache_key, None)
+                await self._release(cached)
 
-        provider = self._create_provider(provider_name, config)
-        if not isinstance(provider, EmbeddingProvider):
-            raise TypeError(f"Provider {provider_name} 不是 EmbeddingProvider")
-        self._providers[cache_key] = provider
-        return provider
+            provider = self._create_provider(provider_name, config)
+            if not isinstance(provider, EmbeddingProvider):
+                raise TypeError(f"Provider {provider_name} 不是 EmbeddingProvider")
+            self._providers[cache_key] = provider
+            return provider
 
     def _resolve_config(self, name: str, *, capability: str) -> tuple[str, dict[str, Any]]:
         configs = _provider_configs()
@@ -105,11 +113,21 @@ class ProviderManager:
         logger.debug(f"[ProviderManager] 已加载: {name} (type={provider_type})")
         return instance
 
-    def reset(self) -> None:
-        """清空已缓存的 Provider。"""
-        count = len(self._providers)
-        self._providers.clear()
-        logger.info(f"[ProviderManager] 已重置 {count} 个 Provider")
+    async def _release(self, provider: BaseProvider) -> None:
+        """释放 Provider 持有的资源。"""
+        try:
+            await provider.close()
+        except Exception:
+            logger.opt(exception=True).warning(f"[ProviderManager] 关闭 {provider.provider_id} 失败")
+
+    async def reset(self) -> None:
+        """关闭并清空已缓存的 Provider。"""
+        async with self._lock:
+            providers = list(self._providers.values())
+            self._providers.clear()
+            for provider in providers:
+                await self._release(provider)
+            logger.info(f"[ProviderManager] 已重置 {len(providers)} 个 Provider")
 
     def list_cached(self) -> dict[str, str]:
         """列出已缓存的 Provider。"""

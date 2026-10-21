@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import Depends, APIRouter
+from nonebot import logger
 
 from ..auth import bearer_auth
 from ...chat.personas import list_personas, delete_persona, save_persona_text
@@ -39,22 +40,36 @@ async def get_ai_personas() -> dict[str, str]:
 
 
 @router.post("/ai_chat/persona")
-async def create_ai_persona(payload: dict[str, Any]) -> dict[str, bool]:
+async def create_ai_persona(payload: dict[str, Any]) -> dict[str, Any]:
     """创建 AI 人格。"""
     key = str(payload.get("key") or "").strip()
     desc = str(payload.get("desc") or "").strip()
     if not key:
-        return {"success": False}
-    save_persona_text(key, desc)
-    return {"success": True}
+        return {"success": False, "message": "人格名称不能为空"}
+    try:
+        save_persona_text(key, desc, overwrite=False)
+    except FileExistsError:
+        return {"success": False, "message": "已存在同名人格"}
+    except ValueError as exc:
+        return {"success": False, "message": str(exc)}
+    except OSError:
+        logger.opt(exception=True).error(f"[Console] 创建人格失败: key={key}")
+        return {"success": False, "message": "保存失败，请稍后再试"}
+    return {"success": True, "message": ""}
 
 
 @router.put("/ai_chat/persona/{key}")
-async def update_ai_persona(key: str, payload: dict[str, Any]) -> dict[str, bool]:
+async def update_ai_persona(key: str, payload: dict[str, Any]) -> dict[str, Any]:
     """更新 AI 人格。"""
     desc = str(payload.get("desc") or "").strip()
-    save_persona_text(key, desc)
-    return {"success": True}
+    try:
+        save_persona_text(key, desc)
+    except ValueError as exc:
+        return {"success": False, "message": str(exc)}
+    except OSError:
+        logger.opt(exception=True).error(f"[Console] 更新人格失败: key={key}")
+        return {"success": False, "message": "保存失败，请稍后再试"}
+    return {"success": True, "message": ""}
 
 
 @router.delete("/ai_chat/persona/{key}")

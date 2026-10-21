@@ -11,7 +11,14 @@ from nonebot.adapters import Bot, Event
 
 from ..config import get_manager as get_config_manager
 from .service import chat_service
-from ..adapter import event_is_tome, event_plain_text
+from ..adapter import (
+    event_is_tome,
+    event_message,
+    event_user_id,
+    event_group_id,
+    event_plain_text,
+    extract_raw_image_sources,
+)
 from .tool_runtime import default_runtime_factory
 from .message_adapter import adapt_message_event
 from ..permission.message_policy import should_process_fxbot_message
@@ -28,6 +35,32 @@ def _chat_cfg() -> dict[str, Any]:
     return cfg["chat"]
 
 
+def _private_allowlist(cfg: dict[str, Any]) -> set[str]:
+    """读取私聊白名单；空集合表示不限制。"""
+    value = cfg["private_allowlist"]
+    if not isinstance(value, (list, tuple, set)):
+        return set()
+    return {str(item).strip() for item in value if item is not None and str(item).strip()}
+
+
+def _has_image(event: Any) -> bool:
+    """判断消息是否携带图片，用于放行纯图片消息。"""
+    try:
+        return bool(extract_raw_image_sources(event_message(event)))
+    except Exception:
+        return False
+
+
+def _match_context(cfg: dict[str, Any], event: Any) -> bool:
+    """按会话类型判断是否允许进入 AI 兜底。"""
+    if event_group_id(event):
+        return _is_to_me(event)
+    if not bool(cfg["private_enabled"]):
+        return False
+    allowlist = _private_allowlist(cfg)
+    return not allowlist or event_user_id(event) in allowlist
+
+
 async def _ai_fallback_rule(bot: Bot, event: Event) -> bool:
     """AI 兜底匹配规则。"""
     if not should_process_fxbot_message(bot, event):
@@ -35,11 +68,13 @@ async def _ai_fallback_rule(bot: Bot, event: Event) -> bool:
     cfg = _chat_cfg()
     if not bool(cfg["enabled"]):
         return False
+    if not _match_context(cfg, event):
+        return False
     text = event_plain_text(event)
-    if not text:
+    if not text and not _has_image(event):
         return False
     prefixes = tuple(str(item) for item in cfg["command_prefixes"])
-    if text.startswith(prefixes):
+    if text and text.startswith(prefixes):
         return False
     return True
 
@@ -50,7 +85,7 @@ ai_router = on_message(rule=Rule(_ai_fallback_rule), priority=99, block=True)
 @ai_router.handle()
 async def _handle_ai_fallback(bot: Bot, event: Event, matcher: Matcher) -> None:
     """处理 AI 兜底消息。"""
-    request = adapt_message_event(event)
+    request = await adapt_message_event(bot, event)
     runtime = default_runtime_factory.create(bot=bot, event=event, matcher=matcher)
     try:
         response = await chat_service.process(request, runtime)

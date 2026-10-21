@@ -10,11 +10,15 @@ from openai import AsyncOpenAI
 from nonebot import logger
 
 from ..base import ChatProvider, EmbeddingProvider
-from ..entities import LLMResponse
+from ..entities import LLMResponse, ProviderType
 from ..register import register_provider
 
 
-@register_provider("openai_chat", "OpenAI / 兼容 API")
+@register_provider(
+    "openai_chat",
+    "OpenAI / 兼容 API",
+    default_config={"base_url": "https://api.openai.com/v1", "timeout": 60},
+)
 class OpenAIProvider(ChatProvider):
     """OpenAI 协议对话 Provider。"""
 
@@ -26,6 +30,13 @@ class OpenAIProvider(ChatProvider):
             timeout=float(config["timeout"]),
         )
         self.model_name = str(config["model"])
+
+    async def close(self) -> None:
+        """关闭 OpenAI 异步客户端。"""
+        try:
+            await self.client.close()
+        except Exception:
+            logger.opt(exception=True).warning(f"[{self.provider_id}] 关闭客户端失败")
 
     async def chat(
         self,
@@ -151,7 +162,12 @@ class OpenAIProvider(ChatProvider):
             return []
 
 
-@register_provider("openai_embedding", "OpenAI Embedding")
+@register_provider(
+    "openai_embedding",
+    "OpenAI Embedding",
+    provider_type=ProviderType.EMBEDDING,
+    default_config={"base_url": "https://api.openai.com/v1", "timeout": 60, "embedding_dim": 1536},
+)
 class OpenAIEmbeddingProvider(EmbeddingProvider):
     """OpenAI 嵌入 Provider。"""
 
@@ -163,6 +179,13 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
             timeout=float(config["timeout"]),
         )
         self.model_name = str(config["model"])
+
+    async def close(self) -> None:
+        """关闭 OpenAI 异步客户端。"""
+        try:
+            await self.client.close()
+        except Exception:
+            logger.opt(exception=True).warning(f"[{self.provider_id}] 关闭客户端失败")
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         """批量获取文本嵌入向量。"""

@@ -93,3 +93,42 @@ export interface Persona {
   details: string
   knowledgeCount?: number
 }
+
+export interface ProviderTypeOption {
+  type: string
+  provider_type: 'chat' | 'embedding' | string
+  label: string
+  default_base_url?: string
+  default_timeout?: number
+  default_embedding_dim?: number | null
+}
+
+export interface ProviderItem {
+  name: string
+  type: string
+  type_label: string
+  provider_type: 'chat' | 'embedding' | string
+  base_url: string
+  model: string
+  timeout: number
+  embedding_dim?: number | null
+  has_api_key: boolean
+  is_default: boolean
+}
+
+export interface ProviderListData {
+  providers: ProviderItem[]
+  types: ProviderTypeOption[]
+  default_provider: string
+}
+
+export interface ProviderPayload {
+  name?: string
+  type: string
+  provider_type: string
+  api_key?: string
+  base_url: string
+  model: string
+  timeout: number
+  embedding_dim?: number | null
+}

@@ -134,6 +134,20 @@ def _system_config_tab() -> dict[str, Any]:
                         "helpMessage": "关闭后 AI 兜底不会接管消息。",
                     },
                     {
+                        "field": "private_enabled",
+                        "label": "启用私聊 AI",
+                        "component": "Switch",
+                        "default": SYSTEM_DEFAULTS["chat"]["private_enabled"],
+                        "helpMessage": "关闭后私聊消息不会进入 AI 兜底；群聊仍需 @Bot。",
+                    },
+                    {
+                        "field": "private_allowlist",
+                        "label": "私聊白名单",
+                        "component": "GTags",
+                        "default": SYSTEM_DEFAULTS["chat"]["private_allowlist"],
+                        "helpMessage": "留空表示所有私聊用户可用；填写后仅这些用户 ID 可用。",
+                    },
+                    {
                         "field": "command_prefixes",
                         "label": "命令前缀",
                         "component": "GTags",
@@ -141,11 +155,18 @@ def _system_config_tab() -> dict[str, Any]:
                         "helpMessage": "这些前缀开头的消息不会进入 AI 兜底。",
                     },
                     {
+                        "field": "persona",
+                        "label": "人格",
+                        "component": "Input",
+                        "default": SYSTEM_DEFAULTS["chat"]["persona"],
+                        "helpMessage": "全局默认人格；群主/管理员可用 /人格 <名称> 覆盖本群，私聊用户可覆盖自己的。",
+                    },
+                    {
                         "field": "provider",
                         "label": "默认 Provider",
                         "component": "Input",
                         "default": SYSTEM_DEFAULTS["chat"]["provider"],
-                        "helpMessage": "未指定时使用的对话 Provider 名称。",
+                        "helpMessage": "未指定时使用的对话 Provider 名称，可在「Provider 管理」页维护。",
                     },
                     {
                         "field": "max_history",

@@ -7,6 +7,7 @@ import ConfigView from '@/views/ConfigView.vue'
 import PermissionsView from '@/views/PermissionsView.vue'
 import MembershipView from '@/views/MembershipView.vue'
 import PersonasView from '@/views/PersonasView.vue'
+import ProviderView from '@/views/ProviderView.vue'
 import StatsView from '@/views/StatsView.vue'
 import LogsView from '@/views/LogsView.vue'
 import { configApi } from '@/api'
@@ -116,6 +117,10 @@ const sidebarWidth = computed(() => sidebarCollapsed.value ? '64px' : '200px')
             <el-icon><Avatar /></el-icon>
             <template #title>人格管理</template>
           </el-menu-item>
+          <el-menu-item index="providers">
+            <el-icon><Connection /></el-icon>
+            <template #title>Provider 管理</template>
+          </el-menu-item>
           <!-- 插件配置子菜单 -->
           <el-sub-menu index="config" v-if="configTabs.length">
             <template #title>
@@ -144,6 +149,7 @@ const sidebarWidth = computed(() => sidebarCollapsed.value ? '64px' : '200px')
         <LogsView v-else-if="activeMenu === 'logs'" />
         <PermissionsView v-else-if="activeMenu === 'permissions'" />
         <PersonasView v-else-if="activeMenu === 'personas'" />
+        <ProviderView v-else-if="activeMenu === 'providers'" />
         <ConfigView v-else-if="activeMenu.startsWith('config')" :active-tab="activeConfigTab" />
       </el-main>
     </el-container>

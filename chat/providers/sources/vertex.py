@@ -12,9 +12,14 @@ from nonebot import logger
 from ..base import ChatProvider
 from ..entities import LLMResponse
 from ..register import register_provider
+from ....utils.http import get_shared_async_client
 
 
-@register_provider("vertex_chat", "Google Vertex AI REST API")
+@register_provider(
+    "vertex_chat",
+    "Google Vertex AI REST API",
+    default_config={"base_url": "", "timeout": 60},
+)
 class VertexAIProvider(ChatProvider):
     """使用 REST API 调用 Vertex AI 的 Gemini 模型。"""
 
@@ -27,10 +32,6 @@ class VertexAIProvider(ChatProvider):
         self.base_url = config["base_url"]
         self.timeout = float(config["timeout"])
         self.model_name = str(config["model"])
-        self.client = httpx.AsyncClient(
-            timeout=httpx.Timeout(self.timeout),
-            limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
-        )
 
     def _convert_to_vertex_format(self, messages: list[dict[str, Any]]) -> dict[str, Any]:
         """将 OpenAI 风格消息转换为 Vertex AI 格式。"""
@@ -144,10 +145,12 @@ class VertexAIProvider(ChatProvider):
             request_body["tools"] = [tools_config]
 
         try:
-            response = await self.client.post(
+            client = await get_shared_async_client()
+            response = await client.post(
                 f"{self._build_endpoint(model_name)}?key={self.api_key}",
                 json=request_body,
                 headers={"Content-Type": "application/json"},
+                timeout=self.timeout,
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
@@ -197,11 +200,13 @@ class VertexAIProvider(ChatProvider):
             request_body["tools"] = [tools_config]
 
         try:
-            async with self.client.stream(
+            client = await get_shared_async_client()
+            async with client.stream(
                 "POST",
                 f"{self._build_endpoint(model_name, stream=True)}?key={self.api_key}",
                 json=request_body,
                 headers={"Content-Type": "application/json"},
+                timeout=self.timeout,
             ) as response:
                 response.raise_for_status()
                 full_content = ""
@@ -247,10 +252,12 @@ class VertexAIProvider(ChatProvider):
         request_body["generationConfig"] = generation_config
 
         try:
-            response = await self.client.post(
+            client = await get_shared_async_client()
+            response = await client.post(
                 f"{self._build_endpoint(model_name)}?key={self.api_key}",
                 json=request_body,
                 headers={"Content-Type": "application/json"},
+                timeout=self.timeout,
             )
             response.raise_for_status()
             data = response.json()
@@ -266,9 +273,3 @@ class VertexAIProvider(ChatProvider):
         except Exception as exc:
             logger.error(f"[{self.provider_id}] chat_json 失败: {exc}")
             return {}
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
-        await self.client.aclose()
