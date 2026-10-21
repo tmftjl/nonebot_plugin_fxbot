@@ -35,9 +35,9 @@ def _chat_cfg() -> dict[str, Any]:
     return cfg["chat"]
 
 
-def _private_allowlist(cfg: dict[str, Any]) -> set[str]:
-    """读取私聊白名单；空集合表示不限制。"""
-    value = cfg["private_allowlist"]
+def _id_allowlist(cfg: dict[str, Any], key: str) -> set[str]:
+    """读取 ID 白名单；空集合表示不限制。"""
+    value = cfg[key]
     if not isinstance(value, (list, tuple, set)):
         return set()
     return {str(item).strip() for item in value if item is not None and str(item).strip()}
@@ -53,11 +53,15 @@ def _has_image(event: Any) -> bool:
 
 def _match_context(cfg: dict[str, Any], event: Any) -> bool:
     """按会话类型判断是否允许进入 AI 兜底。"""
-    if event_group_id(event):
-        return _is_to_me(event)
+    group_id = event_group_id(event)
+    if group_id:
+        if not _is_to_me(event):
+            return False
+        allowlist = _id_allowlist(cfg, "group_allowlist")
+        return not allowlist or group_id in allowlist
     if not bool(cfg["private_enabled"]):
         return False
-    allowlist = _private_allowlist(cfg)
+    allowlist = _id_allowlist(cfg, "private_allowlist")
     return not allowlist or event_user_id(event) in allowlist
 
 

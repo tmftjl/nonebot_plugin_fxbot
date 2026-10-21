@@ -24,6 +24,7 @@ SYSTEM_DEFAULTS = {
         "command_prefixes": ["#", "/", "."],
         "private_enabled": False,
         "private_allowlist": [],
+        "group_allowlist": [],
         "persona": "default",
         "provider": "",
         "providers": {},

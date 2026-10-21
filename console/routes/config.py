@@ -148,6 +148,13 @@ def _system_config_tab() -> dict[str, Any]:
                         "helpMessage": "留空表示所有私聊用户可用；填写后仅这些用户 ID 可用。",
                     },
                     {
+                        "field": "group_allowlist",
+                        "label": "群聊白名单",
+                        "component": "GTags",
+                        "default": SYSTEM_DEFAULTS["chat"]["group_allowlist"],
+                        "helpMessage": "留空表示所有群在 @Bot 时可用；填写后仅这些群 ID 可用（QQ 官方群填 openid）。",
+                    },
+                    {
                         "field": "command_prefixes",
                         "label": "命令前缀",
                         "component": "GTags",
