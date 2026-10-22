@@ -9,7 +9,7 @@ from typing import Any
 from nonebot import logger
 
 from .tools import ToolContext, ToolRuntime, execute_tool, tool_allowed, default_registry
-from .types import ChatRequest, ChatResponse
+from .types import MentionRef, ChatRequest, ChatResponse
 from ..config import get_manager as get_config_manager
 from .session import ChatSessionStore, default_session_store
 from .personas import get_persona_text, get_bound_persona
@@ -52,19 +52,32 @@ def _speaker_label(user_id: str, user_name: str) -> str:
     return f"{user_name}({user_id})" if user_id else user_name
 
 
+def _mentions_line(mentions: list[MentionRef]) -> str:
+    """把被 @ 的成员渲染成单独一行，让模型拿到可以交给工具的 ID。"""
+    if not mentions:
+        return ""
+    return "[@成员: " + ", ".join(ref.render() for ref in mentions) + "]"
+
+
 def _scene_hint(request: ChatRequest) -> str:
-    """告诉模型当前是群聊还是私聊，以及私聊对象是谁。"""
+    """告诉模型当前是群聊还是私聊，以及 @ 目标的读法。"""
     if request.is_group:
-        return (
-            "\n\n你正在群聊中。最后一条是 @ 你的消息，只需回应它；更早的消息只是上下文。"
-            "用户消息的「昵称(ID): 」是发言人标识，不是消息内容。不要把不同成员当成同一个人。"
-            "「[图片: 描述]」是图片摘要。指代某人用其昵称，回复不要加「昵称: 」前缀。"
-        )
+        lines = [
+            "\n\n你正在群聊中。最后一条是 @ 你的消息，只需回应它；更早的消息只是上下文。",
+            "用户消息的「昵称(ID): 」是发言人标识，不是消息内容。不要把不同成员当成同一个人。",
+            "「[图片: 描述]」是图片摘要。指代某人用其昵称，回复不要加「昵称: 」前缀。",
+        ]
+        if request.mentions:
+            lines.append(
+                "消息末尾的「[@成员: 昵称(ID)]」列出了被 @ 的成员，是系统标记不是正文；"
+                "用户要求对某人操作时直接用其中的 ID，没给出目标就先问清楚，不要对发起人自己执行。"
+            )
+        return "".join(lines)
     return f"\n\n用户正在跟你私聊，对方是 {_speaker_label(request.user_id, request.user_name)}。"
 
 
 def _build_user_content(request: ChatRequest) -> str | list[dict[str, Any]]:
-    """构造用户消息内容，群聊带上发言人标识，引用和图片一并附带。"""
+    """构造用户消息内容，群聊带上发言人标识，引用、@ 目标和图片一并附带。"""
     text = request.text
     if request.quoted_text:
         text = f"{request.quoted_text}\n{text}" if text else request.quoted_text
@@ -75,6 +88,8 @@ def _build_user_content(request: ChatRequest) -> str | list[dict[str, Any]]:
         else:
             # 有图片段时由图片本身承载内容，避免历史里出现两份 [图片] 占位
             text = f"{label}:" if request.images else f"{label}: [图片]"
+        if mentions_line := _mentions_line(request.mentions):
+            text = f"{text}\n{mentions_line}"
     if not request.images:
         return text
     content: list[dict[str, Any]] = []
@@ -176,6 +191,7 @@ class ChatService:
         *,
         images: list[str] | None = None,
         has_image: bool = False,
+        mentions: list[MentionRef] | None = None,
     ) -> None:
         """记录群里的普通消息（未 @ Bot），图片同样转成文字描述写入历史。"""
         images = list(images or [])
@@ -199,6 +215,8 @@ class ChatService:
             placeholders = ["[图片]"]
         label = _speaker_label(user_id, user_name)
         lines = [f"{label}: {text}" if text else f"{label}:"]
+        if mentions_line := _mentions_line(mentions or []):
+            lines.append(mentions_line)
         lines.extend(placeholders)
         async with self.session_store.lock(session_id):
             self.session_store.append(

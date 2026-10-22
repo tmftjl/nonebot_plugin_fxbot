@@ -22,7 +22,12 @@ from ..adapter import (
     extract_raw_image_sources,
 )
 from .tool_runtime import default_runtime_factory
-from .message_adapter import resolve_images, adapt_message_event, session_id_for_event
+from .message_adapter import (
+    resolve_images,
+    collect_mentions,
+    adapt_message_event,
+    session_id_for_event,
+)
 from ..permission.message_policy import should_process_fxbot_message
 
 
@@ -117,6 +122,8 @@ async def _handle_context(bot: Bot, event: Event) -> None:
     user_id = normalize_id(event_user_id(event)) or ""
     has_image = _has_image(event)
     images = await resolve_images(event) if has_image and bool(_chat_cfg()["image_description"]) else []
+    # 上下文消息只做廉价提取：昵称取消息段里现成的，不额外查成员接口
+    mentions = await collect_mentions(bot, event, event_group_id(event), resolve_names=False)
     await chat_service.record_group_message(
         session_id_for_event(event),
         user_id,
@@ -124,6 +131,7 @@ async def _handle_context(bot: Bot, event: Event) -> None:
         event_plain_text(event),
         images=images,
         has_image=has_image,
+        mentions=mentions,
     )
 
 

@@ -10,7 +10,7 @@ from typing import Any
 from PIL import Image, ImageOps
 from nonebot import logger
 
-from .types import ChatRequest, InboundSegment
+from .types import MentionRef, ChatRequest, InboundSegment
 from ..adapter import (
     ReplyInfo,
     normalize_id,
@@ -30,6 +30,8 @@ _MAX_IMAGE_SIDE = 1024
 _MAX_IMAGE_BYTES_SENT = 1024 * 1024
 _MAX_REDIRECTS = 3
 _MAX_QUOTED_CHARS = 500
+_MAX_MENTIONS = 10
+_MAX_NAME_CHARS = 32
 
 
 def _image_mime(data: bytes) -> str:
@@ -159,6 +161,74 @@ async def _reply_info(bot: Any, event: Any) -> ReplyInfo | None:
         return None
 
 
+def _segment_name(segment: Any) -> str:
+    """从消息段里读昵称；QQ 官方平台会随 @ 段带 username，OneBot 通常没有。"""
+    data = getattr(segment, "data", {}) or {}
+    for key in ("username", "nickname", "name", "card"):
+        value = " ".join(str(data.get(key) or "").split())[:_MAX_NAME_CHARS]
+        if value:
+            return value
+    return ""
+
+
+def _self_ids(bot: Any) -> set[str]:
+    """Bot 自身可能的 ID；QQ 官方平台 self_id 与 openid 不是一回事。"""
+    values = {str(getattr(bot, "self_id", "") or "")}
+    info_id = getattr(getattr(bot, "self_info", None), "id", None)
+    if info_id is not None:
+        values.add(str(info_id))
+    values.discard("")
+    return values
+
+
+async def _member_name(bot: Any, group_id: str, user_id: str, event: Any) -> str:
+    """查询 @ 目标昵称，失败时只保留 ID。"""
+    try:
+        value = await get_platform_adapter(bot).get_group_member_name(bot, group_id, user_id, event)
+    except Exception:
+        return ""
+    return " ".join(str(value or "").split())[:_MAX_NAME_CHARS]
+
+
+async def collect_mentions(
+    bot: Any,
+    event: Any,
+    group_id: str | None,
+    *,
+    resolve_names: bool = True,
+) -> list[MentionRef]:
+    """收集消息里被 @ 的成员，排除 Bot 自己和 @全体成员。"""
+    if not group_id:
+        return []
+    try:
+        adapter = get_platform_adapter(bot)
+        segments = list(event_message(event) or [])
+    except Exception:
+        return []
+
+    self_ids = _self_ids(bot)
+    refs: list[MentionRef] = []
+    seen: set[str] = set()
+    for segment in segments:
+        try:
+            target = str(adapter.mention_target(segment) or "").strip()
+        except Exception:
+            continue
+        if not target or target == "all" or target in seen or target in self_ids:
+            continue
+        seen.add(target)
+        refs.append(MentionRef(user_id=target, name=_segment_name(segment)))
+        if len(refs) >= _MAX_MENTIONS:
+            break
+
+    missing = [ref for ref in refs if resolve_names and not ref.name]
+    if missing:
+        names = await asyncio.gather(*(_member_name(bot, group_id, ref.user_id, event) for ref in missing))
+        for ref, name in zip(missing, names):
+            ref.name = name
+    return refs
+
+
 def session_id_for_event(event: Any) -> str:
     """按群或用户生成会话标识。"""
     group_id = normalize_id(event_group_id(event))
@@ -177,7 +247,10 @@ async def adapt_message_event(bot: Any, event: Any) -> ChatRequest:
             segments.append(InboundSegment(type=str(seg.type), data=dict(seg.data)))
     except Exception:
         pass
-    reply = await _reply_info(bot, event)
+    reply, mentions = await asyncio.gather(
+        _reply_info(bot, event),
+        collect_mentions(bot, event, group_id),
+    )
     return ChatRequest(
         session_id=session_id,
         user_id=user_id,
@@ -189,4 +262,5 @@ async def adapt_message_event(bot: Any, event: Any) -> ChatRequest:
         quoted_text=_quoted_text(reply),
         platform=event.get_type() if hasattr(event, "get_type") else "",
         metadata={"event": event},
+        mentions=mentions,
     )

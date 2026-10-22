@@ -1,6 +1,6 @@
 """AI 对话子系统导出。"""
 
-from .types import ChatRequest, ChatResponse, InboundSegment
+from .types import MentionRef, ChatRequest, ChatResponse, InboundSegment
 from .service import ChatService, chat_service
 
 __all__ = [
@@ -8,5 +8,6 @@ __all__ = [
     "ChatResponse",
     "ChatService",
     "InboundSegment",
+    "MentionRef",
     "chat_service",
 ]

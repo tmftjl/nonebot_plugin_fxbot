@@ -15,6 +15,18 @@ class InboundSegment:
 
 
 @dataclass
+class MentionRef:
+    """消息中被 @ 的成员。"""
+
+    user_id: str
+    name: str = ""
+
+    def render(self) -> str:
+        """渲染成模型可读的形式，昵称可能缺失。"""
+        return f"{self.name}({self.user_id})" if self.name else self.user_id
+
+
+@dataclass
 class ChatRequest:
     """AI 对话请求。"""
 
@@ -28,6 +40,7 @@ class ChatRequest:
     quoted_text: str = ""
     platform: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
+    mentions: list[MentionRef] = field(default_factory=list)
 
     @property
     def is_group(self) -> bool:
