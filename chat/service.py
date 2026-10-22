@@ -14,6 +14,7 @@ from ..config import get_manager as get_config_manager
 from .session import ChatSessionStore, default_session_store
 from .personas import get_persona_text, get_bound_persona
 from .providers import LLMResponse, provider_manager
+from .provider_bindings import get_bound_provider
 
 
 def _finalize_response(response: LLMResponse) -> LLMResponse:
@@ -41,6 +42,12 @@ _IMAGE_DESC_PROMPT = (
 )
 _MAX_IMAGE_DESC_CHARS = 200
 _MAX_TOOL_ROUNDS = 3
+
+
+def _session_provider(session_id: str) -> str:
+    """返回会话绑定的 Provider，失效时回退全局默认。"""
+    name = get_bound_provider(session_id)
+    return name if name in provider_manager.list_providers_by_type("chat") else ""
 
 
 def _speaker_label(user_id: str, user_name: str) -> str:
@@ -178,7 +185,7 @@ class ChatService:
         descriptions = [""] * len(images)
         if images and bool(chat_cfg["image_description"]):
             try:
-                provider = await provider_manager.get_provider()
+                provider = await provider_manager.get_provider(_session_provider(session_id))
             except Exception as exc:
                 logger.opt(exception=True).debug("[Chat] 群聊图片描述跳过：Provider 不可用")
                 logger.warning(f"[Chat] 群聊图片描述跳过：Provider 不可用（{type(exc).__name__}）")
@@ -201,7 +208,7 @@ class ChatService:
         """完成一轮对话；模型调用不持有会话锁，期间到达的群消息按真实顺序落库。"""
         chat_cfg = get_config_manager().get_system()["chat"]
         limit = int(chat_cfg["max_history"])
-        provider = await provider_manager.get_provider()
+        provider = await provider_manager.get_provider(_session_provider(request.session_id))
         runtime = runtime or ToolRuntime()
         user_content = _build_user_content(request)
         persona_name = request.metadata.get("persona_name") if isinstance(request.metadata, dict) else None

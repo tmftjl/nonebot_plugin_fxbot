@@ -8,12 +8,15 @@ from nonebot import logger, get_driver, on_message
 from nonebot.rule import Rule
 from nonebot.matcher import Matcher
 from nonebot.adapters import Bot, Event
+from nonebot.permission import SUPERUSER, Permission
 
 from ..config import get_manager as get_config_manager
 from .service import chat_service
 from ..adapter import selfBot, normalize_id, event_user_id, event_group_id, event_plain_text
 from .personas import load_personas, get_bound_persona, set_bound_persona
+from .providers import provider_manager
 from .message_adapter import session_id_for_event
+from .provider_bindings import get_bound_provider, set_bound_provider
 
 
 def _chat_cfg() -> dict[str, Any]:
@@ -42,6 +45,17 @@ def _persona_name(text: str) -> str | None:
     if stripped is None or not stripped.startswith("人格"):
         return None
     return stripped[len("人格") :].strip()
+
+
+def _provider_name(text: str) -> str | None:
+    """解析 Provider 命令，返回为空表示查询，返回 None 表示不是 Provider 命令。"""
+    stripped = _strip_prefix(text.strip())
+    if stripped is None:
+        return None
+    parts = stripped.split(maxsplit=1)
+    if not parts or parts[0].lower() != "provider":
+        return None
+    return parts[1].strip() if len(parts) > 1 else ""
 
 
 def _event_group_role(event: Any) -> str:
@@ -81,7 +95,7 @@ async def _group_role(group_id: str, user_id: str, event: Any) -> str:
         return ""
 
 
-async def _can_manage(event: Any) -> bool:
+async def _can_manage(event: Event) -> bool:
     """私聊或特权账号可用；群聊要求群主/管理员。"""
     group_id = normalize_id(event_group_id(event))
     if not group_id:
@@ -95,13 +109,36 @@ async def _persona_rule(bot: Bot, event: Event) -> bool:
     return _persona_name(event_plain_text(event)) is not None
 
 
+async def _provider_rule(bot: Bot, event: Event) -> bool:
+    """Provider 切换命令匹配规则。"""
+    return _provider_name(event_plain_text(event)) is not None
+
+
 async def _clear_rule(bot: Bot, event: Event) -> bool:
     """清空对话命令匹配规则。"""
     return _strip_prefix(event_plain_text(event).strip()) == "清空对话"
 
 
-persona_cmd = on_message(rule=Rule(_persona_rule), priority=5, block=True)
-clear_cmd = on_message(rule=Rule(_clear_rule), priority=5, block=True)
+manage_permission = Permission(_can_manage)
+
+persona_cmd = on_message(
+    rule=Rule(_persona_rule),
+    permission=manage_permission,
+    priority=5,
+    block=True,
+)
+provider_cmd = on_message(
+    rule=Rule(_provider_rule),
+    permission=SUPERUSER,
+    priority=5,
+    block=True,
+)
+clear_cmd = on_message(
+    rule=Rule(_clear_rule),
+    permission=manage_permission,
+    priority=5,
+    block=True,
+)
 
 
 @persona_cmd.handle()
@@ -110,9 +147,6 @@ async def _handle_persona(bot: Bot, event: Event, matcher: Matcher) -> None:
     group_id = normalize_id(event_group_id(event))
     session_id = session_id_for_event(event)
     scope = "本群" if group_id else ""
-
-    if not await _can_manage(event):
-        await matcher.finish("只有群主或管理员可以切换本群人格")
 
     name = _persona_name(event_plain_text(event)) or ""
     personas = load_personas()
@@ -142,10 +176,44 @@ async def _handle_persona(bot: Bot, event: Event, matcher: Matcher) -> None:
     await matcher.finish(f"{scope}人格已切换为「{name}」")
 
 
+@provider_cmd.handle()
+async def _handle_provider(bot: Bot, event: Event, matcher: Matcher) -> None:
+    """切换当前群或当前私聊用户使用的 Provider。"""
+    group_id = normalize_id(event_group_id(event))
+    session_id = session_id_for_event(event)
+    scope = "本群" if group_id else "当前会话"
+
+    name = _provider_name(event_plain_text(event)) or ""
+    names = sorted(provider_manager.list_providers_by_type("chat"))
+    default_name = str(_chat_cfg()["provider"] or "") or "自动（第一个对话 Provider）"
+    choices = "、".join(names) or "（未配置）"
+
+    if not name:
+        bound = get_bound_provider(session_id)
+        effective = bound if bound in names else default_name
+        await matcher.finish(f"{scope}当前 Provider：{effective}\n可用 Provider：{choices}")
+
+    if name in {"重置", "恢复默认"}:
+        try:
+            set_bound_provider(session_id, None)
+        except Exception:
+            logger.opt(exception=True).warning(f"[Chat] 清除 Provider 绑定失败: session={session_id}")
+            await matcher.finish("Provider 设置失败，请稍后再试")
+        await matcher.finish(f"已恢复全局默认 Provider：{default_name}")
+
+    if name not in names:
+        await matcher.finish(f"没有名为「{name}」的对话 Provider，可用 Provider：{choices}")
+
+    try:
+        set_bound_provider(session_id, name)
+    except Exception:
+        logger.opt(exception=True).warning(f"[Chat] 保存 Provider 绑定失败: session={session_id}")
+        await matcher.finish("Provider 设置失败，请稍后再试")
+    await matcher.finish(f"{scope} Provider 已切换为「{name}」")
+
+
 @clear_cmd.handle()
 async def _handle_clear(bot: Bot, event: Event, matcher: Matcher) -> None:
     """清空当前会话的 AI 历史。"""
-    if not await _can_manage(event):
-        await matcher.finish("只有群主或管理员可以清空本群对话")
     await chat_service.clear_session(session_id_for_event(event))
     await matcher.finish("已清空当前对话历史")

@@ -111,7 +111,7 @@ toggle_cmd = P.on_regex(
     display_name="图片外显开关",
     priority=5,
     block=True,
-    level=PermLevel.ADMIN,
+    level=PermLevel.SUPERUSER,
     scene=PermScene.ALL,
 )
 

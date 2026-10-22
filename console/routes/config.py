@@ -197,7 +197,7 @@ def _system_config_tab() -> dict[str, Any]:
                         "label": "默认 Provider",
                         "component": "Select",
                         "default": SYSTEM_DEFAULTS["chat"]["provider"],
-                        "helpMessage": "未指定时自动使用第一个对话 Provider；可在「Provider 管理」页维护。",
+                        "helpMessage": "未指定时用第一个对话 Provider；Bot 主人可用 /provider <名称> 覆盖本群或私聊。",
                         "componentProps": {
                             "options": [{"label": "自动（第一个对话 Provider）", "value": ""}, *providers],
                         },

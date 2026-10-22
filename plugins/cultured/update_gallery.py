@@ -30,7 +30,7 @@ update_cmd = P.on_regex(
     display_name="更新图库",
     priority=5,
     block=True,
-    level=PermLevel.ADMIN,
+    level=PermLevel.SUPERUSER,
     scene=PermScene.ALL,
 )
 
