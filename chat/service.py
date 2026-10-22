@@ -40,6 +40,7 @@ _IMAGE_DESC_PROMPT = (
     "只输出描述本身，不要开场白，不超过 120 个汉字。"
 )
 _MAX_IMAGE_DESC_CHARS = 200
+_MAX_TOOL_ROUNDS = 3
 
 
 def _speaker_label(user_id: str, user_name: str) -> str:
@@ -74,8 +75,11 @@ def _build_user_content(request: ChatRequest) -> str | list[dict[str, Any]]:
 
 
 async def _allowed_tools(runtime: ToolRuntime) -> list[dict[str, Any]]:
-    """按调用者权限过滤工具，无权使用的工具不暴露给模型。"""
-    names = {spec.name for spec in default_registry.list() if await tool_allowed(spec, runtime)}
+    """按控制台开关和调用者权限过滤工具。"""
+    disabled = {str(name) for name in get_config_manager().get_system()["chat"].get("disabled_tools") or []}
+    names = {
+        spec.name for spec in default_registry.list() if spec.name not in disabled and await tool_allowed(spec, runtime)
+    }
     return [tool for tool in default_registry.to_openai_tools() if tool["function"]["name"] in names]
 
 
@@ -166,7 +170,7 @@ class ChatService:
         if not text and not images and not has_image:
             return
         chat_cfg = get_config_manager().get_system()["chat"]
-        limit = int(chat_cfg["group_history"])
+        limit = int(chat_cfg["max_history"])
         if limit <= 0:
             return
         descriptions = [""] * len(images)
@@ -194,7 +198,7 @@ class ChatService:
     async def _process(self, request: ChatRequest, runtime: ToolRuntime | None) -> ChatResponse:
         """完成一轮对话；模型调用不持有会话锁，期间到达的群消息按真实顺序落库。"""
         chat_cfg = get_config_manager().get_system()["chat"]
-        limit = int(chat_cfg["group_history"] if request.is_group else chat_cfg["max_history"])
+        limit = int(chat_cfg["max_history"])
         provider = await provider_manager.get_provider()
         runtime = runtime or ToolRuntime()
         user_content = _build_user_content(request)
@@ -226,9 +230,8 @@ class ChatService:
 
             tools = await _allowed_tools(runtime)
             response = await provider.chat(messages=messages, tools=tools or None)
-            max_tool_rounds = int(chat_cfg["max_tool_rounds"])
 
-            for _ in range(max_tool_rounds):
+            for _ in range(_MAX_TOOL_ROUNDS):
                 if not response.has_tool_calls:
                     break
                 messages.append(response.to_message_dict())

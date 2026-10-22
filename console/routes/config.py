@@ -10,6 +10,7 @@ from nonebot import logger
 
 from ..auth import bearer_auth
 from ...config import SYSTEM_DEFAULTS, get_manager
+from ...chat.tools import default_registry
 from ...utils.paths import built_in_plugins_dir
 from ...chat.personas import load_personas
 
@@ -29,9 +30,16 @@ def _chat_choices() -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     return personas, [{"label": name, "value": name} for name in names]
 
 
+def _tool_choices() -> list[dict[str, str]]:
+    """返回已注册的 AI 工具，供配置页勾选。"""
+    specs = sorted(default_registry.list(), key=lambda item: item.name)
+    return [{"label": spec.name, "value": spec.name} for spec in specs]
+
+
 def _system_config_tab() -> dict[str, Any]:
     """返回系统配置表单结构。"""
     personas, providers = _chat_choices()
+    tool_options = _tool_choices()
     return {
         "key": "system",
         "title": "系统配置",
@@ -196,18 +204,10 @@ def _system_config_tab() -> dict[str, Any]:
                     },
                     {
                         "field": "max_history",
-                        "label": "私聊历史条数",
+                        "label": "历史条数",
                         "component": "InputNumber",
                         "default": SYSTEM_DEFAULTS["chat"]["max_history"],
-                        "helpMessage": "私聊会话保留给 AI 的消息条数。",
-                        "componentProps": {"min": 0},
-                    },
-                    {
-                        "field": "group_history",
-                        "label": "群聊历史条数",
-                        "component": "InputNumber",
-                        "default": SYSTEM_DEFAULTS["chat"]["group_history"],
-                        "helpMessage": "群聊保留的消息条数，包含未 @Bot 的群消息；填 0 表示不记录群聊历史。",
+                        "helpMessage": "群聊和私聊保留给 AI 的消息条数，群聊包含未 @Bot 的消息；填 0 表示不记录。",
                         "componentProps": {"min": 0},
                     },
                     {
@@ -218,12 +218,36 @@ def _system_config_tab() -> dict[str, Any]:
                         "helpMessage": "收到图片时额外调用一次模型生成文字描述并写入历史；关闭后只记 [图片]。",
                     },
                     {
-                        "field": "max_tool_rounds",
-                        "label": "最大工具轮数",
-                        "component": "InputNumber",
-                        "default": SYSTEM_DEFAULTS["chat"]["max_tool_rounds"],
-                        "helpMessage": "单次对话允许的工具调用轮数。",
-                        "componentProps": {"min": 0},
+                        "field": "disabled_tools",
+                        "label": "禁用的 AI 工具",
+                        "component": "Select",
+                        "default": SYSTEM_DEFAULTS["chat"]["disabled_tools"],
+                        "helpMessage": "勾选后模型看不到这些工具；选项来自当前已注册的工具。",
+                        "componentProps": {
+                            "multiple": True,
+                            "options": tool_options,
+                            "placeholder": "不禁用任何工具",
+                        },
+                    },
+                ],
+            },
+            {
+                "key": "chat.web_search",
+                "title": "联网搜索",
+                "schemas": [
+                    {
+                        "field": "base_url",
+                        "label": "搜索 API 地址",
+                        "component": "Input",
+                        "default": SYSTEM_DEFAULTS["chat"]["web_search"]["base_url"],
+                        "helpMessage": "DeepSeek 官方地址；中转站填到域名根即可，不要带 /v1。",
+                    },
+                    {
+                        "field": "api_key",
+                        "label": "Search API Key",
+                        "component": "InputPassword",
+                        "default": SYSTEM_DEFAULTS["chat"]["web_search"]["api_key"],
+                        "helpMessage": "独立填写，不会复用对话 Provider 的 key；留空时搜索工具提示不可用。",
                     },
                 ],
             },

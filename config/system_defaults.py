@@ -28,9 +28,12 @@ SYSTEM_DEFAULTS = {
         "persona": "default",
         "provider": "",
         "providers": {},
-        "max_history": 20,
-        "group_history": 50,
+        "max_history": 50,
         "image_description": True,
-        "max_tool_rounds": 3,
+        "disabled_tools": [],
+        "web_search": {
+            "base_url": "https://api.deepseek.com",
+            "api_key": "",
+        },
     },
 }

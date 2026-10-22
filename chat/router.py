@@ -95,7 +95,7 @@ async def _context_rule(bot: Bot, event: Event) -> bool:
     if not should_process_fxbot_message(bot, event):
         return False
     cfg = _chat_cfg()
-    if not bool(cfg["enabled"]) or int(cfg["group_history"]) <= 0:
+    if not bool(cfg["enabled"]) or int(cfg["max_history"]) <= 0:
         return False
     if not _allowed_group_id(cfg, event) or _is_to_me(event):
         return False
