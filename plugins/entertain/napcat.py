@@ -126,20 +126,24 @@ async def _handle_like(matcher: Matcher, bot: Bot, session: Uninfo) -> None:
 @tool(
     name="like",
     title="QQ 点赞",
-    description="为指定 QQ 用户点赞。仅 OneBot/NapCat 支持。",
+    description="为 QQ 用户点赞；不传 user_id 时给当前用户点赞。仅 OneBot/NapCat 支持。",
     parameters={
         "type": "object",
         "properties": {
-            "user_id": {"type": "string", "description": "目标 QQ 号"},
+            "user_id": {"type": "string", "description": "目标 QQ 号，留空表示当前用户"},
             "times": {"type": "integer", "description": "点赞次数，1 到 10"},
         },
-        "required": ["user_id"],
     },
 )
-async def like_tool(ctx: ToolContext, rt: ToolRuntime, user_id: str, times: int = MAX_LIKE_TIMES) -> dict[str, Any]:
+async def like_tool(
+    ctx: ToolContext, rt: ToolRuntime, user_id: str = "", times: int = MAX_LIKE_TIMES
+) -> dict[str, Any]:
     """AI 工具：点赞。"""
+    target = str(user_id or ctx.user_id or "").strip()
+    if not target.isdigit():
+        return {"success": False, "message": "当前平台拿不到 QQ 号，点赞仅支持 OneBot/NapCat"}
     try:
-        ok = await _send_like(rt.require_bot(), user_id, times)
+        ok = await _send_like(rt.require_bot(), target, times)
     except Exception as exc:
         return {"success": False, "message": str(exc)}
     return {"success": ok, "message": "点赞完成" if ok else "点赞未完成"}
