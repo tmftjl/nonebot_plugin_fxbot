@@ -11,12 +11,27 @@ from nonebot import logger
 from ..auth import bearer_auth
 from ...config import SYSTEM_DEFAULTS, get_manager
 from ...utils.paths import built_in_plugins_dir
+from ...chat.personas import load_personas
 
 router = APIRouter(prefix="/config", tags=["fxbot-config"], dependencies=[Depends(bearer_auth)])
 
 
+def _chat_choices() -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """返回已有的人格和对话 Provider，供配置页下拉选择。"""
+    chat = get_manager().get_system()["chat"]
+    personas = [{"label": name, "value": name} for name in sorted(load_personas())]
+    providers = chat.get("providers")
+    names = sorted(
+        str(name)
+        for name, value in (providers.items() if isinstance(providers, dict) else ())
+        if isinstance(value, dict) and str(value.get("provider_type") or "") == "chat"
+    )
+    return personas, [{"label": name, "value": name} for name in names]
+
+
 def _system_config_tab() -> dict[str, Any]:
     """返回系统配置表单结构。"""
+    personas, providers = _chat_choices()
     return {
         "key": "system",
         "title": "系统配置",
@@ -164,16 +179,20 @@ def _system_config_tab() -> dict[str, Any]:
                     {
                         "field": "persona",
                         "label": "人格",
-                        "component": "Input",
+                        "component": "Select",
                         "default": SYSTEM_DEFAULTS["chat"]["persona"],
                         "helpMessage": "全局默认人格；群主/管理员可用 /人格 <名称> 覆盖本群，私聊用户可覆盖自己的。",
+                        "componentProps": {"options": personas},
                     },
                     {
                         "field": "provider",
                         "label": "默认 Provider",
-                        "component": "Input",
+                        "component": "Select",
                         "default": SYSTEM_DEFAULTS["chat"]["provider"],
-                        "helpMessage": "未指定时使用的对话 Provider 名称，可在「Provider 管理」页维护。",
+                        "helpMessage": "未指定时自动使用第一个对话 Provider；可在「Provider 管理」页维护。",
+                        "componentProps": {
+                            "options": [{"label": "自动（第一个对话 Provider）", "value": ""}, *providers],
+                        },
                     },
                     {
                         "field": "max_history",
