@@ -179,10 +179,10 @@ def _system_config_tab() -> dict[str, Any]:
                     },
                     {
                         "field": "command_prefixes",
-                        "label": "命令前缀",
+                        "label": "忽略命令前缀",
                         "component": "GTags",
                         "default": SYSTEM_DEFAULTS["chat"]["command_prefixes"],
-                        "helpMessage": "这些前缀开头的消息不会进入 AI 兜底。",
+                        "helpMessage": "以这些前缀开头的消息不会进入 AI 对话，也不会记录成群聊上下文。",
                     },
                     {
                         "field": "persona",

@@ -24,16 +24,12 @@ def _chat_cfg() -> dict[str, Any]:
     return get_config_manager().get_system()["chat"]
 
 
-def _command_prefixes() -> tuple[str, ...]:
-    """读取命令前缀，空配置回退到 /。"""
-    value = _chat_cfg()["command_prefixes"]
-    prefixes = tuple(str(item) for item in value if str(item).strip()) if isinstance(value, (list, tuple, set)) else ()
-    return prefixes or ("/",)
+_COMMAND_PREFIXES = ("/", "#")
 
 
 def _strip_prefix(text: str) -> str | None:
-    """去掉命令前缀，没有前缀时返回 None。"""
-    for prefix in sorted(_command_prefixes(), key=len, reverse=True):
+    """去掉固定的命令前缀，没有前缀时返回 None。"""
+    for prefix in _COMMAND_PREFIXES:
         if text.startswith(prefix):
             return text[len(prefix) :].lstrip()
     return None

@@ -21,7 +21,7 @@ SYSTEM_DEFAULTS = {
     },
     "chat": {
         "enabled": False,
-        "command_prefixes": ["#", "/", "."],
+        "command_prefixes": ["gs", "#", "ww"],
         "private_enabled": False,
         "private_allowlist": [],
         "group_allowlist": [],
