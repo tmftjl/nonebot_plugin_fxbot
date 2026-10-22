@@ -15,6 +15,7 @@ from ...adapter import selfBot, build_message_segment
 from .musicshare import (
     MusicLoginRequired,
     _login_hint,
+    _normalize_platform,
     _get_song_url_with_pool,
     _search_songs_with_pool,
 )
@@ -23,6 +24,7 @@ from ...chat.tools import ToolError, ToolContext, ToolRuntime, tool
 
 @tool(
     name="get_fortune",
+    title="今日运势",
     description="获取今日运势，同一天内相同用户返回相同结果。",
     permission="entertain:today",
     parameters={
@@ -69,6 +71,7 @@ async def get_fortune_tool(ctx: ToolContext, rt: ToolRuntime, nickname: str = "�
 
 @tool(
     name="play_music",
+    title="点歌",
     description="搜索并播放歌曲，自动播放搜索结果第一首。",
     permission="entertain:search",
     parameters={
@@ -78,8 +81,7 @@ async def get_fortune_tool(ctx: ToolContext, rt: ToolRuntime, nickname: str = "�
             "platform": {
                 "type": "string",
                 "enum": ["qq", "netease"],
-                "description": "音乐平台，可选 qq 或 netease，默认 qq。",
-                "default": "qq",
+                "description": "音乐平台，可选 qq 或 netease；不填则使用控制台配置的默认平台。",
             },
         },
         "required": ["song_name"],
@@ -89,16 +91,17 @@ async def play_music_tool(
     ctx: ToolContext,
     rt: ToolRuntime,
     song_name: str,
-    platform: Literal["qq", "netease"] = "qq",
+    platform: Literal["qq", "netease"] | None = None,
 ) -> str:
     """AI 工具：搜索并播放歌曲。"""
+    target = _normalize_platform(platform)
     try:
-        songs = await _search_songs_with_pool(ctx.user_id, platform, song_name)
+        songs = await _search_songs_with_pool(ctx.user_id, target, song_name)
         if not songs:
             raise ToolError(f"未找到歌曲：{song_name}", code="song_not_found")
         song = songs[0]
         bot = rt.require_bot()
-        audio_url = await _get_song_url_with_pool(ctx.user_id, platform, song, bot=bot)
+        audio_url = await _get_song_url_with_pool(ctx.user_id, target, song, bot=bot)
         if not audio_url:
             raise ToolError(f"无法获取歌曲播放链接：{song.song}", code="url_unavailable")
 
@@ -112,7 +115,7 @@ async def play_music_tool(
     except ToolError:
         raise
     except MusicLoginRequired as exc:
-        raise ToolError(_login_hint(platform), code="login_required") from exc
+        raise ToolError(_login_hint(target), code="login_required") from exc
     except Exception as exc:
         logger.opt(exception=True).warning("[entertain.tools] 点歌失败")
         raise ToolError(f"点歌失败：{exc}", code="internal_error") from exc

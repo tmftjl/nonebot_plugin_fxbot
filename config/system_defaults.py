@@ -30,7 +30,7 @@ SYSTEM_DEFAULTS = {
         "providers": {},
         "max_history": 50,
         "image_description": True,
-        "disabled_tools": [],
+        "enabled_tools": [],
         "web_search": {
             "base_url": "https://api.deepseek.com",
             "api_key": "",

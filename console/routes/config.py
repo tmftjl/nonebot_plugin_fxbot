@@ -33,7 +33,7 @@ def _chat_choices() -> tuple[list[dict[str, str]], list[dict[str, str]]]:
 def _tool_choices() -> list[dict[str, str]]:
     """返回已注册的 AI 工具，供配置页勾选。"""
     specs = sorted(default_registry.list(), key=lambda item: item.name)
-    return [{"label": spec.name, "value": spec.name} for spec in specs]
+    return [{"label": spec.title or spec.name, "value": spec.name} for spec in specs]
 
 
 def _system_config_tab() -> dict[str, Any]:
@@ -218,15 +218,15 @@ def _system_config_tab() -> dict[str, Any]:
                         "helpMessage": "收到图片时额外调用一次模型生成文字描述并写入历史；关闭后只记 [图片]。",
                     },
                     {
-                        "field": "disabled_tools",
-                        "label": "禁用的 AI 工具",
+                        "field": "enabled_tools",
+                        "label": "开启的 AI 工具",
                         "component": "Select",
-                        "default": SYSTEM_DEFAULTS["chat"]["disabled_tools"],
-                        "helpMessage": "勾选后模型看不到这些工具；选项来自当前已注册的工具。",
+                        "default": SYSTEM_DEFAULTS["chat"]["enabled_tools"],
+                        "helpMessage": "留空表示启用全部工具；勾选后模型只能使用选中的工具。",
                         "componentProps": {
                             "multiple": True,
                             "options": tool_options,
-                            "placeholder": "不禁用任何工具",
+                            "placeholder": "启用全部工具",
                         },
                     },
                 ],

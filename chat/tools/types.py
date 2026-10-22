@@ -49,3 +49,4 @@ class ToolSpec:
     handler: ToolHandler
     args_model: type[BaseModel] | None = None  # type: ignore[name-defined]
     permission: str = ""
+    title: str = ""

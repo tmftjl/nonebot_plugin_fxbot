@@ -860,6 +860,7 @@ async def _handle_unset_essence(matcher: Matcher, bot: Bot, event: Event, sessio
 
 @tool(
     name="mute_member",
+    title="禁言成员",
     description="禁言群成员。高风险工具，仅可在群聊上下文中使用。",
     permission="group_admin:mute_member",
     parameters={
@@ -884,6 +885,7 @@ async def mute_member_tool(ctx: ToolContext, rt: ToolRuntime, user_id: str, dura
 
 @tool(
     name="kick_member",
+    title="踢出成员",
     description="踢出群成员。高风险工具，仅可在群聊上下文中使用。",
     permission="group_admin:kick_member",
     parameters={
@@ -907,6 +909,7 @@ async def kick_member_tool(ctx: ToolContext, rt: ToolRuntime, user_id: str) -> d
 
 @tool(
     name="unmute_member",
+    title="解除禁言",
     description="解除群成员禁言。高风险工具，仅可在群聊上下文中使用。",
     permission="group_admin:unmute_member",
     parameters={
@@ -930,6 +933,7 @@ async def unmute_member_tool(ctx: ToolContext, rt: ToolRuntime, user_id: str) ->
 
 @tool(
     name="self_mute",
+    title="禁言自己",
     description="禁言自己指定时长。仅可在群聊上下文中使用。",
     permission="group_admin:self_mute",
     parameters={
@@ -954,6 +958,7 @@ async def self_mute_tool(ctx: ToolContext, rt: ToolRuntime, duration_seconds: in
 
 @tool(
     name="apply_title",
+    title="申请群头衔",
     description="为自己申请群头衔。仅可在群聊上下文中使用。",
     permission="group_admin:apply_title",
     parameters={

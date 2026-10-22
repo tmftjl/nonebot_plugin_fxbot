@@ -125,6 +125,7 @@ async def _handle_like(matcher: Matcher, bot: Bot, session: Uninfo) -> None:
 
 @tool(
     name="like",
+    title="QQ 点赞",
     description="为指定 QQ 用户点赞。仅 OneBot/NapCat 支持。",
     parameters={
         "type": "object",

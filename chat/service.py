@@ -76,9 +76,11 @@ def _build_user_content(request: ChatRequest) -> str | list[dict[str, Any]]:
 
 async def _allowed_tools(runtime: ToolRuntime) -> list[dict[str, Any]]:
     """按控制台开关和调用者权限过滤工具。"""
-    disabled = {str(name) for name in get_config_manager().get_system()["chat"].get("disabled_tools") or []}
+    enabled = {str(name) for name in get_config_manager().get_system()["chat"].get("enabled_tools") or []}
     names = {
-        spec.name for spec in default_registry.list() if spec.name not in disabled and await tool_allowed(spec, runtime)
+        spec.name
+        for spec in default_registry.list()
+        if (not enabled or spec.name in enabled) and await tool_allowed(spec, runtime)
     }
     return [tool for tool in default_registry.to_openai_tools() if tool["function"]["name"] in names]
 

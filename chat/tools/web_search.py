@@ -46,6 +46,7 @@ def _format_results(results: list[dict[str, Any]]) -> str:
 
 @tool(
     name="web_search",
+    title="联网搜索",
     description="联网搜索实时信息，返回标题、链接和摘要。需要新闻、价格、版本等最新资料时使用。",
     parameters={
         "type": "object",
