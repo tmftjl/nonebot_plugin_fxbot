@@ -978,3 +978,6 @@ async def apply_title_tool(ctx: ToolContext, rt: ToolRuntime, title: str) -> dic
         return {"success": False, "message": "只能在群聊中使用"}
     result = await _set_title(rt.require_bot(), ctx.group_id, ctx.user_id, title, operator_id=ctx.user_id)
     return {"success": result.success, "message": result.message}
+
+
+from . import join_verify as join_verify  # noqa: E402
