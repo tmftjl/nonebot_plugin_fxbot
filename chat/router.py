@@ -24,10 +24,10 @@ from ..adapter import (
 from .personas import effective_persona_name
 from .tool_runtime import default_runtime_factory
 from .message_adapter import (
-    resolve_images,
     collect_mentions,
     adapt_message_event,
     session_id_for_event,
+    image_sources_for_event,
 )
 from ..permission.message_policy import should_process_fxbot_message
 
@@ -37,14 +37,14 @@ def _is_to_me(event: Any) -> bool:
     return event_is_tome(event)
 
 
-def _persona_trigger(cfg: dict[str, Any], event: Any) -> str:
+def _persona_trigger(cfg: dict[str, Any], bot: Any, event: Any) -> str:
     """消息以当前人格名开头时返回人格名，用于免 @ 叫醒 Bot。"""
     if not event_group_id(event):
         return ""
     text = event_plain_text(event).lstrip()
     if not text:
         return ""
-    name = effective_persona_name(session_id_for_event(event), cfg.get("persona"))
+    name = effective_persona_name(session_id_for_event(bot, event), cfg.get("persona"))
     return name if name and text.casefold().startswith(name.casefold()) else ""
 
 
@@ -79,10 +79,10 @@ def _allowed_group_id(cfg: dict[str, Any], event: Any) -> str | None:
     return group_id if not allowlist or group_id in allowlist else None
 
 
-def _match_context(cfg: dict[str, Any], event: Any) -> bool:
+def _match_context(cfg: dict[str, Any], bot: Any, event: Any) -> bool:
     """按会话类型判断是否允许进入 AI 兜底。"""
     if event_group_id(event):
-        return bool(_allowed_group_id(cfg, event)) and (_is_to_me(event) or bool(_persona_trigger(cfg, event)))
+        return bool(_allowed_group_id(cfg, event)) and (_is_to_me(event) or bool(_persona_trigger(cfg, bot, event)))
     if not bool(cfg["private_enabled"]):
         return False
     allowlist = _id_allowlist(cfg, "private_allowlist")
@@ -96,7 +96,7 @@ async def _ai_fallback_rule(bot: Bot, event: Event) -> bool:
     cfg = _chat_cfg()
     if not bool(cfg["enabled"]):
         return False
-    if not _match_context(cfg, event):
+    if not _match_context(cfg, bot, event):
         return False
     text = event_plain_text(event)
     if not text and not _has_image(event):
@@ -114,7 +114,7 @@ async def _context_rule(bot: Bot, event: Event) -> bool:
     cfg = _chat_cfg()
     if not bool(cfg["enabled"]) or int(cfg["max_history"]) <= 0:
         return False
-    if not _allowed_group_id(cfg, event) or _is_to_me(event) or _persona_trigger(cfg, event):
+    if not _allowed_group_id(cfg, event) or _is_to_me(event) or _persona_trigger(cfg, bot, event):
         return False
     text = event_plain_text(event)
     prefix = tuple(str(item) for item in cfg["command_prefixes"])
@@ -133,11 +133,11 @@ async def _handle_context(bot: Bot, event: Event) -> None:
     """把普通群消息写入 AI 会话历史。"""
     user_id = normalize_id(event_user_id(event)) or ""
     has_image = _has_image(event)
-    images = await resolve_images(event) if has_image and bool(_chat_cfg()["image_description"]) else []
+    images = image_sources_for_event(event) if has_image else []
     # 上下文消息只做廉价提取：昵称取消息段里现成的，不额外查成员接口
     mentions = await collect_mentions(bot, event, event_group_id(event), resolve_names=False)
     await chat_service.record_group_message(
-        session_id_for_event(event),
+        session_id_for_event(bot, event),
         user_id,
         event_user_name(event, user_id),
         event_plain_text(event),
@@ -157,5 +157,7 @@ async def _handle_ai_fallback(bot: Bot, event: Event, matcher: Matcher) -> None:
     except Exception as exc:
         logger.opt(exception=True).warning(f"[Chat] AI 兜底处理失败: {exc}")
         await matcher.finish("AI 服务暂时不可用")
+    if not chat_service.is_current(request.session_id, response.epoch):
+        return
     if response.text:
         await matcher.finish(response.text)

@@ -108,11 +108,16 @@ async def _load_image(source: str | bytes) -> bytes:
     return data
 
 
-async def resolve_images(event: Any, reply: ReplyInfo | None = None) -> list[str]:
-    """把消息（或引用）中的图片转成模型可消费的 data URL。"""
+def image_sources_for_event(event: Any, reply: ReplyInfo | None = None) -> list[str | bytes]:
+    """提取消息或引用中的原始图片源，不下载或解码。"""
     sources = extract_raw_image_sources(event_message(event))
     if not sources and reply is not None:
         sources = list(reply.image_sources)
+    return list(dict.fromkeys(source for source in sources if source))[:_MAX_IMAGE_COUNT]
+
+
+async def load_images(sources: list[str | bytes]) -> list[str]:
+    """把原始图片源加载为模型可消费的 data URL。"""
 
     images: list[str] = []
     seen: set[str | bytes] = set()
@@ -229,18 +234,26 @@ async def collect_mentions(
     return refs
 
 
-def session_id_for_event(event: Any) -> str:
-    """按群或用户生成会话标识。"""
+def platform_for_bot(bot: Any) -> str:
+    """读取适配器平台标识，字段不可用时返回占位。"""
+    adapter = getattr(bot, "adapter", None)
+    get_name = getattr(adapter, "get_name", None)
+    return str(get_name() or "unknown") if callable(get_name) else "unknown"
+
+
+def session_id_for_event(bot: Any, event: Any) -> str:
+    """按平台、Bot 和群或用户生成隔离的会话标识。"""
     group_id = normalize_id(event_group_id(event))
-    user_id = normalize_id(event_user_id(event)) or ""
-    return f"group:{group_id}" if group_id else f"private:{user_id}"
+    user_id = normalize_id(event_user_id(event)) or "unknown"
+    namespace = f"{platform_for_bot(bot)}:{getattr(bot, 'self_id', None) or 'unknown'}"
+    return f"{namespace}:group:{group_id}" if group_id else f"{namespace}:private:{user_id}"
 
 
 async def adapt_message_event(bot: Any, event: Any) -> ChatRequest:
     """适配 NoneBot 消息事件。"""
     user_id = normalize_id(event_user_id(event)) or ""
     group_id = normalize_id(event_group_id(event))
-    session_id = session_id_for_event(event)
+    session_id = session_id_for_event(bot, event)
     segments: list[InboundSegment] = []
     try:
         for seg in event.get_message():
@@ -258,9 +271,9 @@ async def adapt_message_event(bot: Any, event: Any) -> ChatRequest:
         group_id=group_id,
         text=event_plain_text(event),
         segments=segments,
-        images=await resolve_images(event, reply),
+        images=await load_images(image_sources_for_event(event, reply)),
         quoted_text=_quoted_text(reply),
-        platform=event.get_type() if hasattr(event, "get_type") else "",
+        platform=platform_for_bot(bot),
         metadata={"event": event},
         mentions=mentions,
     )

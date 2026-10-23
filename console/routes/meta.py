@@ -73,9 +73,12 @@ async def update_ai_persona(key: str, payload: dict[str, Any]) -> dict[str, Any]
 
 
 @router.delete("/ai_chat/persona/{key}")
-async def delete_ai_persona(key: str) -> dict[str, bool]:
+async def delete_ai_persona(key: str) -> dict[str, bool | str]:
     """删除 AI 人格。"""
-    delete_persona(key)
+    try:
+        delete_persona(key)
+    except ValueError as exc:
+        return {"success": False, "message": str(exc)}
     return {"success": True}
 
 

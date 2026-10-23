@@ -4,12 +4,23 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from collections.abc import AsyncIterator
 
 from nonebot import logger
 
 from .base import BaseProvider, ChatProvider, EmbeddingProvider
 from ...config import get_manager as get_config_manager
 from .register import provider_registry, get_provider_class
+
+
+@dataclass
+class _ProviderLease:
+    provider: BaseProvider
+    references: int = 0
+    retired: bool = False
+    closing: bool = False
 
 
 def _provider_configs() -> dict[str, dict[str, Any]]:
@@ -42,6 +53,8 @@ class ProviderManager:
         if self._initialized:
             return
         self._providers: dict[str, BaseProvider] = {}
+        self._leases: dict[int, _ProviderLease] = {}
+        self._closing: set[asyncio.Task[None]] = set()
         self._lock = asyncio.Lock()
         self._initialized = True
         self.import_sources()
@@ -52,38 +65,58 @@ class ProviderManager:
 
     async def get_provider(self, name: str = "") -> ChatProvider:
         """获取对话 Provider，配置变化时自动重建。"""
-        async with self._lock:
-            provider_name, config = self._resolve_config(name, capability="chat")
-            cached = self._providers.get(provider_name)
-            if isinstance(cached, ChatProvider) and cached.config == config:
-                return cached
-            if cached is not None:
-                self._providers.pop(provider_name, None)
-                await self._release(cached)
+        state = await self._get(name, capability="chat")
+        return state.provider
 
-            provider = self._create_provider(provider_name, config)
-            if not isinstance(provider, ChatProvider):
-                raise TypeError(f"Provider {provider_name} 不是 ChatProvider")
-            self._providers[provider_name] = provider
-            return provider
+    @asynccontextmanager
+    async def lease(self, name: str = "") -> AsyncIterator[ChatProvider]:
+        """租用对话实例，退役实例在最后一个在途请求结束后释放。"""
+        state = await self._get(name, capability="chat", acquire=True)
+        try:
+            yield state.provider
+        finally:
+            async with self._lock:
+                state.references -= 1
+                self._close_retired(state)
+
+    def _close_retired(self, state: _ProviderLease) -> None:
+        if not state.retired or state.references or state.closing:
+            return
+        state.closing = True
+        self._leases.pop(id(state.provider), None)
+        task = asyncio.create_task(self._release(state.provider))
+        self._closing.add(task)
+        task.add_done_callback(self._closing.discard)
+
+    async def _get(self, name: str, *, capability: str, acquire: bool = False) -> _ProviderLease:
+        async with self._lock:
+            provider_name, config = self._resolve_config(name, capability=capability)
+            cache_key = provider_name if capability == "chat" else f"embedding:{provider_name}"
+            expected = ChatProvider if capability == "chat" else EmbeddingProvider
+            cached = self._providers.get(cache_key)
+            if isinstance(cached, expected) and cached.config == config:
+                state = self._leases[id(cached)]
+            else:
+                provider = self._create_provider(provider_name, config)
+                state = _ProviderLease(provider)
+                if not isinstance(provider, expected):
+                    state.retired = True
+                    self._close_retired(state)
+                    raise TypeError(f"Provider {provider_name} 不是 {expected.__name__}")
+                self._providers[cache_key] = provider
+                self._leases[id(provider)] = state
+                if cached is not None:
+                    retired = self._leases[id(cached)]
+                    retired.retired = True
+                    self._close_retired(retired)
+            if acquire:
+                state.references += 1
+            return state
 
     async def get_embedding_provider(self, name: str = "") -> EmbeddingProvider:
         """获取嵌入 Provider，配置变化时自动重建。"""
-        async with self._lock:
-            provider_name, config = self._resolve_config(name, capability="embedding")
-            cache_key = f"embedding:{provider_name}"
-            cached = self._providers.get(cache_key)
-            if isinstance(cached, EmbeddingProvider) and cached.config == config:
-                return cached
-            if cached is not None:
-                self._providers.pop(cache_key, None)
-                await self._release(cached)
-
-            provider = self._create_provider(provider_name, config)
-            if not isinstance(provider, EmbeddingProvider):
-                raise TypeError(f"Provider {provider_name} 不是 EmbeddingProvider")
-            self._providers[cache_key] = provider
-            return provider
+        state = await self._get(name, capability="embedding")
+        return state.provider
 
     def _resolve_config(self, name: str, *, capability: str) -> tuple[str, dict[str, Any]]:
         configs = _provider_configs()
@@ -121,13 +154,18 @@ class ProviderManager:
             logger.opt(exception=True).warning(f"[ProviderManager] 关闭 {provider.provider_id} 失败")
 
     async def reset(self) -> None:
-        """关闭并清空已缓存的 Provider。"""
+        """退役并清空缓存；在途租约释放后再关闭对应实例。"""
         async with self._lock:
             providers = list(self._providers.values())
             self._providers.clear()
             for provider in providers:
-                await self._release(provider)
-            logger.info(f"[ProviderManager] 已重置 {len(providers)} 个 Provider")
+                state = self._leases[id(provider)]
+                state.retired = True
+                self._close_retired(state)
+            closing = list(self._closing)
+        if closing:
+            await asyncio.gather(*(asyncio.shield(task) for task in closing))
+        logger.info(f"[ProviderManager] 已重置 {len(providers)} 个 Provider")
 
     def list_cached(self) -> dict[str, str]:
         """列出已缓存的 Provider。"""

@@ -15,6 +15,7 @@ from .session import ChatSessionStore, default_session_store
 from .bindings import PERSONA, PROVIDER, get_binding
 from .personas import DEFAULT_PERSONA, get_persona_text
 from .providers import LLMResponse, provider_manager
+from .message_adapter import load_images
 
 
 def _finalize_response(response: LLMResponse) -> LLMResponse:
@@ -34,6 +35,11 @@ _IMAGE_DESC_PROMPT = (
 )
 _MAX_IMAGE_DESC_CHARS = 200
 _MAX_TOOL_ROUNDS = 3
+_MAX_TOOL_CALLS_PER_ROUND = 4
+_MAX_TOOL_CALLS = 8
+_TOOL_TIMEOUT = 15.0
+_TOOL_BUDGET = 90.0
+_MAX_TOOL_RESULT_CHARS = 2000
 _MAX_BACKGROUND_CHARS = 2000
 _MAX_BACKGROUND_LINE_CHARS = 500
 _CURRENT_MARK = "[需要你回应]"
@@ -47,7 +53,7 @@ def _session_provider(session_id: str) -> str:
 
 
 def _speaker_label(user_id: str, user_name: str) -> str:
-    """生成群聊发言人标识，用于区分同一会话里的不同成员。"""
+    """生成发言人标识，用于区分同一会话里的不同成员。"""
     user_id = str(user_id or "").strip()
     # 昵称是用户可控的，压成单行并限长，避免用换行伪造出第二段消息
     user_name = " ".join(str(user_name or "").split())[:32]
@@ -66,7 +72,7 @@ def _mentions_line(mentions: list[MentionRef]) -> str:
 def _flatten(content: Any) -> str:
     """把一条历史消息压成单行，合并后不会伪造出新的发言人。"""
     line = " ".join(str(content or "").split())
-    return f"{line[:_MAX_BACKGROUND_LINE_CHARS]}…" if len(line) > _MAX_BACKGROUND_LINE_CHARS else line
+    return f"{line[: _MAX_BACKGROUND_LINE_CHARS - 1]}…" if len(line) > _MAX_BACKGROUND_LINE_CHARS else line
 
 
 def _split_speaker(line: str) -> tuple[str, str]:
@@ -78,25 +84,30 @@ def _split_speaker(line: str) -> tuple[str, str]:
 def _background_block(messages: list[dict[str, Any]]) -> str:
     """把未触发的群消息并成一段背景；同一人连续发言合并，超预算时保留最近的。"""
     lines: list[str] = []
-    for message in messages:
-        line = _flatten(message.get("content"))
+    dropped = len(messages)
+    for index in range(len(messages) - 1, -1, -1):
+        line = _flatten(messages[index].get("content"))
         if not line:
             continue
         label, text = _split_speaker(line)
-        if label and lines and _split_speaker(lines[-1])[0] == label:
-            lines[-1] = f"{lines[-1]}；{text}" if text else lines[-1]
-            continue
-        lines.append(line)
-
-    dropped, total = 0, sum(len(line) for line in lines)
-    while dropped < len(lines) - 1 and total > _MAX_BACKGROUND_CHARS:
-        total -= len(lines[dropped])
-        dropped += 1
-    kept = lines[dropped:]
-    if not kept:
+        candidate = [line, *lines]
+        if label and lines and _split_speaker(lines[0])[0] == label:
+            merged = f"{line}；{_split_speaker(lines[0])[1]}" if text else lines[0]
+            if len(merged) <= _MAX_BACKGROUND_LINE_CHARS:
+                candidate = [merged, *lines[1:]]
+        header = _BACKGROUND_HEADER if not index else f"{_BACKGROUND_HEADER}（更早的 {index} 条已省略）"
+        budget = _MAX_BACKGROUND_CHARS - len(header) - 1
+        if len("\n".join(candidate)) > budget:
+            if not lines:
+                lines = [line[: budget - 1] + "…"] if budget > 0 else []
+                dropped = index
+            break
+        lines = candidate
+        dropped = index
+    if not lines:
         return ""
     header = _BACKGROUND_HEADER if not dropped else f"{_BACKGROUND_HEADER}（更早的 {dropped} 条已省略）"
-    return f"{header}\n" + "\n".join(kept)
+    return f"{header}\n" + "\n".join(lines)
 
 
 def _mark_current(content: str | list[dict[str, Any]]) -> str | list[dict[str, Any]]:
@@ -123,21 +134,21 @@ def _scene_hint(request: ChatRequest, persona_name: str = "") -> str:
                 "用户要求对某人操作时直接用其中的 ID，没给出目标就先问清楚，不要对发起人自己执行。"
             )
         return "".join(lines)
-    return f"\n\n用户正在跟你私聊，对方是 {_speaker_label(request.user_id, request.user_name)}。"
+    return "\n\n用户正在跟你私聊。"
 
 
 def _build_user_content(request: ChatRequest) -> str | list[dict[str, Any]]:
-    """构造用户消息内容，群聊带上发言人标识，引用、@ 目标和图片一并附带。"""
+    """构造用户消息内容，带上发言人标识，引用、@ 目标和图片一并附带。"""
     text = request.text
     if request.quoted_text:
         text = f"{request.quoted_text}\n{text}" if text else request.quoted_text
+    label = _speaker_label(request.user_id, request.user_name)
+    if text:
+        text = f"{label}: {text}"
+    else:
+        # 有图片段时由图片本身承载内容，避免历史里出现两份 [图片] 占位
+        text = f"{label}:" if request.images else f"{label}: [图片]"
     if request.is_group:
-        label = _speaker_label(request.user_id, request.user_name)
-        if text:
-            text = f"{label}: {text}"
-        else:
-            # 有图片段时由图片本身承载内容，避免历史里出现两份 [图片] 占位
-            text = f"{label}:" if request.images else f"{label}: [图片]"
         if mentions_line := _mentions_line(request.mentions):
             text = f"{text}\n{mentions_line}"
     if not request.images:
@@ -149,15 +160,20 @@ def _build_user_content(request: ChatRequest) -> str | list[dict[str, Any]]:
     return content
 
 
-async def _allowed_tools(runtime: ToolRuntime) -> list[dict[str, Any]]:
+async def _allowed_tools(runtime: ToolRuntime) -> tuple[set[str], list[dict[str, Any]]]:
     """按控制台开关和调用者权限过滤工具。"""
-    enabled = {str(name) for name in get_config_manager().get_system()["chat"].get("enabled_tools") or []}
+    try:
+        enabled = {str(name) for name in get_config_manager().get_system()["chat"].get("enabled_tools") or []}
+    except Exception:
+        logger.opt(exception=True).warning("[Chat] 读取工具配置失败，拒绝所有工具")
+        return set(), []
     names = {
         spec.name
         for spec in default_registry.list()
         if (not enabled or spec.name in enabled) and await tool_allowed(spec, runtime)
     }
-    return [tool for tool in default_registry.to_openai_tools() if tool["function"]["name"] in names]
+    tools = [tool for tool in default_registry.to_openai_tools() if tool["function"]["name"] in names]
+    return names, tools
 
 
 def _clean_description(text: str) -> str:
@@ -165,6 +181,31 @@ def _clean_description(text: str) -> str:
     value = " ".join(str(text or "").split())
     value = value.replace("[", "【").replace("]", "】")
     return value[:_MAX_IMAGE_DESC_CHARS]
+
+
+def _history_trace(trace: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """只把本轮实际处理的前几个调用写入历史，避免超大调用列表撑爆历史。"""
+    kept = trace[:_MAX_TOOL_CALLS_PER_ROUND + 1]
+    if len(kept) <= 1:
+        return kept
+    return [{**kept[0], "tool_calls": (kept[0].get("tool_calls") or [])[: len(kept) - 1]}, *kept[1:]]
+
+
+def _tool_result_content(result: dict[str, Any]) -> str:
+    content = json.dumps(result, ensure_ascii=False, default=str)
+    if len(content) <= _MAX_TOOL_RESULT_CHARS:
+        return content
+    key = "result" if result.get("ok") else "error"
+    text = str(result.get(key, content))
+    low, high = 0, min(len(text), _MAX_TOOL_RESULT_CHARS)
+    while low < high:
+        middle = (low + high + 1) // 2
+        candidate = json.dumps({"ok": bool(result.get("ok")), key: text[:middle] + "…"}, ensure_ascii=False)
+        if len(candidate) <= _MAX_TOOL_RESULT_CHARS:
+            low = middle
+        else:
+            high = middle - 1
+    return json.dumps({"ok": bool(result.get("ok")), key: text[:low] + "…"}, ensure_ascii=False)
 
 
 async def _describe_image(provider: Any, url: str) -> str:
@@ -196,6 +237,21 @@ async def _describe_images(provider: Any, images: list[str]) -> list[str]:
     return list(await asyncio.gather(*(_describe_image(provider, url) for url in images)))
 
 
+async def _describe_images_from_sources(provider: Any, images: list[str | bytes]) -> list[str]:
+    async def describe_source(source: str | bytes) -> str:
+        loaded = await load_images([source])
+        return await _describe_image(provider, loaded[0]) if loaded else ""
+
+    tasks = [asyncio.create_task(describe_source(source)) for source in images]
+    try:
+        return list(await asyncio.gather(*tasks))
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
 def _strip_images(messages: list[dict[str, Any]], descriptions: list[str] | None = None) -> list[dict[str, Any]]:
     """历史只保留文本：图片换成文字描述，没有描述时用 [图片] 占位。"""
     pending = list(descriptions or [])
@@ -225,12 +281,17 @@ class ChatService:
 
     async def process(self, request: ChatRequest, runtime: ToolRuntime | None = None) -> ChatResponse:
         """处理一次对话请求。"""
-        return await self._process(request, runtime)
+        async with self.session_store.turn_lock(request.session_id):
+            return await self._process(request, runtime)
 
     async def clear_session(self, session_id: str) -> None:
         """清空会话历史。"""
         async with self.session_store.lock(session_id):
             self.session_store.clear(session_id)
+
+    def is_current(self, session_id: str, epoch: int) -> bool:
+        """判断轮次是否仍属于当前会话，清空后的旧轮次不可继续生效。"""
+        return self.session_store.epoch(session_id) == epoch
 
     async def record_group_message(
         self,
@@ -239,7 +300,7 @@ class ChatService:
         user_name: str,
         text: str,
         *,
-        images: list[str] | None = None,
+        images: list[str | bytes] | None = None,
         has_image: bool = False,
         mentions: list[MentionRef] | None = None,
     ) -> None:
@@ -251,16 +312,7 @@ class ChatService:
         limit = int(chat_cfg["max_history"])
         if limit <= 0:
             return
-        descriptions = [""] * len(images)
-        if images and bool(chat_cfg["image_description"]):
-            try:
-                provider = await provider_manager.get_provider(_session_provider(session_id))
-            except Exception as exc:
-                logger.opt(exception=True).debug("[Chat] 群聊图片描述跳过：Provider 不可用")
-                logger.warning(f"[Chat] 群聊图片描述跳过：Provider 不可用（{type(exc).__name__}）")
-            else:
-                descriptions = await _describe_images(provider, images)
-        placeholders = [f"[图片: {desc}]" if desc else "[图片]" for desc in descriptions]
+        placeholders = ["[图片]"] * len(images)
         if not placeholders and has_image:
             placeholders = ["[图片]"]
         label = _speaker_label(user_id, user_name)
@@ -268,18 +320,31 @@ class ChatService:
         if mentions_line := _mentions_line(mentions or []):
             lines.append(mentions_line)
         lines.extend(placeholders)
+        entry = {"role": "user", "content": "\n".join(lines)}
         async with self.session_store.lock(session_id):
-            self.session_store.append(
-                session_id,
-                {"role": "user", "content": "\n".join(lines)},
-                limit=limit,
-            )
+            self.session_store.append(session_id, entry, limit=limit)
+        if images and bool(chat_cfg["image_description"]):
+            try:
+                async with provider_manager.lease(_session_provider(session_id)) as provider:
+                    descriptions = await _describe_images_from_sources(provider, images)
+            except Exception as exc:
+                logger.opt(exception=True).debug("[Chat] 群聊图片描述跳过：Provider 不可用")
+                logger.warning(f"[Chat] 群聊图片描述跳过：Provider 不可用（{type(exc).__name__}）")
+            else:
+                entry["content"] = "\n".join(
+                    lines[: -len(images)] + [f"[图片: {desc}]" if desc else "[图片]" for desc in descriptions]
+                )
 
     async def _process(self, request: ChatRequest, runtime: ToolRuntime | None) -> ChatResponse:
-        """完成一轮对话；模型调用不持有会话锁，期间到达的群消息按真实顺序落库。"""
+        """完成一轮对话；全程持有轮次锁，仅在读写历史时持有状态锁。"""
+        async with provider_manager.lease(_session_provider(request.session_id)) as provider:
+            return await self._process_with_provider(request, runtime, provider)
+
+    async def _process_with_provider(
+        self, request: ChatRequest, runtime: ToolRuntime | None, provider: Any
+    ) -> ChatResponse:
         chat_cfg = get_config_manager().get_system()["chat"]
         limit = int(chat_cfg["max_history"])
-        provider = await provider_manager.get_provider(_session_provider(request.session_id))
         runtime = runtime or ToolRuntime()
         user_content = _build_user_content(request)
         persona_name = request.metadata.get("persona_name") if isinstance(request.metadata, dict) else None
@@ -296,6 +361,7 @@ class ChatService:
         )
         try:
             async with self.session_store.lock(request.session_id):
+                self.session_store.trim(request.session_id, limit)
                 history = [m for m in self.session_store.get(request.session_id) if m.get("role") != "system"]
                 while history and history[0].get("role") != "user":
                     history.pop(0)
@@ -318,13 +384,15 @@ class ChatService:
                 messages.extend(history)
                 messages.append({"role": "user", "content": user_content})
 
-            tools = await _allowed_tools(runtime)
+            allowed_names, tools = await _allowed_tools(runtime)
             response = await provider.chat(messages=messages, tools=tools or None)
 
-            for _ in range(_MAX_TOOL_ROUNDS):
-                if not response.has_tool_calls:
+            tool_calls_seen = 0
+            deadline = asyncio.get_running_loop().time() + _TOOL_BUDGET
+            for round_index in range(_MAX_TOOL_ROUNDS):
+                if not self.is_current(request.session_id, epoch) or not response.has_tool_calls:
                     break
-                messages.append(response.to_message_dict())
+                trace = [response.to_message_dict()]
                 context = ToolContext(
                     user_id=request.user_id,
                     group_id=request.group_id,
@@ -332,25 +400,69 @@ class ChatService:
                     platform=request.platform,
                     metadata=dict(request.metadata),
                 )
-                for tool_call in response.tool_calls:
-                    func = tool_call.get("function", {})
-                    tool_result = await execute_tool(
-                        str(func.get("name") or ""),
-                        func.get("arguments") or "{}",
-                        context,
-                        runtime,
-                    )
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": tool_call.get("id"),
-                            "name": func.get("name"),
-                            "content": json.dumps(tool_result, ensure_ascii=False),
-                        }
-                    )
-                response = await provider.chat(messages=messages, tools=tools or None)
+                previous_calls = tool_calls_seen
+                tool_calls_seen += len(response.tool_calls)
+                try:
+                    for index, tool_call in enumerate(response.tool_calls):
+                        func = tool_call.get("function", {})
+                        remaining = deadline - asyncio.get_running_loop().time()
+                        if not self.is_current(request.session_id, epoch):
+                            tool_result = {"ok": False, "error": "会话已失效"}
+                        elif index >= _MAX_TOOL_CALLS_PER_ROUND:
+                            tool_result = {"ok": False, "error": "超过单轮工具调用上限"}
+                        elif previous_calls + index >= _MAX_TOOL_CALLS or remaining <= 0:
+                            tool_result = {"ok": False, "error": "工具阶段预算已耗尽"}
+                        else:
+                            try:
+                                tool_result = await asyncio.wait_for(
+                                    execute_tool(
+                                        str(func.get("name") or ""),
+                                        func.get("arguments") or "{}",
+                                        context,
+                                        runtime,
+                                        allowed_names=allowed_names,
+                                    ),
+                                    timeout=min(_TOOL_TIMEOUT, remaining),
+                                )
+                            except asyncio.TimeoutError:
+                                tool_result = {"ok": False, "error": "工具执行超时"}
+                            except Exception:
+                                logger.opt(exception=True).warning("[Chat] 工具调用失败")
+                                tool_result = {"ok": False, "error": "工具执行失败"}
+                        trace.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tool_call.get("id"),
+                                "name": func.get("name"),
+                                "content": _tool_result_content(tool_result),
+                            }
+                        )
+                finally:
+                    for tool_call in response.tool_calls[len(trace) - 1 :]:
+                        trace.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tool_call.get("id"),
+                                "name": tool_call.get("function", {}).get("name"),
+                                "content": _tool_result_content({"ok": False, "error": "工具调用已中断"}),
+                            }
+                        )
+                    async with self.session_store.lock(request.session_id):
+                        if self.is_current(request.session_id, epoch):
+                            self.session_store.append_many(request.session_id, _history_trace(trace), limit=limit)
+                messages.extend(trace)
+                if not self.is_current(request.session_id, epoch):
+                    break
+                exhausted = (
+                    tool_calls_seen >= _MAX_TOOL_CALLS
+                    or asyncio.get_running_loop().time() >= deadline
+                    or round_index == _MAX_TOOL_ROUNDS - 1
+                )
+                response = await provider.chat(messages=messages, tools=None if exhausted else tools or None)
+                if exhausted:
+                    break
 
-            if response.has_tool_calls:
+            if response.has_tool_calls and self.is_current(request.session_id, epoch):
                 logger.warning(f"[Chat] 达到最大工具轮数，已丢弃残留工具调用: session={request.session_id}")
             response = _finalize_response(response)
             descriptions = await description_task if description_task is not None else []
@@ -358,12 +470,14 @@ class ChatService:
                 stripped = _strip_images([{"role": "user", "content": user_content}], descriptions)[0]
                 entry["content"] = stripped["content"]
             async with self.session_store.lock(request.session_id):
-                if self.session_store.epoch(request.session_id) == epoch:
+                if self.is_current(request.session_id, epoch):
                     self.session_store.append(request.session_id, response.to_message_dict(), limit=limit)
-            return ChatResponse(text=response.content, raw=response)
+            return ChatResponse(text=response.content, raw=response, epoch=epoch)
         finally:
-            if description_task is not None and not description_task.done():
-                description_task.cancel()
+            if description_task is not None:
+                if not description_task.done():
+                    description_task.cancel()
+                await asyncio.gather(description_task, return_exceptions=True)
 
 
 chat_service = ChatService()

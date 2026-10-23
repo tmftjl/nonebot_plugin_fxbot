@@ -83,40 +83,53 @@ def get_persona_text(name: str | None = None) -> str:
     return persona.details if persona else ""
 
 
-def save_persona_text(name: str, text: str, *, overwrite: bool = True) -> Path:
-    """保存人格内容；overwrite=False 时同名人格已存在会抛出 FileExistsError。"""
+def _validated_persona_path(name: str, dir_path: Path) -> tuple[str, Path]:
+    """校验人格名称并返回目录内的人格路径。"""
+    raw_name = str(name or "")
     key = str(name or "").strip()
     if not key:
         raise ValueError("人格名称不能为空")
-    if any(ch in key for ch in '/\\:*?"<>|\x00') or key in {".", ".."}:
+    if (
+        any(ch in key for ch in '/\\:*?"<>|')
+        or any(ord(ch) < 32 or 127 <= ord(ch) <= 159 for ch in raw_name)
+        or key in {".", ".."}
+        or Path(key).is_absolute()
+    ):
         raise ValueError('人格名称不能包含 / \\ : * ? " < > |')
+    directory = dir_path.resolve()
+    path = directory / f"{key}.md"
+    if path.resolve().parent != directory:
+        raise ValueError("人格路径必须位于人格目录内")
+    return key, path
+
+
+def save_persona_text(name: str, text: str, *, overwrite: bool = True) -> Path:
+    """保存人格内容；overwrite=False 时同名人格已存在会抛出 FileExistsError。"""
+    dir_path = get_personas_dir()
+    key, path = _validated_persona_path(name, dir_path)
     content = str(text or "").strip()
     if not content:
         raise ValueError("人格描述不能为空")
     if "\x00" in content:
         raise ValueError("人格描述包含非法字符")
-    dir_path = get_personas_dir()
     _ensure_default_persona(dir_path)
     if not overwrite and any((dir_path / f"{key}{ext}").exists() for ext in (".md", ".txt")):
         raise FileExistsError(key)
-    path = dir_path / f"{key}.md"
     path.write_text(content, encoding="utf-8")
     return path
 
 
 def delete_persona(name: str) -> int:
     """删除人格文件，返回删除数量。"""
-    key = str(name or "").strip()
-    if not key:
-        raise ValueError("人格名称不能为空")
+    dir_path = get_personas_dir()
+    key, path = _validated_persona_path(name, dir_path)
     if key == DEFAULT_PERSONA:
         raise ValueError("默认人格不能删除")
-    dir_path = get_personas_dir()
     removed = 0
     for ext in (".md", ".txt"):
-        path = dir_path / f"{key}{ext}"
-        if path.exists():
-            path.unlink()
+        candidate = path.with_suffix(ext)
+        if candidate.exists():
+            candidate.unlink()
             removed += 1
     return removed
 

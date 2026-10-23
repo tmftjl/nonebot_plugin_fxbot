@@ -33,9 +33,12 @@ async def execute_tool(
     context: ToolContext,
     runtime: ToolRuntime,
     *,
+    allowed_names: set[str],
     registry: ToolRegistry = default_registry,
 ) -> dict[str, Any]:
     """执行单个工具并返回模型可消费的结果。"""
+    if name not in allowed_names:
+        return {"ok": False, "error": f"工具未允许: {name}"}
     spec = registry.get(name)
     if spec is None:
         return {"ok": False, "error": f"工具不存在: {name}"}

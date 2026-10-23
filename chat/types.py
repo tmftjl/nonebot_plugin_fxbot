@@ -55,3 +55,4 @@ class ChatResponse:
     text: str
     raw: Any = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    epoch: int = 0

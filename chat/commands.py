@@ -141,7 +141,7 @@ clear_cmd = on_message(
 async def _handle_persona(bot: Bot, event: Event, matcher: Matcher) -> None:
     """切换当前群或当前私聊用户的人格。"""
     group_id = normalize_id(event_group_id(event))
-    session_id = session_id_for_event(event)
+    session_id = session_id_for_event(bot, event)
     scope = "本群" if group_id else ""
 
     name = _persona_name(event_plain_text(event)) or ""
@@ -159,7 +159,8 @@ async def _handle_persona(bot: Bot, event: Event, matcher: Matcher) -> None:
         except Exception:
             logger.opt(exception=True).warning(f"[Chat] 清除人格绑定失败: session={session_id}")
             await matcher.finish("人格设置失败，请稍后再试")
-        await matcher.finish(f"已恢复全局默认人格：{default_name}")
+        await chat_service.clear_session(session_id)
+        await matcher.finish(f"已恢复全局默认人格：{default_name}，对话历史已清空")
 
     if name not in personas:
         await matcher.finish(f"没有名为「{name}」的人格，可用人格：{'、'.join(sorted(personas))}")
@@ -169,14 +170,15 @@ async def _handle_persona(bot: Bot, event: Event, matcher: Matcher) -> None:
     except Exception:
         logger.opt(exception=True).warning(f"[Chat] 保存人格绑定失败: session={session_id}")
         await matcher.finish("人格设置失败，请稍后再试")
-    await matcher.finish(f"{scope}人格已切换为「{name}」")
+    await chat_service.clear_session(session_id)
+    await matcher.finish(f"{scope}人格已切换为「{name}」，对话历史已清空")
 
 
 @provider_cmd.handle()
 async def _handle_provider(bot: Bot, event: Event, matcher: Matcher) -> None:
     """切换当前群或当前私聊用户使用的 Provider。"""
     group_id = normalize_id(event_group_id(event))
-    session_id = session_id_for_event(event)
+    session_id = session_id_for_event(bot, event)
     scope = "本群" if group_id else "当前会话"
 
     name = _provider_name(event_plain_text(event)) or ""
@@ -211,5 +213,5 @@ async def _handle_provider(bot: Bot, event: Event, matcher: Matcher) -> None:
 @clear_cmd.handle()
 async def _handle_clear(bot: Bot, event: Event, matcher: Matcher) -> None:
     """清空当前会话的 AI 历史。"""
-    await chat_service.clear_session(session_id_for_event(event))
+    await chat_service.clear_session(session_id_for_event(bot, event))
     await matcher.finish("已清空当前对话历史")
