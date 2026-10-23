@@ -25,7 +25,7 @@ SYSTEM_DEFAULTS = {
         "private_enabled": False,
         "private_allowlist": [],
         "group_allowlist": [],
-        "persona": "default",
+        "persona": "小鱼",
         "provider": "",
         "providers": {},
         "max_history": 50,

@@ -13,7 +13,7 @@ from nonebot.permission import SUPERUSER, Permission
 from ..config import get_manager as get_config_manager
 from .service import chat_service
 from ..adapter import selfBot, normalize_id, event_user_id, event_group_id, event_plain_text
-from .personas import load_personas, get_bound_persona, set_bound_persona
+from .personas import DEFAULT_PERSONA, load_personas, get_bound_persona, set_bound_persona
 from .providers import provider_manager
 from .message_adapter import session_id_for_event
 from .provider_bindings import get_bound_provider, set_bound_provider
@@ -146,7 +146,7 @@ async def _handle_persona(bot: Bot, event: Event, matcher: Matcher) -> None:
 
     name = _persona_name(event_plain_text(event)) or ""
     personas = load_personas()
-    default_name = str(_chat_cfg()["persona"] or "default")
+    default_name = str(_chat_cfg()["persona"] or "") or DEFAULT_PERSONA
 
     if not name:
         bound = get_bound_persona(session_id)

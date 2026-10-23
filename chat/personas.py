@@ -11,6 +11,9 @@ from nonebot import logger
 
 from ..utils.paths import config_dir
 
+DEFAULT_PERSONA = "小鱼"
+_DEFAULT_PERSONA_TEXT = "你是一个友好、耐心且乐于助人的 AI 助手。请保持回答简洁清晰，并具备同理心。"
+
 
 @dataclass(frozen=True)
 class PersonaItem:
@@ -27,15 +30,17 @@ def get_personas_dir() -> Path:
     return path
 
 
+def effective_persona_name(session_id: str, configured: str | None = None) -> str:
+    """返回会话实际使用的人格名：绑定优先，其次全局配置，最后默认。"""
+    return str(get_bound_persona(session_id) or configured or "").strip() or DEFAULT_PERSONA
+
+
 def _ensure_default_persona(dir_path: Path) -> None:
     """确保默认人格存在。"""
-    default_file = dir_path / "default.md"
+    default_file = dir_path / f"{DEFAULT_PERSONA}.md"
     if default_file.exists():
         return
-    default_file.write_text(
-        "你是一个友好、耐心且乐于助人的 AI 助手。请保持回答简洁清晰，并具备同理心。",
-        encoding="utf-8",
-    )
+    default_file.write_text(_DEFAULT_PERSONA_TEXT, encoding="utf-8")
 
 
 def _read_text(path: Path) -> str:
@@ -66,16 +71,16 @@ def load_personas() -> dict[str, PersonaItem]:
             personas[key] = PersonaItem(key=key, details=_read_text(path))
         except Exception as exc:
             logger.opt(exception=True).warning(f"[AI Chat] 读取人格失败: {path.name} err={exc}")
-    if "default" not in personas:
-        personas["default"] = PersonaItem(key="default", details="")
+    if DEFAULT_PERSONA not in personas:
+        personas[DEFAULT_PERSONA] = PersonaItem(key=DEFAULT_PERSONA, details="")
     return personas
 
 
 def get_persona_text(name: str | None = None) -> str:
-    """读取指定人格内容。"""
-    persona_name = str(name or "").strip() or "default"
+    """读取指定人格内容，未知名称回退默认人格。"""
+    persona_name = str(name or "").strip() or DEFAULT_PERSONA
     personas = load_personas()
-    persona = personas.get(persona_name) or personas.get("default")
+    persona = personas.get(persona_name) or personas.get(DEFAULT_PERSONA)
     return persona.details if persona else ""
 
 
@@ -105,7 +110,7 @@ def delete_persona(name: str) -> int:
     key = str(name or "").strip()
     if not key:
         raise ValueError("人格名称不能为空")
-    if key == "default":
+    if key == DEFAULT_PERSONA:
         raise ValueError("默认人格不能删除")
     dir_path = get_personas_dir()
     removed = 0

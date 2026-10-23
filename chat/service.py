@@ -12,7 +12,7 @@ from .tools import ToolContext, ToolRuntime, execute_tool, tool_allowed, default
 from .types import MentionRef, ChatRequest, ChatResponse
 from ..config import get_manager as get_config_manager
 from .session import ChatSessionStore, default_session_store
-from .personas import get_persona_text, get_bound_persona
+from .personas import DEFAULT_PERSONA, get_persona_text, get_bound_persona
 from .providers import LLMResponse, provider_manager
 from .provider_bindings import get_bound_provider
 
@@ -59,14 +59,16 @@ def _mentions_line(mentions: list[MentionRef]) -> str:
     return "[@成员: " + ", ".join(ref.render() for ref in mentions) + "]"
 
 
-def _scene_hint(request: ChatRequest) -> str:
-    """告诉模型当前是群聊还是私聊，以及 @ 目标的读法。"""
+def _scene_hint(request: ChatRequest, persona_name: str = "") -> str:
+    """告诉模型当前是群聊还是私聊、自己的名字，以及 @ 目标的读法。"""
     if request.is_group:
         lines = [
-            "\n\n你正在群聊中。最后一条是 @ 你的消息，只需回应它；更早的消息只是上下文。",
+            "\n\n你正在群聊中。最后一条是叫你的消息（@ 你，或以你的名字开头），只需回应它；更早的消息只是上下文。",
             "用户消息的「昵称(ID): 」是发言人标识，不是消息内容。不要把不同成员当成同一个人。",
             "「[图片: 描述]」是图片摘要。指代某人用其昵称，回复不要加「昵称: 」前缀。",
         ]
+        if persona_name:
+            lines.append(f"你的名字是「{persona_name}」。")
         if request.mentions:
             lines.append(
                 "消息末尾的「[@成员: 昵称(ID)]」列出了被 @ 的成员，是系统标记不是正文；"
@@ -234,8 +236,9 @@ class ChatService:
         user_content = _build_user_content(request)
         persona_name = request.metadata.get("persona_name") if isinstance(request.metadata, dict) else None
         bound_persona = get_bound_persona(request.session_id)
-        persona_text = get_persona_text(str(persona_name or bound_persona or chat_cfg["persona"]))
-        persona_text = f"{persona_text}{_scene_hint(request)}".strip()
+        effective_persona = str(persona_name or bound_persona or chat_cfg["persona"] or DEFAULT_PERSONA)
+        persona_text = get_persona_text(effective_persona)
+        persona_text = f"{persona_text}{_scene_hint(request, effective_persona)}".strip()
 
         # 描述与主对话并发执行，避免图片消息多等一次模型调用
         description_task = (

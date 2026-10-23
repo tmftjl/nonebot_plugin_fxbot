@@ -21,6 +21,7 @@ from ..adapter import (
     event_plain_text,
     extract_raw_image_sources,
 )
+from .personas import effective_persona_name
 from .tool_runtime import default_runtime_factory
 from .message_adapter import (
     resolve_images,
@@ -34,6 +35,17 @@ from ..permission.message_policy import should_process_fxbot_message
 def _is_to_me(event: Any) -> bool:
     """判断消息是否 @bot。"""
     return event_is_tome(event)
+
+
+def _persona_trigger(cfg: dict[str, Any], event: Any) -> str:
+    """消息以当前人格名开头时返回人格名，用于免 @ 叫醒 Bot。"""
+    if not event_group_id(event):
+        return ""
+    text = event_plain_text(event).lstrip()
+    if not text:
+        return ""
+    name = effective_persona_name(session_id_for_event(event), cfg.get("persona"))
+    return name if name and text.casefold().startswith(name.casefold()) else ""
 
 
 def _chat_cfg() -> dict[str, Any]:
@@ -70,7 +82,7 @@ def _allowed_group_id(cfg: dict[str, Any], event: Any) -> str | None:
 def _match_context(cfg: dict[str, Any], event: Any) -> bool:
     """按会话类型判断是否允许进入 AI 兜底。"""
     if event_group_id(event):
-        return bool(_allowed_group_id(cfg, event)) and _is_to_me(event)
+        return bool(_allowed_group_id(cfg, event)) and (_is_to_me(event) or bool(_persona_trigger(cfg, event)))
     if not bool(cfg["private_enabled"]):
         return False
     allowlist = _id_allowlist(cfg, "private_allowlist")
@@ -96,13 +108,13 @@ async def _ai_fallback_rule(bot: Bot, event: Event) -> bool:
 
 
 async def _context_rule(bot: Bot, event: Event) -> bool:
-    """记录未 @ Bot 的群消息，作为后续对话的上下文。"""
+    """记录没有叫 Bot 的群消息，作为后续对话的上下文。"""
     if not should_process_fxbot_message(bot, event):
         return False
     cfg = _chat_cfg()
     if not bool(cfg["enabled"]) or int(cfg["max_history"]) <= 0:
         return False
-    if not _allowed_group_id(cfg, event) or _is_to_me(event):
+    if not _allowed_group_id(cfg, event) or _is_to_me(event) or _persona_trigger(cfg, event):
         return False
     text = event_plain_text(event)
     prefix = tuple(str(item) for item in cfg["command_prefixes"])
