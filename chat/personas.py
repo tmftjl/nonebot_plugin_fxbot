@@ -60,19 +60,41 @@ def _collect_persona_files(dir_path: Path) -> dict[str, Path]:
     return result
 
 
+_cache: tuple[tuple[tuple[str, int, int], ...], dict[str, PersonaItem]] | None = None
+
+
+def _signature(files: dict[str, Path]) -> tuple[tuple[str, int, int], ...] | None:
+    """按文件名、修改时间和大小生成缓存签名；读取失败时放弃缓存。"""
+    signature: list[tuple[str, int, int]] = []
+    try:
+        for path in files.values():
+            stat = path.stat()
+            signature.append((path.name, stat.st_mtime_ns, stat.st_size))
+    except OSError:
+        return None
+    return tuple(signature)
+
+
 def load_personas() -> dict[str, PersonaItem]:
-    """加载全部人格。"""
+    """加载全部人格，按文件签名缓存。"""
+    global _cache
     dir_path = get_personas_dir()
     _ensure_default_persona(dir_path)
+    files = _collect_persona_files(dir_path)
+    signature = _signature(files)
+    if signature is not None and _cache is not None and _cache[0] == signature:
+        return dict(_cache[1])
     personas: dict[str, PersonaItem] = {}
-    for key, path in _collect_persona_files(dir_path).items():
+    for key, path in files.items():
         try:
             personas[key] = PersonaItem(key=key, details=_read_text(path))
         except Exception as exc:
             logger.opt(exception=True).warning(f"[AI Chat] 读取人格失败: {path.name} err={exc}")
     if DEFAULT_PERSONA not in personas:
         personas[DEFAULT_PERSONA] = PersonaItem(key=DEFAULT_PERSONA, details="")
-    return personas
+    if signature is not None:
+        _cache = (signature, personas)
+    return dict(personas)
 
 
 def get_persona_text(name: str | None = None) -> str:
@@ -105,6 +127,7 @@ def _validated_persona_path(name: str, dir_path: Path) -> tuple[str, Path]:
 
 def save_persona_text(name: str, text: str, *, overwrite: bool = True) -> Path:
     """保存人格内容；overwrite=False 时同名人格已存在会抛出 FileExistsError。"""
+    global _cache
     dir_path = get_personas_dir()
     key, path = _validated_persona_path(name, dir_path)
     content = str(text or "").strip()
@@ -116,11 +139,13 @@ def save_persona_text(name: str, text: str, *, overwrite: bool = True) -> Path:
     if not overwrite and any((dir_path / f"{key}{ext}").exists() for ext in (".md", ".txt")):
         raise FileExistsError(key)
     path.write_text(content, encoding="utf-8")
+    _cache = None
     return path
 
 
 def delete_persona(name: str) -> int:
     """删除人格文件，返回删除数量。"""
+    global _cache
     dir_path = get_personas_dir()
     key, path = _validated_persona_path(name, dir_path)
     if key == DEFAULT_PERSONA:
@@ -131,6 +156,7 @@ def delete_persona(name: str) -> int:
         if candidate.exists():
             candidate.unlink()
             removed += 1
+    _cache = None
     return removed
 
 

@@ -35,18 +35,33 @@ def _save(bindings: dict[str, dict[str, str]]) -> None:
     os.replace(temp, path)
 
 
+_cache: dict[str, dict[str, str]] | None = None
+_cache_mtime: int | None = None
+
+
 def _load() -> dict[str, dict[str, str]]:
-    """读取全部绑定。"""
+    """读取全部绑定，按文件修改时间缓存。"""
+    global _cache, _cache_mtime
+    path = _bindings_path()
     try:
-        raw = json.loads(_bindings_path().read_text(encoding="utf-8"))
+        mtime = path.stat().st_mtime_ns
     except FileNotFoundError:
-        return {}
+        _cache, _cache_mtime = {}, None
+        return _cache
+    if _cache is not None and mtime == _cache_mtime:
+        return _cache
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raw = {}
     except Exception:
         logger.opt(exception=True).warning("[AI Chat] 读取会话绑定失败")
-        return {}
+        raw = {}
     if not isinstance(raw, dict):
-        return {}
-    return {str(session_id): cleaned for session_id, items in raw.items() if (cleaned := _clean(items))}
+        raw = {}
+    bindings = {str(session_id): cleaned for session_id, items in raw.items() if (cleaned := _clean(items))}
+    _cache, _cache_mtime = bindings, mtime
+    return bindings
 
 
 def get_binding(kind: str, session_id: str) -> str:
@@ -56,7 +71,9 @@ def get_binding(kind: str, session_id: str) -> str:
 
 def set_binding(kind: str, session_id: str, value: str | None) -> None:
     """写入或清除会话绑定；会话下没有任何绑定时从文件里移除。"""
-    bindings = _load()
+    global _cache, _cache_mtime
+    # 缓存里的对象不直接改，避免写盘失败后内存与文件不一致
+    bindings = {key: dict(items) for key, items in _load().items()}
     key = str(session_id)
     values = bindings.setdefault(key, {})
     if value:
@@ -66,3 +83,4 @@ def set_binding(kind: str, session_id: str, value: str | None) -> None:
         if not values:
             bindings.pop(key, None)
     _save(bindings)
+    _cache, _cache_mtime = None, None
