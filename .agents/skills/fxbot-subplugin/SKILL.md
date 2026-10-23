@@ -34,6 +34,7 @@ Discovery by scanning does not mean “never imported.” Keep both `models.py` 
 
 - Defaults, console schema, and business reads form one contract. Validate all three when adding a setting, but do not update the skill for routine setting changes.
 - Register configuration with `ConfigManager` and read it at use time. Use the framework's empty-dictionary convention for dynamic mappings.
+- Use the shared `utils/cache.py` singleton for in-process caching instead of private dictionaries. Prefix tuple keys with the plugin/domain and invalidate at the write entry point.
 - Put writable state under `data_dir()`, disposable data under `cache_dir()`, and package resources relative to their module. Never write runtime data into source directories.
 - Use the existing SQLModel and `@with_session` stack for data requiring queries, transactions, or relationships. Place models where startup can discover them before database initialization.
 

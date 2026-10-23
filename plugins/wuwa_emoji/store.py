@@ -12,14 +12,12 @@ from nonebot import logger, get_driver
 from .alias import normalize, load_alias_map, build_alias_index, resolve_alias_path
 from .client import WuwaEmojiError, fetch_characters
 from .config import cfg_character_cache_ttl
+from ...utils.cache import cache
 from ...utils.paths import cache_dir
 
 CACHE_PATH = cache_dir("wuwa_emoji") / "characters.json"
 
 _lock = asyncio.Lock()
-_memory: tuple[float, list[dict[str, str]]] | None = None
-_alias_index: dict[str, str] = {}
-_alias_source: tuple[str, int] | None = None
 _refresh_task: asyncio.Task[None] | None = None
 _startup_hook_registered = False
 
@@ -53,33 +51,35 @@ def _write_disk(fetched_at: float, items: list[dict[str, str]]) -> None:
 
 
 def _remember(fetched_at: float, items: list[dict[str, str]]) -> tuple[float, list[dict[str, str]]]:
-    """更新内存缓存，并作废别名索引。
+    """更新角色列表缓存，并作废别名索引。
 
     别名索引与角色列表必须同源，分开更新会出现「别名指向已下架角色」的窗口，
-    所以所有对 _memory 的写入都收口到这里、并强制下一次查询重建索引。
+    所以所有对角色列表缓存的写入都收口到这里、并强制下一次查询重建索引。
     """
-    global _memory, _alias_source
-    _memory = (fetched_at, items)
-    _alias_source = None
-    return _memory
+    entry = (fetched_at, items)
+    cache.set(("wuwa", "characters"), entry)
+    cache.clear_prefix(("wuwa", "alias"))
+    return entry
 
 
-def _sync_alias_index(items: list[dict[str, str]]) -> None:
+def _sync_alias_index(items: list[dict[str, str]]) -> dict[str, str]:
     """按来源文件的路径与 mtime 重建别名索引。
 
     别名表由社群自动维护，不能只在角色列表过期时才重读；但也不值得每条消息都重新
     解析，所以用「路径 + mtime」判断是否需要重建，文件一改下一条命令就生效。
     """
-    global _alias_index, _alias_source
     path = resolve_alias_path()
     try:
         mtime = path.stat().st_mtime_ns
     except OSError:
         mtime = 0
-    if _alias_source == (str(path), mtime):
-        return
-    _alias_index = build_alias_index(items, load_alias_map(path))
-    _alias_source = (str(path), mtime)
+    key = ("wuwa", "alias", str(path))
+    entry = cache.get(key)
+    if entry is not None and entry[0] == mtime:
+        return entry[1]
+    index = build_alias_index(items, load_alias_map(path))
+    cache.set(key, (mtime, index))
+    return index
 
 
 async def refresh_characters() -> list[dict[str, str]]:
@@ -118,8 +118,7 @@ def get_characters() -> list[dict[str, str]]:
     缓存过期时仅安排后台刷新，本次仍返回旧数据，避免把接口延迟传导给
     同优先级的其他 matcher 以及后续的 AI 兜底路由。
     """
-    global _memory
-    cached = _memory
+    cached = cache.get(("wuwa", "characters"))
     if cached is None:
         cached = _read_disk()
         if cached is None:
@@ -160,8 +159,8 @@ def lookup_character(name: str) -> dict[str, str] | None:
         return item
 
     # 正式名没命中才碰别名表，顺带确认来源文件是否更新过，普通角色名零额外开销
-    _sync_alias_index(items)
-    target = _alias_index.get(normalize(name))
+    index = _sync_alias_index(items)
+    target = index.get(normalize(name))
     if target is None:
         return None
     return match_character(items, target)

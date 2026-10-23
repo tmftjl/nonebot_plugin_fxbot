@@ -27,6 +27,7 @@ from ...plugin import Plugin
 from ...adapter import Uninfo, selfBot, get_session, build_message, build_message_segment
 from ...permission import PermLevel, PermScene
 from ...utils.http import get_shared_async_client
+from ...utils.cache import cache
 from ...utils.fonts import (
     load_font,
     get_shared_font_path,
@@ -48,8 +49,6 @@ P = Plugin(
 
 _CACHE_TTL = 600
 _LOGIN_TTL = 7 * 24 * 60 * 60
-_music_cache: dict[str, tuple[float, tuple[Platform, list["Song"]]]] = {}
-_login_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _LOGIN_WATCH_TASKS: dict[str, asyncio.Task[None]] = {}
 _AUTH_POOL_CURSORS: dict[str, int] = {}
 _LOGIN_SESSION_FILE = data_dir("entertain") / "music_login_sessions.json"
@@ -149,16 +148,11 @@ async def _has_active_select_session(bot: Bot, event: Event, state: T_State) -> 
     user_id = (await get_session(bot, event)).user.id
     if not user_id:
         return False
-    item = _music_cache.get(user_id)
+    item = cache.get(("musicshare", "music", user_id))
     if item is None:
         return False
 
-    expires_at, cached = item
-    if expires_at < time.time():
-        _music_cache.pop(user_id, None)
-        return False
-
-    _, songs = cached
+    _, songs = item
     index = int(matched.group(1)) - 1
     if not (0 <= index < len(songs)):
         return False
@@ -229,19 +223,12 @@ def _save_login_sessions() -> None:
 
 def _cache_set(key: str, value: dict[str, Any], ttl: int = _LOGIN_TTL) -> None:
     """写入内存缓存。"""
-    _login_cache[key] = (time.time() + ttl, value)
+    cache.set(("musicshare", "login", key), value, ttl=ttl)
 
 
 def _cache_get(key: str) -> dict[str, Any] | None:
     """读取内存缓存。"""
-    item = _login_cache.get(key)
-    if item is None:
-        return None
-    expires_at, value = item
-    if expires_at < time.time():
-        _login_cache.pop(key, None)
-        return None
-    return value
+    return cache.get(("musicshare", "login", key))
 
 
 def _decode_auth_data(auth: str) -> dict[str, Any]:
@@ -1055,7 +1042,7 @@ async def _handle_search(
     if not songs:
         await matcher.finish(f"在 {_platform_name_cn(platform)} 未找到相关歌曲")
 
-    _music_cache[user_id] = (time.time() + _CACHE_TTL, (platform, songs))
+    cache.set(("musicshare", "music", user_id), (platform, songs), ttl=_CACHE_TTL)
     image = _draw_music_list(platform, keyword, songs)
     await matcher.finish(build_message(bot, build_message_segment(bot, "image", image)))
 
@@ -1064,14 +1051,10 @@ async def _handle_search(
 async def _handle_select(matcher: Matcher, bot: Bot, event: Event, session: Uninfo, state: T_State) -> None:
     """播放搜索结果中的歌曲。"""
     user_id = session.user.id
-    item = _music_cache.get(user_id)
+    item = cache.get(("musicshare", "music", user_id))
     if item is None:
         await matcher.skip()
-    expires_at, cached = item
-    if expires_at < time.time():
-        _music_cache.pop(user_id, None)
-        await matcher.skip()
-    platform, songs = cached
+    platform, songs = item
     index = int(state.get(_SELECT_INDEX_STATE, -1))
     if not (0 <= index < len(songs)):
         await matcher.skip()
@@ -1090,13 +1073,3 @@ async def _handle_select(matcher: Matcher, bot: Bot, event: Event, session: Unin
 
     segment = build_message_segment(bot, "record", audio_url)
     await matcher.finish(build_message(bot, segment))
-
-
-async def _cleanup_cache_loop() -> None:
-    """定期清理过期点歌缓存。"""
-    while True:
-        await asyncio.sleep(300)
-        now = time.time()
-        for key, (expires_at, _) in list(_music_cache.items()):
-            if expires_at < now:
-                _music_cache.pop(key, None)

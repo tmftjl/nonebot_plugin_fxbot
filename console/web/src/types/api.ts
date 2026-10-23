@@ -6,6 +6,53 @@ export interface ApiResponse<T = any> {
   errors?: Record<string, string>
 }
 
+export interface CacheDomain {
+  domain: string
+  entries: number
+  hits: number
+  misses: number
+  evictions: number
+  expired: number
+  sets: number
+  bytes: number
+  hit_rate: number
+}
+
+export interface CacheStats {
+  process: {
+    rss: number | null
+    cache_bytes: number
+    entries: number
+  }
+  domains: CacheDomain[]
+}
+
+export interface CacheKey {
+  key: string
+  bytes: number
+  ttl: number | null
+  created_at: number
+  accessed_at: number
+}
+
+export interface CacheKeys {
+  domain: string
+  total: number
+  keys: CacheKey[]
+}
+
+export type CacheClearPayload =
+  | { scope: 'all' }
+  | { scope: 'domain'; domain: string }
+  | { scope: 'key'; key: string }
+
+export interface CacheClearResult {
+  scope: CacheClearPayload['scope']
+  domain?: string
+  key?: string
+  removed: number | null
+}
+
 export interface PluginInfo {
   name: string
   display_name: string

@@ -6,6 +6,10 @@ import type {
   ProviderPayload,
   PermissionConfig,
   StatsToday,
+  CacheStats,
+  CacheKeys,
+  CacheClearPayload,
+  CacheClearResult,
 } from '@/types/api'
 
 export function getToken(): string {
@@ -93,6 +97,13 @@ export const permissionApi = {
 // 统计 API
 export const statsApi = {
   getToday: () => api.get<StatsToday>('/stats/today'),
+}
+
+export const cacheApi = {
+  stats: () => api.get<CacheStats>('/cache'),
+  keys: (domain: string, limit = 200) =>
+    api.get<CacheKeys>(`/cache/keys?domain=${encodeURIComponent(domain)}&limit=${limit}`),
+  clear: (payload: CacheClearPayload) => api.post<CacheClearResult>('/cache/clear', payload),
 }
 
 // 会员续费 API

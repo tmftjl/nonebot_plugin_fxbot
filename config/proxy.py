@@ -7,6 +7,7 @@ from typing import Any, Callable
 from dataclasses import field, dataclass
 
 from .storage import ConfigStorage
+from ..utils.cache import cache
 
 Validator = Callable[[dict[str, Any]], None]
 
@@ -49,10 +50,10 @@ class ConfigProxy:
     validator: Validator | None = None
     clean_extra: bool = True
     _storage: ConfigStorage | None = None
-    _cache: dict[str, Any] | None = None
-    _mtime: float = 0.0
-    _merged_cache: dict[str, Any] | None = None
-    _merged_mtime: float = 0.0
+
+    @property
+    def _cache_key(self) -> tuple[str, str, str]:
+        return ("config", self.namespace, self.filename)
 
     @property
     def storage(self) -> ConfigStorage:
@@ -76,26 +77,32 @@ class ConfigProxy:
         raw = self.storage.read()
         if self.validator is not None:
             self.validator(raw)
-        self._cache = raw
-        self._mtime = self.storage.mtime()
-        self._merged_cache = None
+        merged = deep_merge(self.defaults, raw, clean_extra=self.clean_extra)
+        mtime = self.storage.mtime()
+        cache.set(self._cache_key, (mtime, deepcopy(raw), merged))
         return deepcopy(raw)
 
+    def _read(self, mtime: float) -> tuple[float, dict[str, Any], dict[str, Any]]:
+        self.ensure()
+        raw = self.storage.read()
+        if self.validator is not None:
+            self.validator(raw)
+        merged = deep_merge(self.defaults, raw, clean_extra=self.clean_extra)
+        entry = (mtime, deepcopy(raw), merged)
+        cache.set(self._cache_key, entry)
+        return entry
+
     def load(self) -> dict[str, Any]:
-        if self._cache is None or self.storage.mtime() != self._mtime:
-            self.reload()
-        if self._merged_cache is None or self._merged_mtime != self._mtime:
-            self._merged_cache = deep_merge(
-                self.defaults,
-                self._cache or {},
-                clean_extra=self.clean_extra,
-            )
-            self._merged_mtime = self._mtime
-        return deepcopy(self._merged_cache)
+        mtime = self.storage.mtime()
+        entry = cache.get(self._cache_key)
+        if entry is None or entry[0] != mtime:
+            entry = self._read(mtime)
+        return deepcopy(entry[2])
 
     def merge_and_save(self) -> dict[str, Any]:
-        merged = self.load()
-        if merged != (self._cache or {}):
+        raw = self.storage.read()
+        merged = deep_merge(self.defaults, raw, clean_extra=self.clean_extra)
+        if merged != raw:
             self.save(merged)
         return merged
 
@@ -103,9 +110,9 @@ class ConfigProxy:
         if self.validator is not None:
             self.validator(data)
         self.storage.write(data)
-        self._cache = deepcopy(data)
-        self._mtime = self.storage.mtime()
-        self._merged_cache = None
+        mtime = self.storage.mtime()
+        merged = deep_merge(self.defaults, data, clean_extra=self.clean_extra)
+        cache.set(self._cache_key, (mtime, deepcopy(data), merged))
 
     def reload_and_validate(self) -> tuple[bool, dict[str, Any], str | None]:
         try:

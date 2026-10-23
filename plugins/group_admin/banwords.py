@@ -18,6 +18,7 @@ from .identity import is_superuser_id
 from ...adapter import Uninfo, selfBot
 from ...utils.tz import now_str
 from ...permission import PermLevel, PermScene
+from ...utils.cache import cache
 from ...utils.paths import data_dir
 
 MatchType = Literal["exact", "fuzzy", "regex"]
@@ -33,8 +34,6 @@ P = Plugin(
 
 DATA_DIR = data_dir("group_admin") / "banned_words"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
-_compiled_cache: dict[str, list[tuple[re.Pattern[str], dict[str, Any]]]] = {}
-_config_cache: dict[str, dict[str, Any]] = {}
 
 
 def _plain_text(event: Event) -> str:
@@ -85,55 +84,47 @@ class BannedWordsManager:
         path = cls._path(group_id)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    @staticmethod
-    def invalidate_cache(group_id: int) -> None:
-        """清理群违禁词缓存。"""
-        _compiled_cache.pop(group_id, None)
-        _config_cache.pop(group_id, None)
+        cache.clear_prefix(("banwords", group_id))
 
     @classmethod
     def load_group_config(cls, group_id: int) -> dict[str, Any]:
         """加载群违禁词开关配置。"""
-        cached = _config_cache.get(group_id)
-        if cached is not None:
-            return cached
-        data = cls.load_group_data(group_id)
-        config = data.get("config", {})
-        if not isinstance(config, dict):
-            config = {}
-        merged = {"enabled": True, "mute_seconds": 300, **config}
-        _config_cache[group_id] = merged
-        return merged
+        def loader() -> dict[str, Any]:
+            data = cls.load_group_data(group_id)
+            config = data.get("config", {})
+            if not isinstance(config, dict):
+                config = {}
+            return {"enabled": True, "mute_seconds": 300, **config}
+
+        return cache.remember(("banwords", group_id, "config"), loader)
 
     @classmethod
     def compile_banned_words(cls, group_id: int) -> list[tuple[re.Pattern[str], dict[str, Any]]]:
         """编译群违禁词规则。"""
-        cached = _compiled_cache.get(group_id)
-        if cached is not None:
-            return cached
-        data = cls.load_group_data(group_id)
-        banned_words = data.get("banned_words", {})
-        compiled: list[tuple[re.Pattern[str], dict[str, Any]]] = []
-        if isinstance(banned_words, dict):
-            for word, meta in banned_words.items():
-                if not isinstance(meta, dict):
-                    continue
-                match_type = str(meta.get("match_type", "exact"))
-                try:
-                    if match_type == "exact":
-                        pattern = re.compile(f"^{re.escape(str(word))}$")
-                    elif match_type == "fuzzy":
-                        pattern = re.compile(re.escape(str(word)))
-                    elif match_type == "regex":
-                        pattern = re.compile(str(word), re.MULTILINE)
-                    else:
+        def loader() -> list[tuple[re.Pattern[str], dict[str, Any]]]:
+            data = cls.load_group_data(group_id)
+            banned_words = data.get("banned_words", {})
+            compiled: list[tuple[re.Pattern[str], dict[str, Any]]] = []
+            if isinstance(banned_words, dict):
+                for word, meta in banned_words.items():
+                    if not isinstance(meta, dict):
                         continue
-                    compiled.append((pattern, {**meta, "raw_word": str(word)}))
-                except re.error:
-                    logger.opt(exception=True).warning(f"[banwords] 正则编译失败: {group_id} {word}")
-        _compiled_cache[group_id] = compiled
-        return compiled
+                    match_type = str(meta.get("match_type", "exact"))
+                    try:
+                        if match_type == "exact":
+                            pattern = re.compile(f"^{re.escape(str(word))}$")
+                        elif match_type == "fuzzy":
+                            pattern = re.compile(re.escape(str(word)))
+                        elif match_type == "regex":
+                            pattern = re.compile(str(word), re.MULTILINE)
+                        else:
+                            continue
+                        compiled.append((pattern, {**meta, "raw_word": str(word)}))
+                    except re.error:
+                        logger.opt(exception=True).warning(f"[banwords] 正则编译失败: {group_id} {word}")
+            return compiled
+
+        return cache.remember(("banwords", group_id, "compiled"), loader)
 
     @classmethod
     async def add_word(
@@ -156,7 +147,6 @@ class BannedWordsManager:
             "added_at": now_str(),
         }
         cls.save_group_data(group_id, data)
-        cls.invalidate_cache(group_id)
 
     @classmethod
     async def remove_word(cls, group_id: int, word: str) -> None:
@@ -167,7 +157,6 @@ class BannedWordsManager:
             raise ValueError(f"违禁词不存在: {word}")
         del banned_words[word]
         cls.save_group_data(group_id, data)
-        cls.invalidate_cache(group_id)
 
     @classmethod
     async def clear_words(cls, group_id: int) -> None:
@@ -175,7 +164,6 @@ class BannedWordsManager:
         data = cls.load_group_data(group_id)
         data["banned_words"] = {}
         cls.save_group_data(group_id, data)
-        cls.invalidate_cache(group_id)
 
     @classmethod
     async def set_enabled(cls, group_id: int, enabled: bool) -> None:
@@ -184,7 +172,6 @@ class BannedWordsManager:
         config = data.setdefault("config", {})
         config["enabled"] = enabled
         cls.save_group_data(group_id, data)
-        cls.invalidate_cache(group_id)
 
     @classmethod
     async def set_mute_seconds(cls, group_id: int, seconds: int) -> None:
@@ -193,7 +180,6 @@ class BannedWordsManager:
         config = data.setdefault("config", {})
         config["mute_seconds"] = max(1, seconds)
         cls.save_group_data(group_id, data)
-        cls.invalidate_cache(group_id)
 
     @classmethod
     async def check_message(cls, group_id: int, text: str) -> tuple[str, dict[str, Any]] | None:

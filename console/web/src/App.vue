@@ -1,7 +1,7 @@
 <!-- -*- coding: utf-8 -*- -->
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { Fold, Expand } from '@element-plus/icons-vue'
+import { Fold, Expand, Coin } from '@element-plus/icons-vue'
 import DashboardView from '@/views/DashboardView.vue'
 import ConfigView from '@/views/ConfigView.vue'
 import PermissionsView from '@/views/PermissionsView.vue'
@@ -10,6 +10,7 @@ import PersonasView from '@/views/PersonasView.vue'
 import ProviderView from '@/views/ProviderView.vue'
 import StatsView from '@/views/StatsView.vue'
 import LogsView from '@/views/LogsView.vue'
+import CacheView from '@/views/CacheView.vue'
 import { configApi } from '@/api'
 import type { ConfigTab } from '@/types/schema'
 
@@ -109,6 +110,10 @@ const sidebarWidth = computed(() => sidebarCollapsed.value ? '64px' : '200px')
             <el-icon><Tickets /></el-icon>
             <template #title>运行日志</template>
           </el-menu-item>
+          <el-menu-item index="cache">
+            <el-icon><Coin /></el-icon>
+            <template #title>缓存</template>
+          </el-menu-item>
           <el-menu-item index="permissions">
             <el-icon><Lock /></el-icon>
             <template #title>权限管理</template>
@@ -147,6 +152,7 @@ const sidebarWidth = computed(() => sidebarCollapsed.value ? '64px' : '200px')
         <MembershipView v-else-if="activeMenu === 'membership'" />
         <StatsView v-else-if="activeMenu === 'stats'" />
         <LogsView v-else-if="activeMenu === 'logs'" />
+        <CacheView v-else-if="activeMenu === 'cache'" />
         <PermissionsView v-else-if="activeMenu === 'permissions'" />
         <PersonasView v-else-if="activeMenu === 'personas'" />
         <ProviderView v-else-if="activeMenu === 'providers'" />
