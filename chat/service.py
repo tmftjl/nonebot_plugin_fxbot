@@ -12,9 +12,9 @@ from .tools import ToolContext, ToolRuntime, execute_tool, tool_allowed, default
 from .types import MentionRef, ChatRequest, ChatResponse
 from ..config import get_manager as get_config_manager
 from .session import ChatSessionStore, default_session_store
-from .personas import DEFAULT_PERSONA, get_persona_text, get_bound_persona
+from .bindings import PERSONA, PROVIDER, get_binding
+from .personas import DEFAULT_PERSONA, get_persona_text
 from .providers import LLMResponse, provider_manager
-from .provider_bindings import get_bound_provider
 
 
 def _finalize_response(response: LLMResponse) -> LLMResponse:
@@ -34,11 +34,15 @@ _IMAGE_DESC_PROMPT = (
 )
 _MAX_IMAGE_DESC_CHARS = 200
 _MAX_TOOL_ROUNDS = 3
+_MAX_BACKGROUND_CHARS = 2000
+_MAX_BACKGROUND_LINE_CHARS = 500
+_CURRENT_MARK = "[需要你回应]"
+_BACKGROUND_HEADER = "[群聊背景，不要回复]"
 
 
 def _session_provider(session_id: str) -> str:
     """返回会话绑定的 Provider，失效时回退全局默认。"""
-    name = get_bound_provider(session_id)
+    name = get_binding(PROVIDER, session_id)
     return name if name in provider_manager.list_providers_by_type("chat") else ""
 
 
@@ -59,11 +63,55 @@ def _mentions_line(mentions: list[MentionRef]) -> str:
     return "[@成员: " + ", ".join(ref.render() for ref in mentions) + "]"
 
 
+def _flatten(content: Any) -> str:
+    """把一条历史消息压成单行，合并后不会伪造出新的发言人。"""
+    line = " ".join(str(content or "").split())
+    return f"{line[:_MAX_BACKGROUND_LINE_CHARS]}…" if len(line) > _MAX_BACKGROUND_LINE_CHARS else line
+
+
+def _split_speaker(line: str) -> tuple[str, str]:
+    """拆分「昵称(ID): 正文」，没有发言标识时返回空标签。"""
+    label, sep, text = line.partition(": ")
+    return (label, text) if sep else ("", line)
+
+
+def _background_block(messages: list[dict[str, Any]]) -> str:
+    """把未触发的群消息并成一段背景；同一人连续发言合并，超预算时保留最近的。"""
+    lines: list[str] = []
+    for message in messages:
+        line = _flatten(message.get("content"))
+        if not line:
+            continue
+        label, text = _split_speaker(line)
+        if label and lines and _split_speaker(lines[-1])[0] == label:
+            lines[-1] = f"{lines[-1]}；{text}" if text else lines[-1]
+            continue
+        lines.append(line)
+
+    dropped, total = 0, sum(len(line) for line in lines)
+    while dropped < len(lines) - 1 and total > _MAX_BACKGROUND_CHARS:
+        total -= len(lines[dropped])
+        dropped += 1
+    kept = lines[dropped:]
+    if not kept:
+        return ""
+    header = _BACKGROUND_HEADER if not dropped else f"{_BACKGROUND_HEADER}（更早的 {dropped} 条已省略）"
+    return f"{header}\n" + "\n".join(kept)
+
+
+def _mark_current(content: str | list[dict[str, Any]]) -> str | list[dict[str, Any]]:
+    """给本轮要回答的消息加标记，与背景块区分。"""
+    if isinstance(content, str):
+        return f"{_CURRENT_MARK}\n{content}"
+    return [{"type": "text", "text": _CURRENT_MARK}, *content]
+
+
 def _scene_hint(request: ChatRequest, persona_name: str = "") -> str:
     """告诉模型当前是群聊还是私聊、自己的名字，以及 @ 目标的读法。"""
     if request.is_group:
         lines = [
-            "\n\n你正在群聊中。最后一条是叫你的消息（@ 你，或以你的名字开头），只需回应它；更早的消息只是上下文。",
+            "\n\n你正在群聊中。只有开头带「[需要你回应]」的那条消息要你回答；"
+            "「[群聊背景，不要回复]」和更早的消息只是背景，不要逐条回复、总结或重新回答。",
             "用户消息的「昵称(ID): 」是发言人标识，不是消息内容。不要把不同成员当成同一个人。",
             "「[图片: 描述]」是图片摘要。指代某人用其昵称，回复不要加「昵称: 」前缀。",
         ]
@@ -235,7 +283,7 @@ class ChatService:
         runtime = runtime or ToolRuntime()
         user_content = _build_user_content(request)
         persona_name = request.metadata.get("persona_name") if isinstance(request.metadata, dict) else None
-        bound_persona = get_bound_persona(request.session_id)
+        bound_persona = get_binding(PERSONA, request.session_id)
         effective_persona = str(persona_name or bound_persona or chat_cfg["persona"] or DEFAULT_PERSONA)
         persona_text = get_persona_text(effective_persona)
         persona_text = f"{persona_text}{_scene_hint(request, effective_persona)}".strip()
@@ -255,10 +303,20 @@ class ChatService:
                 entry = _strip_images([{"role": "user", "content": user_content}])[0]
                 self.session_store.append(request.session_id, entry, limit=limit)
 
-            messages = history
+            messages: list[dict[str, Any]] = []
             if persona_text:
-                messages.insert(0, {"role": "system", "content": persona_text})
-            messages.append({"role": "user", "content": user_content})
+                messages.append({"role": "system", "content": persona_text})
+            if request.is_group:
+                split = len(history)
+                while split and history[split - 1].get("role") == "user":
+                    split -= 1
+                messages.extend(history[:split])
+                if block := _background_block(history[split:]):
+                    messages.append({"role": "user", "content": block})
+                messages.append({"role": "user", "content": _mark_current(user_content)})
+            else:
+                messages.extend(history)
+                messages.append({"role": "user", "content": user_content})
 
             tools = await _allowed_tools(runtime)
             response = await provider.chat(messages=messages, tools=tools or None)

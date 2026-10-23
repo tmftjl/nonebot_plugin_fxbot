@@ -13,10 +13,10 @@ from nonebot.permission import SUPERUSER, Permission
 from ..config import get_manager as get_config_manager
 from .service import chat_service
 from ..adapter import selfBot, normalize_id, event_user_id, event_group_id, event_plain_text
-from .personas import DEFAULT_PERSONA, load_personas, get_bound_persona, set_bound_persona
+from .bindings import PERSONA, PROVIDER, get_binding, set_binding
+from .personas import DEFAULT_PERSONA, load_personas
 from .providers import provider_manager
 from .message_adapter import session_id_for_event
-from .provider_bindings import get_bound_provider, set_bound_provider
 
 
 def _chat_cfg() -> dict[str, Any]:
@@ -149,13 +149,13 @@ async def _handle_persona(bot: Bot, event: Event, matcher: Matcher) -> None:
     default_name = str(_chat_cfg()["persona"] or "") or DEFAULT_PERSONA
 
     if not name:
-        bound = get_bound_persona(session_id)
+        bound = get_binding(PERSONA, session_id)
         effective = bound if bound in personas else default_name
         await matcher.finish(f"{scope}当前人格：{effective}\n可用人格：{'、'.join(sorted(personas))}")
 
     if name in {"重置", "恢复默认"}:
         try:
-            set_bound_persona(session_id, None)
+            set_binding(PERSONA, session_id, None)
         except Exception:
             logger.opt(exception=True).warning(f"[Chat] 清除人格绑定失败: session={session_id}")
             await matcher.finish("人格设置失败，请稍后再试")
@@ -165,7 +165,7 @@ async def _handle_persona(bot: Bot, event: Event, matcher: Matcher) -> None:
         await matcher.finish(f"没有名为「{name}」的人格，可用人格：{'、'.join(sorted(personas))}")
 
     try:
-        set_bound_persona(session_id, name)
+        set_binding(PERSONA, session_id, name)
     except Exception:
         logger.opt(exception=True).warning(f"[Chat] 保存人格绑定失败: session={session_id}")
         await matcher.finish("人格设置失败，请稍后再试")
@@ -185,13 +185,13 @@ async def _handle_provider(bot: Bot, event: Event, matcher: Matcher) -> None:
     choices = "、".join(names) or "（未配置）"
 
     if not name:
-        bound = get_bound_provider(session_id)
+        bound = get_binding(PROVIDER, session_id)
         effective = bound if bound in names else default_name
         await matcher.finish(f"{scope}当前 Provider：{effective}\n可用 Provider：{choices}")
 
     if name in {"重置", "恢复默认"}:
         try:
-            set_bound_provider(session_id, None)
+            set_binding(PROVIDER, session_id, None)
         except Exception:
             logger.opt(exception=True).warning(f"[Chat] 清除 Provider 绑定失败: session={session_id}")
             await matcher.finish("Provider 设置失败，请稍后再试")
@@ -201,7 +201,7 @@ async def _handle_provider(bot: Bot, event: Event, matcher: Matcher) -> None:
         await matcher.finish(f"没有名为「{name}」的对话 Provider，可用 Provider：{choices}")
 
     try:
-        set_bound_provider(session_id, name)
+        set_binding(PROVIDER, session_id, name)
     except Exception:
         logger.opt(exception=True).warning(f"[Chat] 保存 Provider 绑定失败: session={session_id}")
         await matcher.finish("Provider 设置失败，请稍后再试")

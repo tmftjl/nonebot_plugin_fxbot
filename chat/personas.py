@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import os
-import json
 from pathlib import Path
 from dataclasses import dataclass
 
 from nonebot import logger
 
+from .bindings import PERSONA, get_binding
 from ..utils.paths import config_dir
 
 DEFAULT_PERSONA = "小鱼"
@@ -32,7 +31,7 @@ def get_personas_dir() -> Path:
 
 def effective_persona_name(session_id: str, configured: str | None = None) -> str:
     """返回会话实际使用的人格名：绑定优先，其次全局配置，最后默认。"""
-    return str(get_bound_persona(session_id) or configured or "").strip() or DEFAULT_PERSONA
+    return str(get_binding(PERSONA, session_id) or configured or "").strip() or DEFAULT_PERSONA
 
 
 def _ensure_default_persona(dir_path: Path) -> None:
@@ -125,41 +124,3 @@ def delete_persona(name: str) -> int:
 def list_personas() -> dict[str, str]:
     """返回人格名称到内容的映射。"""
     return {key: item.details for key, item in load_personas().items()}
-
-
-def _bindings_path() -> Path:
-    """返回会话人格绑定的存储路径。"""
-    return config_dir("ai_chat") / "bindings.json"
-
-
-def load_persona_bindings() -> dict[str, str]:
-    """读取会话到人格的绑定。"""
-    try:
-        raw = json.loads(_bindings_path().read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return {}
-    except Exception:
-        logger.opt(exception=True).warning("[AI Chat] 读取人格绑定失败")
-        return {}
-    if not isinstance(raw, dict):
-        return {}
-    return {str(key): str(value).strip() for key, value in raw.items() if str(value).strip()}
-
-
-def get_bound_persona(session_id: str) -> str:
-    """读取会话绑定的人格名。"""
-    return load_persona_bindings().get(str(session_id), "")
-
-
-def set_bound_persona(session_id: str, name: str | None) -> None:
-    """写入或清除会话绑定的人格名。"""
-    bindings = load_persona_bindings()
-    key = str(session_id)
-    if name:
-        bindings[key] = str(name)
-    else:
-        bindings.pop(key, None)
-    path = _bindings_path()
-    temp = path.with_name(f"{path.name}.tmp")
-    temp.write_text(json.dumps(bindings, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(temp, path)
