@@ -4,22 +4,25 @@ from __future__ import annotations
 
 import json
 import time
+from copy import deepcopy
 from typing import Any
 
 from nonebot import logger
 
 from .client import LiveRoomSnapshot
+from ...utils.cache import cache
 from ...utils.paths import data_dir
 
 DATA_FILE = data_dir("bilibili_live") / "state.json"
+_STATE_KEY = ("bilibili_live", "state")
 
 
 def _default() -> dict[str, Any]:
     return {"subscriptions": [], "room_states": {}}
 
 
-def load_state() -> dict[str, Any]:
-    """加载插件状态。"""
+def _read() -> dict[str, Any]:
+    """从磁盘读取插件状态。"""
     if not DATA_FILE.exists():
         return _default()
     try:
@@ -33,10 +36,16 @@ def load_state() -> dict[str, Any]:
     return _default()
 
 
+def load_state() -> dict[str, Any]:
+    """加载插件状态，返回可安全修改的副本。"""
+    return deepcopy(cache.remember(_STATE_KEY, _read))
+
+
 def save_state(data: dict[str, Any]) -> None:
-    """保存插件状态。"""
+    """保存插件状态并同步缓存。"""
     DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
     DATA_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    cache.set(_STATE_KEY, deepcopy(data))
 
 
 def get_subscriptions() -> list[dict[str, Any]]:
@@ -170,11 +179,14 @@ def get_room_state(room_id: int) -> bool | None:
 
 
 def set_room_state(room_id: int, is_live: bool) -> None:
-    """保存直播间当前开播状态。"""
+    """保存直播间当前开播状态，状态未变化时不重写文件。"""
     state = load_state()
     states = state.get("room_states")
     if not isinstance(states, dict):
         states = {}
         state["room_states"] = states
+    current = states.get(str(room_id))
+    if isinstance(current, dict) and current.get("is_live") is is_live:
+        return
     states[str(room_id)] = {"is_live": is_live, "checked_at": int(time.time())}
     save_state(state)

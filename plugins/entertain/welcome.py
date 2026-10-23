@@ -7,6 +7,7 @@ import json
 import uuid
 import base64
 import shutil
+from copy import deepcopy
 from typing import Any
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from ...plugin import Plugin
 from ...adapter import Uninfo, selfBot, build_message, build_message_segment
 from ...permission import PermLevel, PermScene
 from ...utils.http import get_shared_async_client
+from ...utils.cache import cache
 from ...utils.paths import data_dir
 
 P = Plugin(
@@ -36,8 +38,8 @@ _PH_PATTERN = re.compile(r"\[\[WELCOME_IMG:([^\]]+)\]\]")
 _SET_WELCOME_PREFIX_RE = re.compile(r"^\s*[#＃]设置欢迎\s*")
 
 
-def _load_store() -> dict[str, dict[str, Any]]:
-    """读取欢迎语存储。"""
+def _read_store() -> dict[str, dict[str, Any]]:
+    """从磁盘读取欢迎语存储。"""
     try:
         if WELCOME_FILE.exists():
             data = json.loads(WELCOME_FILE.read_text(encoding="utf-8"))
@@ -48,10 +50,16 @@ def _load_store() -> dict[str, dict[str, Any]]:
     return {}
 
 
+def _load_store() -> dict[str, dict[str, Any]]:
+    """读取欢迎语存储，返回可安全修改的副本。"""
+    return deepcopy(cache.remember(("welcome", "store"), _read_store))
+
+
 def _save_store(data: dict[str, dict[str, Any]]) -> None:
-    """保存欢迎语存储。"""
+    """保存欢迎语存储并同步缓存。"""
     WELCOME_FILE.parent.mkdir(parents=True, exist_ok=True)
     WELCOME_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    cache.set(("welcome", "store"), deepcopy(data))
 
 
 def _group_img_dir(group_key: str) -> Path:

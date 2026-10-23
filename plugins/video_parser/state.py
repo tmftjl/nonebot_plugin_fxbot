@@ -5,12 +5,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from ...utils.cache import cache
 from ...utils.paths import data_dir
 
 STATE_PATH: Path = data_dir("video_parser") / "groups.json"
+_STATE_KEY = ("video_parser", "groups")
 
 
-def _load() -> dict[str, list[str]]:
+def _read() -> dict[str, list[str]]:
     """读取群解析开关状态。"""
     if not STATE_PATH.exists():
         return {"disabled_groups": []}
@@ -30,6 +32,11 @@ def _save(data: dict[str, list[str]]) -> None:
     STATE_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _load() -> dict[str, list[str]]:
+    """读取群解析开关状态，按进程内缓存复用。"""
+    return cache.remember(_STATE_KEY, _read)
+
+
 def is_group_enabled(group_id: str | None) -> bool:
     """判断本群解析是否启用。"""
     if not group_id:
@@ -39,11 +46,11 @@ def is_group_enabled(group_id: str | None) -> bool:
 
 def set_group_enabled(group_id: str, enabled: bool) -> None:
     """设置本群解析开关。"""
-    data = _load()
-    groups = set(data["disabled_groups"])
+    groups = set(_load()["disabled_groups"])
     if enabled:
         groups.discard(str(group_id))
     else:
         groups.add(str(group_id))
-    data["disabled_groups"] = sorted(groups)
+    data = {"disabled_groups": sorted(groups)}
     _save(data)
+    cache.set(_STATE_KEY, data)

@@ -30,10 +30,12 @@ from ...adapter import (
     build_message_segment,
 )
 from ...permission import PermLevel, PermScene
+from ...utils.cache import cache
 from ...utils.paths import data_dir, package_root
 from ...permission.message_policy import should_process_fxbot_message
 
 _CONFIG_FILE = data_dir("group_admin") / "join_verify.json"
+_CONFIG_KEY = ("join_verify", "configs")
 _TIMEOUT = 60
 _ATTEMPTS = 2
 _KICK = True
@@ -64,8 +66,8 @@ class _Pending:
 _pending: dict[tuple[str, str, str, str], _Pending] = {}
 
 
-def _load_configs() -> dict[str, bool]:
-    """读取各群的开关状态。"""
+def _read_configs() -> dict[str, bool]:
+    """从磁盘读取各群的开关状态。"""
     try:
         data = json.loads(_CONFIG_FILE.read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -78,16 +80,22 @@ def _load_configs() -> dict[str, bool]:
     return {str(key): bool(value.get("enabled")) for key, value in data.items() if isinstance(value, dict)}
 
 
+def _load_configs() -> dict[str, bool]:
+    """读取各群的开关状态，按进程内缓存复用。"""
+    return cache.remember(_CONFIG_KEY, _read_configs)
+
+
 def _group_enabled(group_id: str) -> bool:
     return _load_configs().get(str(group_id), False)
 
 
 def _set_enabled(group_id: str, enabled: bool) -> None:
-    configs = _load_configs()
+    configs = dict(_load_configs())
     configs[str(group_id)] = enabled
     _CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
     payload = {key: {"enabled": value} for key, value in configs.items()}
     _CONFIG_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    cache.set(_CONFIG_KEY, configs)
 
 
 def _font(size: int) -> ImageFont.FreeTypeFont:

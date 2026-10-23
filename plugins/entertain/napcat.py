@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import asyncio
+from copy import deepcopy
 from typing import Any
 
 from nonebot.matcher import Matcher
@@ -14,6 +15,7 @@ from ...adapter import Uninfo, selfBot
 from ...utils.tz import today_str
 from ...chat.tools import ToolContext, ToolRuntime, tool
 from ...permission import PermLevel, PermScene
+from ...utils.cache import cache
 from ...utils.paths import data_dir
 
 P = Plugin(
@@ -27,6 +29,7 @@ P = Plugin(
 MAX_LIKE_TIMES = 10
 _like_lock = asyncio.Lock()
 LIKE_DATA_FILE = data_dir("entertain") / "like_daily.json"
+_LIKE_DATA_KEY = ("napcat", "like_raw")
 
 like_cmd = P.on_regex(
     r"^[#＃]赞我",
@@ -57,16 +60,20 @@ async def _send_likes_until_stopped(bot: Bot, user_id: str) -> int:
     return count
 
 
-def _load_like_data(today: str) -> dict[str, dict[str, dict[str, Any]]]:
-    """加载当天点赞记录，自动丢弃旧日期。"""
+def _read_like_data() -> dict[str, Any]:
+    """从磁盘读取点赞记录。"""
     if not LIKE_DATA_FILE.exists():
         return {}
     try:
         raw = json.loads(LIKE_DATA_FILE.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
-    if not isinstance(raw, dict):
-        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _load_like_data(today: str) -> dict[str, dict[str, dict[str, Any]]]:
+    """加载当天点赞记录，自动丢弃旧日期。"""
+    raw = cache.remember(_LIKE_DATA_KEY, _read_like_data)
     data: dict[str, dict[str, dict[str, Any]]] = {}
     for bot_id, users in raw.items():
         if not isinstance(users, dict):
@@ -82,9 +89,10 @@ def _load_like_data(today: str) -> dict[str, dict[str, dict[str, Any]]]:
 
 
 def _save_like_data(data: dict[str, dict[str, dict[str, Any]]]) -> None:
-    """保存当天点赞记录。"""
+    """保存当天点赞记录并同步缓存。"""
     LIKE_DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
     LIKE_DATA_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    cache.set(_LIKE_DATA_KEY, deepcopy(data))
 
 
 def _get_like_count(data: dict[str, dict[str, dict[str, Any]]], bot_id: str, user_id: str) -> int:

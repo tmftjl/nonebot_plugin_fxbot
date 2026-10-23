@@ -7,6 +7,8 @@ from typing import Any
 from pathlib import Path
 from dataclasses import dataclass
 
+from ...utils.cache import cache
+
 RES_DIR = Path(__file__).parent / "resources"
 CFG_DIR = RES_DIR / "help_config"
 PLUGIN_DIR = Path(__file__).resolve().parents[1]
@@ -32,7 +34,12 @@ def _builtin_config() -> HelpConfigRef:
 
 
 def _plugin_configs() -> dict[str, HelpConfigRef]:
-    """读取各子插件自带帮助配置。"""
+    """读取各子插件自带帮助配置，按进程内缓存复用。"""
+    return cache.remember(("help", "plugin_configs"), _scan_plugin_configs)
+
+
+def _scan_plugin_configs() -> dict[str, HelpConfigRef]:
+    """扫描各子插件目录并建立帮助配置索引。"""
     mapping: dict[str, HelpConfigRef] = {}
     if not PLUGIN_DIR.exists():
         return mapping
@@ -78,12 +85,13 @@ def qq_variant(ref: HelpConfigRef) -> HelpConfigRef | None:
 
 
 def load_help_config(ref: HelpConfigRef | None) -> dict[str, Any]:
-    """读取帮助图 JSON 配置。"""
+    """读取帮助图 JSON 配置，按进程内缓存复用。"""
     target = ref or _builtin_config()
     if not target.path.exists():
         return {}
-    data = _read_json(target.path)
-    data["_config_key"] = target.key
-    data["_config_path"] = str(target.path)
-    data["_base_dir"] = str(target.path.parent)
-    return data
+    data = cache.remember(("help", "config", str(target.path)), lambda: _read_json(target.path))
+    result = dict(data)
+    result["_config_key"] = target.key
+    result["_config_path"] = str(target.path)
+    result["_base_dir"] = str(target.path.parent)
+    return result

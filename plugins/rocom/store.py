@@ -3,21 +3,24 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from typing import Any
 
 from nonebot import logger
 
+from ...utils.cache import cache
 from ...utils.paths import data_dir
 
 DATA_FILE = data_dir("rocom") / "state.json"
+_STATE_KEY = ("rocom", "state")
 
 
 def _default() -> dict[str, Any]:
     return {"last_signature": "", "subscriptions": []}
 
 
-def load_state() -> dict[str, Any]:
-    """加载订阅状态。"""
+def _read() -> dict[str, Any]:
+    """从磁盘读取订阅状态。"""
     if not DATA_FILE.exists():
         return _default()
     try:
@@ -31,10 +34,16 @@ def load_state() -> dict[str, Any]:
     return _default()
 
 
+def load_state() -> dict[str, Any]:
+    """加载订阅状态，返回可安全修改的副本。"""
+    return deepcopy(cache.remember(_STATE_KEY, _read))
+
+
 def save_state(data: dict[str, Any]) -> None:
-    """保存订阅状态。"""
+    """保存订阅状态并同步缓存。"""
     DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
     DATA_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    cache.set(_STATE_KEY, deepcopy(data))
 
 
 def get_subscriptions() -> list[dict[str, Any]]:
