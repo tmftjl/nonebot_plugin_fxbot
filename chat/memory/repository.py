@@ -15,6 +15,8 @@ from ...db import with_session
 from .models import (
     ChatTurn,
     ChatAlias,
+    ChatStyle,
+    ChatJargon,
     ChatMemory,
     ChatEpisode,
     ChatMessage,
@@ -307,6 +309,25 @@ class ChatRepository:
         ]
 
     @with_session
+    async def list_memory_tenants(self, session: AsyncSession) -> list[dict[str, object]]:
+        """返回有消息、群风格或黑话的租户及消息数，供控制台选择。"""
+        count_rows = (
+            await session.execute(
+                select(ChatMessage.tenant, func.count(ChatMessage.id))
+                .where(ChatMessage.kind == "user", ChatMessage.deleted.is_(False))
+                .group_by(ChatMessage.tenant)
+            )
+        ).all()
+        counts = {str(row[0]): int(row[1]) for row in count_rows}
+        style_tenants = {str(row[0]) for row in (await session.execute(select(ChatStyle.tenant))).all()}
+        jargon_tenants = {str(row[0]) for row in (await session.execute(select(ChatJargon.tenant))).all()}
+        tenants = sorted(set(counts) | style_tenants | jargon_tenants)
+        return [
+            {"tenant": tenant, "messages": counts.get(tenant, 0)}
+            for tenant in sorted(tenants, key=lambda item: (-counts.get(item, 0), item))
+        ]
+
+    @with_session
     async def ensure_backfill(
         self,
         session: AsyncSession,
@@ -562,6 +583,138 @@ class ChatRepository:
             .limit(limit)
         )
         return list((await session.execute(statement)).scalars().all())
+
+    @with_session
+    async def get_style(self, session: AsyncSession, tenant: str) -> ChatStyle | None:
+        """读取租户的群风格；不存在时返回 None。"""
+        rows = await ChatStyle.select_rows(tenant=tenant, session=session)
+        return rows[0] if rows else None
+
+    @with_session
+    async def save_style(
+        self,
+        session: AsyncSession,
+        tenant: str,
+        result: object,
+        *,
+        seq_start: int,
+        seq_end: int,
+        evidence_count: int,
+        source_batch_id: str,
+        expected_manual_version: int = 0,
+    ) -> bool:
+        """写入风格与黑话；人工覆盖版本变化时放弃本次结果。"""
+        from .style import StyleResult
+
+        if not isinstance(result, StyleResult):
+            return False
+        now = utc_now_naive()
+        rows = await ChatStyle.select_rows(tenant=tenant, session=session)
+        if rows:
+            style = rows[0]
+            if int(style.manual_version) != int(expected_manual_version):
+                return False
+            style.summary = result.summary
+            style.rules = json.dumps(list(result.rules), ensure_ascii=False)
+            style.examples = json.dumps(
+                [{"text": example.text, "seq": example.seq} for example in result.examples],
+                ensure_ascii=False,
+            )
+            style.evidence_seq_start = int(seq_start)
+            style.evidence_seq_end = int(seq_end)
+            style.evidence_count = int(evidence_count)
+            style.version += 1
+            style.learn_count += 1
+            style.updated_at = now
+        else:
+            style = ChatStyle(
+                tenant=tenant,
+                version=1,
+                rules=json.dumps(list(result.rules), ensure_ascii=False),
+                examples=json.dumps(
+                    [{"text": example.text, "seq": example.seq} for example in result.examples],
+                    ensure_ascii=False,
+                ),
+                summary=result.summary,
+                evidence_seq_start=int(seq_start),
+                evidence_seq_end=int(seq_end),
+                evidence_count=int(evidence_count),
+                learn_count=1,
+            )
+            session.add(style)
+
+        for item in result.jargon:
+            existing = await ChatJargon.select_rows(tenant=tenant, term=item.term, session=session)
+            if existing:
+                jargon = existing[0]
+                jargon.count += 1
+                jargon.learn_count += 1
+                jargon.last_seen = now
+                jargon.source_batch_id = source_batch_id
+                if item.status == "active":
+                    jargon.status = "active"
+                    jargon.meaning = item.meaning
+                    jargon.normalized = item.normalized
+            else:
+                session.add(
+                    ChatJargon(
+                        tenant=tenant,
+                        term=item.term,
+                        normalized=item.normalized,
+                        meaning=item.meaning,
+                        count=1,
+                        status=item.status,
+                        source_batch_id=source_batch_id,
+                        learn_count=1,
+                        first_seen=now,
+                        last_seen=now,
+                    )
+                )
+        return True
+
+    @with_session
+    async def mark_style_used(self, session: AsyncSession, tenant: str) -> None:
+        """记录群风格实际进入注入。"""
+        rows = await ChatStyle.select_rows(tenant=tenant, session=session)
+        if rows:
+            rows[0].use_count += 1
+            rows[0].last_used_at = utc_now_naive()
+
+    @with_session
+    async def list_jargon(
+        self, session: AsyncSession, tenant: str, *, status: str | None = None, limit: int = 500
+    ) -> list[ChatJargon]:
+        """按出现次数读取黑话条目。"""
+        statement = select(ChatJargon).where(ChatJargon.tenant == tenant)
+        if status:
+            statement = statement.where(ChatJargon.status == status)
+        statement = statement.order_by(ChatJargon.count.desc(), ChatJargon.last_seen.desc()).limit(limit)
+        return list((await session.execute(statement)).scalars().all())
+
+    @with_session
+    async def mark_jargon_used(self, session: AsyncSession, tenant: str, terms: list[str]) -> None:
+        """记录被注入的黑话词条。"""
+        if not terms:
+            return
+        await session.execute(
+            update(ChatJargon)
+            .where(ChatJargon.tenant == tenant, ChatJargon.term.in_(terms))
+            .values(use_count=ChatJargon.use_count + 1, last_used_at=utc_now_naive())
+        )
+
+    @with_session
+    async def delete_style(self, session: AsyncSession, tenant: str) -> bool:
+        """删除租户的群风格。"""
+        result = await session.execute(delete(ChatStyle).where(ChatStyle.tenant == tenant))
+        return bool(result.rowcount)
+
+    @with_session
+    async def delete_jargon(self, session: AsyncSession, tenant: str, jargon_id: int) -> bool:
+        """按租户删除一条黑话释义。"""
+        result = await session.execute(
+            delete(ChatJargon).where(ChatJargon.tenant == tenant, ChatJargon.id == int(jargon_id))
+        )
+        return bool(result.rowcount)
 
     @with_session
     async def get_profile(self, session: AsyncSession, tenant: str, subject_id: str) -> ChatProfile | None:
@@ -999,6 +1152,42 @@ class ChatRepository:
             episode.updated_at = now
         for subject_id in subjects - {message.sender_id}:
             await self._mark_profile_stale(session, tenant, subject_id, "撤回证据失效")
+        styles = list((await session.execute(select(ChatStyle).where(ChatStyle.tenant == tenant))).scalars())
+        for style in styles:
+            if not int(style.evidence_seq_start) <= int(message.id) <= int(style.evidence_seq_end):
+                continue
+            try:
+                examples = json.loads(style.examples or "[]")
+            except (TypeError, ValueError):
+                examples = []
+            if isinstance(examples, list):
+                kept = [
+                    item
+                    for item in examples
+                    if not (isinstance(item, dict) and str(item.get("seq") or "") == str(message.id))
+                ]
+                if len(kept) != len(examples):
+                    style.examples = json.dumps(kept, ensure_ascii=False)
+                    style.updated_at = now
+        stale_batches: list[str] = []
+        jargon_rows = list((await session.execute(select(ChatJargon).where(ChatJargon.tenant == tenant))).scalars())
+        for row in jargon_rows:
+            parts = str(row.source_batch_id or "").split(":")
+            if len(parts) != 3 or parts[0] != "style":
+                continue
+            try:
+                start, end = int(parts[1]), int(parts[2])
+            except ValueError:
+                continue
+            if start <= int(message.id) <= end:
+                stale_batches.append(row.source_batch_id)
+        if stale_batches:
+            await session.execute(
+                delete(ChatJargon).where(
+                    ChatJargon.tenant == tenant,
+                    ChatJargon.source_batch_id.in_(stale_batches),
+                )
+            )
         state = await self._state_row(session, tenant)
         state.facts_version += forgotten
         state.episodes_version += len(episodes)

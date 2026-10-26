@@ -71,6 +71,7 @@ SYSTEM_DEFAULTS = {
             "expression_learn": False,
             "group_opt_out_command": True,
         },
+        "jargon": {"enabled": True, "inject_max": 5},
         "behavior": {
             "anti_repeat": True,
             "anti_repeat_threshold": 85,
@@ -127,6 +128,15 @@ def validate_system_config(data: dict[str, Any]) -> None:
     for key, default in SYSTEM_DEFAULTS["chat"]["privacy"].items():
         if isinstance(default, bool) and key in privacy and not isinstance(privacy[key], bool):
             raise ValueError(f"chat.privacy.{key} 必须是布尔值")
+
+    jargon = chat.get("jargon", {})
+    if not isinstance(jargon, dict):
+        raise ValueError("chat.jargon 必须是对象")
+    if "enabled" in jargon and not isinstance(jargon["enabled"], bool):
+        raise ValueError("chat.jargon.enabled 必须是布尔值")
+    inject_max = jargon.get("inject_max", SYSTEM_DEFAULTS["chat"]["jargon"]["inject_max"])
+    if isinstance(inject_max, bool) or not isinstance(inject_max, int) or not 0 <= inject_max <= 20:
+        raise ValueError("chat.jargon.inject_max 必须是 0 到 20 的整数")
 
     behavior = chat.get("behavior", {})
     if not isinstance(behavior, dict):

@@ -252,6 +252,42 @@ def _system_config_tab() -> dict[str, Any]:
                 ],
             },
             {
+                "key": "chat.privacy",
+                "title": "群风格学习",
+                "schemas": [
+                    {
+                        "field": "style_learn",
+                        "label": "学习群风格与黑话",
+                        "component": "Switch",
+                        "default": SYSTEM_DEFAULTS["chat"]["privacy"]["style_learn"],
+                        "helpMessage": (
+                            "开启后每周或新增 200 条人类消息学习一次本群说话风格；黑话只在当前消息命中时注入。"
+                        ),
+                    },
+                ],
+            },
+            {
+                "key": "chat.jargon",
+                "title": "群黑话",
+                "schemas": [
+                    {
+                        "field": "enabled",
+                        "label": "注入黑话释义",
+                        "component": "Switch",
+                        "default": SYSTEM_DEFAULTS["chat"]["jargon"]["enabled"],
+                        "helpMessage": "关闭后仍会学习，但回复时不注入词条释义。",
+                    },
+                    {
+                        "field": "inject_max",
+                        "label": "每次最多注入",
+                        "component": "InputNumber",
+                        "default": SYSTEM_DEFAULTS["chat"]["jargon"]["inject_max"],
+                        "helpMessage": "当前消息命中多个词条时，最多注入几条释义。",
+                        "componentProps": {"min": 0, "max": 20},
+                    },
+                ],
+            },
+            {
                 "key": "chat.web_search",
                 "title": "联网搜索",
                 "schemas": [

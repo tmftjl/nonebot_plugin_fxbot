@@ -11,6 +11,7 @@ import ProviderView from '@/views/ProviderView.vue'
 import StatsView from '@/views/StatsView.vue'
 import LogsView from '@/views/LogsView.vue'
 import CacheView from '@/views/CacheView.vue'
+import ChatMemoryView from '@/views/ChatMemoryView.vue'
 import { configApi } from '@/api'
 import type { ConfigTab } from '@/types/schema'
 
@@ -114,6 +115,10 @@ const sidebarWidth = computed(() => sidebarCollapsed.value ? '64px' : '200px')
             <el-icon><Coin /></el-icon>
             <template #title>缓存</template>
           </el-menu-item>
+          <el-menu-item index="chat-memory">
+            <el-icon><ChatDotRound /></el-icon>
+            <template #title>聊天记忆</template>
+          </el-menu-item>
           <el-menu-item index="permissions">
             <el-icon><Lock /></el-icon>
             <template #title>权限管理</template>
@@ -153,6 +158,7 @@ const sidebarWidth = computed(() => sidebarCollapsed.value ? '64px' : '200px')
         <StatsView v-else-if="activeMenu === 'stats'" />
         <LogsView v-else-if="activeMenu === 'logs'" />
         <CacheView v-else-if="activeMenu === 'cache'" />
+        <ChatMemoryView v-else-if="activeMenu === 'chat-memory'" />
         <PermissionsView v-else-if="activeMenu === 'permissions'" />
         <PersonasView v-else-if="activeMenu === 'personas'" />
         <ProviderView v-else-if="activeMenu === 'providers'" />

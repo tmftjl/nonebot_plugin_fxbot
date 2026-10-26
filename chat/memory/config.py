@@ -24,8 +24,12 @@ DEFAULTS: dict[str, Any] = {
     "inject_profile_chars": 300,
     "inject_facts_chars": 400,
     "inject_episodes_chars": 300,
+    "inject_style_chars": 150,
+    "inject_jargon_chars": 100,
     "inject_total_chars": 1500,
 }
+
+JARGON_DEFAULTS: dict[str, Any] = {"enabled": True, "inject_max": 5}
 
 
 def memory_config() -> dict[str, Any]:
@@ -45,3 +49,33 @@ def tenant_learn_enabled(state: ChatSessionState | None) -> bool:
     if state is not None and state.learn_enabled is not None:
         return bool(state.learn_enabled)
     return bool(memory_config()["learn_enabled"])
+
+
+def style_learning_enabled() -> bool:
+    """是否允许学习群风格与黑话；隐私开关独立于长期记忆。"""
+    try:
+        privacy = get_config_manager().get_system()["chat"].get("privacy") or {}
+    except Exception:
+        return False
+    return bool(privacy.get("style_learn", False))
+
+
+def style_model_name() -> str:
+    """读取风格任务专用模型名；未配置时用 Provider 默认模型。"""
+    try:
+        routing = get_config_manager().get_system()["chat"].get("model_routing") or {}
+        return str(routing.get("style") or "")
+    except Exception:
+        return ""
+
+
+def jargon_config() -> dict[str, Any]:
+    """返回带默认值的黑话注入配置。"""
+    try:
+        value = get_config_manager().get_system()["chat"].get("jargon")
+    except Exception:
+        value = None
+    merged = dict(JARGON_DEFAULTS)
+    if isinstance(value, dict):
+        merged.update(value)
+    return merged

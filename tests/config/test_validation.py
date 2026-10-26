@@ -30,6 +30,10 @@ class SystemConfigValidationTests(unittest.TestCase):
             {"chat": {"memory": None}},
             {"chat": {"memory": False}},
             {"chat": {"memory": {"history_enabled": 1}}},
+            {"chat": {"jargon": None}},
+            {"chat": {"jargon": {"enabled": "yes"}}},
+            {"chat": {"jargon": {"inject_max": -1}}},
+            {"chat": {"jargon": {"inject_max": 21}}},
         )
         for payload in payloads:
             with self.subTest(payload=payload), self.assertRaises(ValueError):
@@ -54,10 +58,19 @@ class SystemConfigValidationTests(unittest.TestCase):
         self.assertEqual(self.proxy.load()["chat"]["memory"], SYSTEM_DEFAULTS["chat"]["memory"])
 
     def test_partial_config_is_merged_and_valid(self) -> None:
-        self.proxy.storage.write({"chat": {"max_history": 0, "memory": {"learn_enabled": True}}})
+        self.proxy.storage.write(
+            {
+                "chat": {
+                    "max_history": 0,
+                    "memory": {"learn_enabled": True},
+                    "jargon": {"inject_max": 3},
+                }
+            }
+        )
 
         data = self.proxy.load()
 
         self.assertEqual(data["chat"]["max_history"], 0)
         self.assertTrue(data["chat"]["memory"]["learn_enabled"])
         self.assertTrue(data["chat"]["memory"]["history_enabled"])
+        self.assertEqual(data["chat"]["jargon"], {"enabled": True, "inject_max": 3})

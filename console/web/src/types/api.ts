@@ -179,3 +179,42 @@ export interface ProviderPayload {
   timeout: number
   embedding_dim?: number | null
 }
+
+export interface ChatTenant {
+  tenant: string
+  messages: number
+}
+
+export interface ChatStyleExample {
+  text: string
+  seq: number
+}
+
+export interface ChatStyle {
+  tenant: string
+  summary: string
+  manual_override: string
+  rules: string[]
+  examples: ChatStyleExample[]
+  version: number
+  learn_count: number
+  use_count: number
+  evidence_seq_start: number
+  evidence_seq_end: number
+  evidence_count: number
+  last_used_at: string | null
+  updated_at: string | null
+}
+
+export interface ChatJargon {
+  id: number
+  term: string
+  meaning: string
+  status: 'active' | 'rejected' | string
+  count: number
+  learn_count: number
+  use_count: number
+  first_seen: string | null
+  last_seen: string | null
+  last_used_at: string | null
+}

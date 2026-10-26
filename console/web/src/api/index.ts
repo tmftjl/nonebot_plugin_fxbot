@@ -10,6 +10,9 @@ import type {
   CacheKeys,
   CacheClearPayload,
   CacheClearResult,
+  ChatTenant,
+  ChatStyle,
+  ChatJargon,
 } from '@/types/api'
 
 export function getToken(): string {
@@ -104,6 +107,21 @@ export const cacheApi = {
   keys: (domain: string, limit = 200) =>
     api.get<CacheKeys>(`/cache/keys?domain=${encodeURIComponent(domain)}&limit=${limit}`),
   clear: (payload: CacheClearPayload) => api.post<CacheClearResult>('/cache/clear', payload),
+}
+
+// 聊天记忆 API
+export const chatApi = {
+  tenants: () => api.get<{ tenants: ChatTenant[] }>('/chat/tenants'),
+  getStyle: (tenant: string) =>
+    api.get<{ style: ChatStyle | null }>(`/chat/style?tenant=${encodeURIComponent(tenant)}`),
+  deleteStyle: (tenant: string) =>
+    api.delete<{ deleted: boolean }>(`/chat/style?tenant=${encodeURIComponent(tenant)}`),
+  listJargon: (tenant: string, status = 'all') =>
+    api.get<{ items: ChatJargon[] }>(
+      `/chat/jargon?tenant=${encodeURIComponent(tenant)}&status=${encodeURIComponent(status)}`,
+    ),
+  deleteJargon: (tenant: string, id: number) =>
+    api.delete<{ deleted: boolean }>(`/chat/jargon/${id}?tenant=${encodeURIComponent(tenant)}`),
 }
 
 // 会员续费 API

@@ -323,3 +323,49 @@ class ChatRelation(BaseIDModel, table=True):
     status: str = Field(default="active", nullable=False)
     created_at: datetime = Field(default_factory=utc_now_naive, nullable=False)
     updated_at: datetime = Field(default_factory=utc_now_naive, nullable=False)
+
+
+class ChatStyle(BaseIDModel, table=True):
+    """群说话风格；人工覆盖优先于自动摘要。"""
+
+    __tablename__ = "chat_style"
+    __table_args__ = (UniqueConstraint("tenant"),)
+
+    tenant: str = Field(nullable=False)
+    version: int = Field(default=0, nullable=False)
+    rules: str = Field(default="[]", nullable=False)
+    examples: str = Field(default="[]", nullable=False)
+    summary: str = Field(default="", nullable=False)
+    evidence_seq_start: int = Field(default=0, nullable=False)
+    evidence_seq_end: int = Field(default=0, nullable=False)
+    evidence_count: int = Field(default=0, nullable=False)
+    learn_count: int = Field(default=0, nullable=False)
+    use_count: int = Field(default=0, nullable=False)
+    last_used_at: datetime | None = Field(default=None, nullable=True)
+    manual_override: str = Field(default="", nullable=False)
+    manual_version: int = Field(default=0, nullable=False)
+    created_at: datetime = Field(default_factory=utc_now_naive, nullable=False)
+    updated_at: datetime = Field(default_factory=utc_now_naive, nullable=False)
+
+
+class ChatJargon(BaseIDModel, table=True):
+    """群内特有词与释义；低置信释义只保存不注入。"""
+
+    __tablename__ = "chat_jargon"
+    __table_args__ = (
+        UniqueConstraint("tenant", "term"),
+        Index("ix_chat_jargon_tenant_status", "tenant", "status"),
+    )
+
+    tenant: str = Field(nullable=False)
+    term: str = Field(nullable=False)
+    normalized: str = Field(default="", nullable=False)
+    meaning: str = Field(default="", nullable=False)
+    count: int = Field(default=1, nullable=False)
+    status: str = Field(default="active", nullable=False)
+    source_batch_id: str = Field(default="", nullable=False)
+    learn_count: int = Field(default=1, nullable=False)
+    use_count: int = Field(default=0, nullable=False)
+    first_seen: datetime = Field(default_factory=utc_now_naive, nullable=False)
+    last_seen: datetime = Field(default_factory=utc_now_naive, nullable=False)
+    last_used_at: datetime | None = Field(default=None, nullable=True)

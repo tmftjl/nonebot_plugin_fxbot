@@ -15,7 +15,7 @@ from .filtering import sanitize_line
 
 FACT_CATEGORIES = frozenset({"identity", "preference", "relationship", "event", "skill", "opinion", "other"})
 RELATION_OBJECT_KINDS = frozenset({"user", "org", "place", "thing"})
-_SENSITIVE = re.compile(
+SENSITIVE = re.compile(
     r"(密码|口令|token|secret|api[_ ]?key|身份证|银行卡|信用卡|手机号|\b1[3-9]\d{9}\b|住址)",
     re.I,
 )
@@ -209,7 +209,7 @@ def parse_extraction(data: object, messages: list[ChatMessage]) -> ExtractionRes
         if subject_id not in authors or asserted_by not in authors:
             continue
         value = sanitize_line(item.get("value"), 120)
-        if not value or _SENSITIVE.search(value):
+        if not value or SENSITIVE.search(value):
             continue
         category = str(item.get("category") or "other").strip().lower()
         if category not in FACT_CATEGORIES:
@@ -275,7 +275,7 @@ def parse_extraction(data: object, messages: list[ChatMessage]) -> ExtractionRes
             object_user_id = candidate
         else:
             object_name = sanitize_line(item.get("object_name"), 60)
-            if not object_name or _SENSITIVE.search(object_name):
+            if not object_name or SENSITIVE.search(object_name):
                 continue
             object_key = _normalized_value(object_name)[:80]
             if not object_key or object_key not in batch_text:

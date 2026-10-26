@@ -1,9 +1,12 @@
-"""把画像、事实与 Episode 注入 system message。"""
+"""把画像、事实、Episode、群风格与黑话注入 system message。"""
 
 from __future__ import annotations
 
+import json
+from typing import Any
+
 from .state import is_ready
-from .config import memory_config, tenant_learn_enabled
+from .config import jargon_config, memory_config, tenant_learn_enabled
 from .retrieve import recall_facts, recall_episodes
 from .filtering import sanitize_line
 from .repository import chat_repository
@@ -35,6 +38,67 @@ def _episode_line(episode: object) -> str:
     return sanitize_line(f"- {title}：{summary}" if title else f"- {summary}", 160)
 
 
+def _json_list(value: object) -> list[Any]:
+    """解析 JSON 数组；坏数据按空处理。"""
+    try:
+        items = json.loads(str(value or "[]"))
+    except (TypeError, ValueError):
+        return []
+    return items if isinstance(items, list) else []
+
+
+def _style_line(style: object) -> str:
+    """人工覆盖优先，其次摘要，最后用前几条规则兜底。"""
+    summary = str(getattr(style, "manual_override", "") or getattr(style, "summary", "") or "")
+    if not summary:
+        rules = [str(item) for item in _json_list(getattr(style, "rules", "[]")) if str(item).strip()]
+        summary = "；".join(rules[:3])
+    if not summary:
+        return ""
+    return sanitize_line(f"【群风格】{summary}", 300)
+
+
+def _jargon_hits(rows: list[object], query: str, limit: int) -> list[object]:
+    """当前文本包含词条时命中，最多取配置条数。"""
+    needle = " ".join(str(query or "").casefold().split())
+    if not needle:
+        return []
+    hits: list[object] = []
+    for row in rows:
+        normalized = str(getattr(row, "normalized", "") or "")
+        if normalized and normalized in needle:
+            hits.append(row)
+            if len(hits) >= limit:
+                break
+    return hits
+
+
+def _jargon_line(hits: list[object]) -> str:
+    """把命中词条压成一行释义。"""
+    pairs = [
+        f"{getattr(row, 'term', '')}：{getattr(row, 'meaning', '')}"
+        for row in hits
+        if getattr(row, "term", "") and getattr(row, "meaning", "")
+    ]
+    if not pairs:
+        return ""
+    return sanitize_line(f"【黑话】{'；'.join(pairs)}", 300)
+
+
+async def _mark_usage(tenant: str, style_text: str, block: str, hits: list[object], jargon_text: str) -> None:
+    """只记录真正进入最终注入块的内容；失败不影响回复。"""
+    try:
+        if style_text and style_text in block:
+            await chat_repository.mark_style_used(tenant)
+        if jargon_text and jargon_text in block:
+            await chat_repository.mark_jargon_used(
+                tenant,
+                [str(getattr(row, "term", "")) for row in hits if getattr(row, "term", "")],
+            )
+    except Exception:
+        return
+
+
 async def memory_context(
     tenant: str,
     speaker_id: str,
@@ -46,6 +110,7 @@ async def memory_context(
     if not is_ready() or not tenant_learn_enabled(await chat_repository.get_session_state(tenant)):
         return ""
     cfg = memory_config()
+    jargon_cfg = jargon_config()
     subjects: list[str] = []
     for subject_id in [speaker_id, *(extra_subject_ids or [])]:
         if subject_id and subject_id not in subjects:
@@ -62,13 +127,21 @@ async def memory_context(
                 profiles.append(line)
         facts = await recall_facts(tenant, speaker_id, subjects, query, limit=10)
         episodes = await recall_episodes(tenant, subjects, query, limit=2)
+        style = await chat_repository.get_style(tenant)
+        jargon_rows: list[object] = []
+        if query and jargon_cfg["enabled"]:
+            jargon_rows = await chat_repository.list_jargon(tenant, status="active", limit=500)
     except Exception:
         return ""
     profile_text = "\n".join(profiles)[: int(cfg["inject_profile_chars"])]
     fact_text = "\n".join(_fact_line(fact) for fact in facts)[: int(cfg["inject_facts_chars"])]
     episode_text = "\n".join(_episode_line(episode) for episode in episodes)[: int(cfg["inject_episodes_chars"])]
-    sections = [section for section in (profile_text, fact_text, episode_text) if section]
+    style_text = _style_line(style)[: int(cfg["inject_style_chars"])] if style is not None else ""
+    hits = _jargon_hits(jargon_rows, query, int(jargon_cfg["inject_max"]))
+    jargon_text = _jargon_line(hits)[: int(cfg["inject_jargon_chars"])]
+    sections = [section for section in (profile_text, fact_text, episode_text, style_text, jargon_text) if section]
     if not sections:
         return ""
-    block = "\n".join([_HEADER, *sections])
-    return block[: int(cfg["inject_total_chars"])]
+    block = "\n".join([_HEADER, *sections])[: int(cfg["inject_total_chars"])]
+    await _mark_usage(tenant, style_text, block, hits, jargon_text)
+    return block
