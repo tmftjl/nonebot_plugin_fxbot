@@ -218,3 +218,18 @@ export interface ChatJargon {
   last_seen: string | null
   last_used_at: string | null
 }
+
+export interface ChatExpression {
+  id: number
+  situation: string
+  style: string
+  type: string
+  count: number
+  checked: boolean
+  rejected: boolean
+  learn_count: number
+  use_count: number
+  source_message_seq: number
+  last_used_at: string | null
+  updated_at: string | null
+}

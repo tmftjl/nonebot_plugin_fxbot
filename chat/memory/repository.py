@@ -25,6 +25,7 @@ from .models import (
     ChatRelation,
     ChatTurnItem,
     ChatJobCursor,
+    ChatExpression,
     ChatForgetMarker,
     ChatSessionState,
     ChatMemoryEvidence,
@@ -321,7 +322,8 @@ class ChatRepository:
         counts = {str(row[0]): int(row[1]) for row in count_rows}
         style_tenants = {str(row[0]) for row in (await session.execute(select(ChatStyle.tenant))).all()}
         jargon_tenants = {str(row[0]) for row in (await session.execute(select(ChatJargon.tenant))).all()}
-        tenants = sorted(set(counts) | style_tenants | jargon_tenants)
+        expression_tenants = {str(row[0]) for row in (await session.execute(select(ChatExpression.tenant))).all()}
+        tenants = sorted(set(counts) | style_tenants | jargon_tenants | expression_tenants)
         return [
             {"tenant": tenant, "messages": counts.get(tenant, 0)}
             for tenant in sorted(tenants, key=lambda item: (-counts.get(item, 0), item))
@@ -713,6 +715,85 @@ class ChatRepository:
         """按租户删除一条黑话释义。"""
         result = await session.execute(
             delete(ChatJargon).where(ChatJargon.tenant == tenant, ChatJargon.id == int(jargon_id))
+        )
+        return bool(result.rowcount)
+
+    @with_session
+    async def list_expressions(
+        self, session: AsyncSession, tenant: str, *, status: str | None = None, limit: int = 500
+    ) -> list[ChatExpression]:
+        """按出现次数读取表达；status 支持 active/rejected/unchecked。"""
+        statement = select(ChatExpression).where(ChatExpression.tenant == tenant)
+        if status == "active":
+            statement = statement.where(ChatExpression.checked.is_(True), ChatExpression.rejected.is_(False))
+        elif status == "rejected":
+            statement = statement.where(ChatExpression.rejected.is_(True))
+        elif status == "unchecked":
+            statement = statement.where(ChatExpression.checked.is_(False))
+        statement = statement.order_by(ChatExpression.count.desc(), ChatExpression.updated_at.desc()).limit(limit)
+        return list((await session.execute(statement)).scalars().all())
+
+    @with_session
+    async def save_expressions(
+        self,
+        session: AsyncSession,
+        tenant: str,
+        new_items: list[dict[str, object]],
+        updates: dict[int, tuple[float, int]],
+        *,
+        cursor_seq: int,
+        expected_cursor: int,
+        source_batch_id: str,
+    ) -> bool:
+        """在同一事务内写入表达、累加计数并推进游标；游标已变则放弃。"""
+        cursor = await self.get_cursor(tenant, "expression", session=session)
+        current = int(cursor.cursor_seq) if cursor else 0
+        if current != int(expected_cursor):
+            return False
+        now = utc_now_naive()
+        for expression_id, (count, learned) in updates.items():
+            await session.execute(
+                update(ChatExpression)
+                .where(ChatExpression.tenant == tenant, ChatExpression.id == int(expression_id))
+                .values(
+                    count=float(count),
+                    learn_count=ChatExpression.learn_count + int(learned),
+                    updated_at=now,
+                )
+            )
+        for item in new_items:
+            session.add(ChatExpression(tenant=tenant, source_batch_id=source_batch_id, updated_at=now, **item))
+        await self._upsert_cursor(session, tenant, "expression", int(cursor_seq))
+        return True
+
+    @with_session
+    async def review_expression(self, session: AsyncSession, tenant: str, expression_id: int, rejected: bool) -> bool:
+        """人工改判一条表达；记录为已复审。"""
+        rows = await ChatExpression.select_rows(tenant=tenant, id=int(expression_id), session=session)
+        if not rows:
+            return False
+        rows[0].checked = True
+        rows[0].rejected = bool(rejected)
+        rows[0].updated_at = utc_now_naive()
+        return True
+
+    @with_session
+    async def mark_expressions_used(self, session: AsyncSession, tenant: str, expression_ids: list[int]) -> None:
+        """记录实际进入注入的表达。"""
+        ids = [int(item) for item in expression_ids if int(item) > 0]
+        if not ids:
+            return
+        await session.execute(
+            update(ChatExpression)
+            .where(ChatExpression.tenant == tenant, ChatExpression.id.in_(ids))
+            .values(use_count=ChatExpression.use_count + 1, last_used_at=utc_now_naive())
+        )
+
+    @with_session
+    async def delete_expression(self, session: AsyncSession, tenant: str, expression_id: int) -> bool:
+        """按租户删除一条表达。"""
+        result = await session.execute(
+            delete(ChatExpression).where(ChatExpression.tenant == tenant, ChatExpression.id == int(expression_id))
         )
         return bool(result.rowcount)
 
@@ -1186,6 +1267,30 @@ class ChatRepository:
                 delete(ChatJargon).where(
                     ChatJargon.tenant == tenant,
                     ChatJargon.source_batch_id.in_(stale_batches),
+                )
+            )
+        stale_expression_ids: list[int] = []
+        expression_rows = list(
+            (await session.execute(select(ChatExpression).where(ChatExpression.tenant == tenant))).scalars()
+        )
+        for row in expression_rows:
+            if int(row.source_message_seq) == int(message.id):
+                stale_expression_ids.append(int(row.id or 0))
+                continue
+            parts = str(row.source_batch_id or "").split(":")
+            if len(parts) != 3 or parts[0] != "expression":
+                continue
+            try:
+                start, end = int(parts[1]), int(parts[2])
+            except ValueError:
+                continue
+            if start <= int(message.id) <= end:
+                stale_expression_ids.append(int(row.id or 0))
+        if stale_expression_ids:
+            await session.execute(
+                delete(ChatExpression).where(
+                    ChatExpression.tenant == tenant,
+                    ChatExpression.id.in_(stale_expression_ids),
                 )
             )
         state = await self._state_row(session, tenant)

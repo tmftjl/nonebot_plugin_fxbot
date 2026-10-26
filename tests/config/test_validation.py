@@ -34,6 +34,10 @@ class SystemConfigValidationTests(unittest.TestCase):
             {"chat": {"jargon": {"enabled": "yes"}}},
             {"chat": {"jargon": {"inject_max": -1}}},
             {"chat": {"jargon": {"inject_max": 21}}},
+            {"chat": {"expression": None}},
+            {"chat": {"expression": {"enabled": "yes"}}},
+            {"chat": {"expression": {"sample_size": 0}}},
+            {"chat": {"expression": {"inject_top_k": 21}}},
         )
         for payload in payloads:
             with self.subTest(payload=payload), self.assertRaises(ValueError):
@@ -64,6 +68,7 @@ class SystemConfigValidationTests(unittest.TestCase):
                     "max_history": 0,
                     "memory": {"learn_enabled": True},
                     "jargon": {"inject_max": 3},
+                    "expression": {"inject_top_k": 3},
                 }
             }
         )
@@ -74,3 +79,7 @@ class SystemConfigValidationTests(unittest.TestCase):
         self.assertTrue(data["chat"]["memory"]["learn_enabled"])
         self.assertTrue(data["chat"]["memory"]["history_enabled"])
         self.assertEqual(data["chat"]["jargon"], {"enabled": True, "inject_max": 3})
+        self.assertEqual(
+            data["chat"]["expression"],
+            {"enabled": True, "learn": True, "llm_select": False, "sample_size": 50, "inject_top_k": 3},
+        )

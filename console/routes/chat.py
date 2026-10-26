@@ -77,6 +77,24 @@ def _jargon_payload(row: object) -> dict[str, Any]:
     }
 
 
+def _expression_payload(row: object) -> dict[str, Any]:
+    """把表达行转成控制台结构。"""
+    return {
+        "id": getattr(row, "id", 0),
+        "situation": getattr(row, "situation", ""),
+        "style": getattr(row, "style", ""),
+        "type": getattr(row, "type", ""),
+        "count": getattr(row, "count", 0.0),
+        "checked": getattr(row, "checked", False),
+        "rejected": getattr(row, "rejected", False),
+        "learn_count": getattr(row, "learn_count", 0),
+        "use_count": getattr(row, "use_count", 0),
+        "source_message_seq": getattr(row, "source_message_seq", 0),
+        "last_used_at": _iso(getattr(row, "last_used_at", None)),
+        "updated_at": _iso(getattr(row, "updated_at", None)),
+    }
+
+
 @router.get("/tenants")
 async def list_tenants() -> dict[str, Any]:
     """列出仍有消息的租户，供控制台选择。"""
@@ -138,4 +156,47 @@ async def delete_jargon(jargon_id: int, tenant: str) -> dict[str, bool]:
         raise HTTPException(status_code=503, detail="聊天记忆数据库尚未就绪") from exc
     if not deleted:
         raise HTTPException(status_code=404, detail="黑话条目不存在")
+    return {"deleted": True}
+
+
+@router.get("/expression")
+async def list_expressions(tenant: str, status: str = "all") -> dict[str, Any]:
+    """列出表达条目，可按 active/rejected/unchecked 过滤。"""
+    tenant = _tenant(tenant)
+    if status not in {"all", "active", "rejected", "unchecked"}:
+        raise HTTPException(status_code=400, detail="status 只能是 all/active/rejected/unchecked")
+    try:
+        rows = await chat_repository.list_expressions(
+            tenant,
+            status=None if status == "all" else status,
+            limit=1000,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail="聊天记忆数据库尚未就绪") from exc
+    return {"items": [_expression_payload(row) for row in rows]}
+
+
+@router.patch("/expression/{expression_id}")
+async def review_expression(expression_id: int, tenant: str, rejected: bool) -> dict[str, bool]:
+    """人工通过或驳回一条表达；记录为已复审。"""
+    tenant = _tenant(tenant)
+    try:
+        updated = await chat_repository.review_expression(tenant, expression_id, rejected)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail="聊天记忆数据库尚未就绪") from exc
+    if not updated:
+        raise HTTPException(status_code=404, detail="表达条目不存在")
+    return {"rejected": bool(rejected)}
+
+
+@router.delete("/expression/{expression_id}")
+async def delete_expression(expression_id: int, tenant: str) -> dict[str, bool]:
+    """按租户删除一条表达。"""
+    tenant = _tenant(tenant)
+    try:
+        deleted = await chat_repository.delete_expression(tenant, expression_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail="聊天记忆数据库尚未就绪") from exc
+    if not deleted:
+        raise HTTPException(status_code=404, detail="表达条目不存在")
     return {"deleted": True}

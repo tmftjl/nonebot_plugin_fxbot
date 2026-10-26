@@ -21,6 +21,7 @@ from .models import (
     ChatRelation,
     ChatTurnItem,
     ChatJobCursor,
+    ChatExpression,
     ChatForgetMarker,
     ChatSessionState,
     ChatMemoryEvidence,
@@ -42,6 +43,7 @@ _MODELS = (
     ChatProfile,
     ChatStyle,
     ChatJargon,
+    ChatExpression,
 )
 _DIALECT = sqlite.dialect()
 

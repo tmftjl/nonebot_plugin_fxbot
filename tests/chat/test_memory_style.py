@@ -85,6 +85,7 @@ class _FakeConfig:
             "inject_episodes_chars": 300,
             "inject_style_chars": 150,
             "inject_jargon_chars": 100,
+            "inject_expressions_chars": 200,
             "inject_total_chars": 1500,
         }
         self.memory.update(memory or {})

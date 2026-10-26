@@ -253,7 +253,7 @@ def _system_config_tab() -> dict[str, Any]:
             },
             {
                 "key": "chat.privacy",
-                "title": "群风格学习",
+                "title": "群风格与表达学习",
                 "schemas": [
                     {
                         "field": "style_learn",
@@ -263,6 +263,13 @@ def _system_config_tab() -> dict[str, Any]:
                         "helpMessage": (
                             "开启后每周或新增 200 条人类消息学习一次本群说话风格；黑话只在当前消息命中时注入。"
                         ),
+                    },
+                    {
+                        "field": "expression_learn",
+                        "label": "学习群表达",
+                        "component": "Switch",
+                        "default": SYSTEM_DEFAULTS["chat"]["privacy"]["expression_learn"],
+                        "helpMessage": "开启后每 40 条人类消息学习一次情境说法；新条目复审通过后才会注入。",
                     },
                 ],
             },
@@ -284,6 +291,49 @@ def _system_config_tab() -> dict[str, Any]:
                         "default": SYSTEM_DEFAULTS["chat"]["jargon"]["inject_max"],
                         "helpMessage": "当前消息命中多个词条时，最多注入几条释义。",
                         "componentProps": {"min": 0, "max": 20},
+                    },
+                ],
+            },
+            {
+                "key": "chat.expression",
+                "title": "群表达",
+                "schemas": [
+                    {
+                        "field": "enabled",
+                        "label": "注入表达参考",
+                        "component": "Switch",
+                        "default": SYSTEM_DEFAULTS["chat"]["expression"]["enabled"],
+                        "helpMessage": "关闭后仍会学习，但回复时不注入情境说法。",
+                    },
+                    {
+                        "field": "learn",
+                        "label": "学习表达",
+                        "component": "Switch",
+                        "default": SYSTEM_DEFAULTS["chat"]["expression"]["learn"],
+                        "helpMessage": "关闭后停止学习新表达；需要同时开启隐私页的“学习群表达”。",
+                    },
+                    {
+                        "field": "llm_select",
+                        "label": "模型精排表达",
+                        "component": "Switch",
+                        "default": SYSTEM_DEFAULTS["chat"]["expression"]["llm_select"],
+                        "helpMessage": "开启后每轮多一次模型调用选择表达；失败自动回退本地模糊匹配。",
+                    },
+                    {
+                        "field": "sample_size",
+                        "label": "精排候选数",
+                        "component": "InputNumber",
+                        "default": SYSTEM_DEFAULTS["chat"]["expression"]["sample_size"],
+                        "helpMessage": "模型精排时最多查看多少条表达。",
+                        "componentProps": {"min": 1, "max": 200},
+                    },
+                    {
+                        "field": "inject_top_k",
+                        "label": "每次最多注入",
+                        "component": "InputNumber",
+                        "default": SYSTEM_DEFAULTS["chat"]["expression"]["inject_top_k"],
+                        "helpMessage": "每轮最多注入几条表达参考。",
+                        "componentProps": {"min": 1, "max": 20},
                     },
                 ],
             },

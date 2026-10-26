@@ -13,6 +13,7 @@ import type {
   ChatTenant,
   ChatStyle,
   ChatJargon,
+  ChatExpression,
 } from '@/types/api'
 
 export function getToken(): string {
@@ -71,6 +72,11 @@ class ApiClient {
     return response.data
   }
 
+  async patch<T = any>(url: string, data?: any): Promise<T> {
+    const response: AxiosResponse<T> = await this.client.patch(url, data)
+    return response.data
+  }
+
   async delete<T = any>(url: string): Promise<T> {
     const response: AxiosResponse<T> = await this.client.delete(url)
     return response.data
@@ -122,6 +128,16 @@ export const chatApi = {
     ),
   deleteJargon: (tenant: string, id: number) =>
     api.delete<{ deleted: boolean }>(`/chat/jargon/${id}?tenant=${encodeURIComponent(tenant)}`),
+  listExpressions: (tenant: string, status = 'all') =>
+    api.get<{ items: ChatExpression[] }>(
+      `/chat/expression?tenant=${encodeURIComponent(tenant)}&status=${encodeURIComponent(status)}`,
+    ),
+  reviewExpression: (tenant: string, id: number, rejected: boolean) =>
+    api.patch<{ rejected: boolean }>(
+      `/chat/expression/${id}?tenant=${encodeURIComponent(tenant)}&rejected=${rejected}`,
+    ),
+  deleteExpression: (tenant: string, id: number) =>
+    api.delete<{ deleted: boolean }>(`/chat/expression/${id}?tenant=${encodeURIComponent(tenant)}`),
 }
 
 // 会员续费 API

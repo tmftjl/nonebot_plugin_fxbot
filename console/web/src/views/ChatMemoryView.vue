@@ -4,15 +4,18 @@ import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, Delete } from '@element-plus/icons-vue'
 import { chatApi } from '@/api'
-import type { ChatTenant, ChatStyle, ChatJargon } from '@/types/api'
+import type { ChatTenant, ChatStyle, ChatJargon, ChatExpression } from '@/types/api'
 
 const tenants = ref<ChatTenant[]>([])
 const tenant = ref('')
 const style = ref<ChatStyle | null>(null)
 const jargon = ref<ChatJargon[]>([])
 const jargonStatus = ref('all')
+const expressions = ref<ChatExpression[]>([])
+const expressionStatus = ref('all')
 const loading = ref(false)
 const jargonLoading = ref(false)
+const expressionLoading = ref(false)
 const acting = ref(false)
 const loaded = ref(false)
 
@@ -20,6 +23,13 @@ const formatTime = (value: string | null | undefined) => {
   if (!value) return '—'
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
+}
+
+const formatCount = (value: number) => Number(value || 0).toFixed(3)
+
+const expressionTag = (row: ChatExpression): { type: 'success' | 'warning' | 'info'; text: string } => {
+  if (!row.checked) return { type: 'warning', text: '待复审' }
+  return row.rejected ? { type: 'info', text: '已拒绝' } : { type: 'success', text: '生效' }
 }
 
 const loadTenants = async () => {
@@ -52,6 +62,23 @@ const loadJargon = async () => {
   }
 }
 
+const loadExpressions = async () => {
+  if (!tenant.value) {
+    expressions.value = []
+    return
+  }
+  expressionLoading.value = true
+  try {
+    const result = await chatApi.listExpressions(tenant.value, expressionStatus.value)
+    expressions.value = result.items || []
+  } catch (error) {
+    console.error('加载群表达失败', error)
+    ElMessage.error('加载群表达失败，请重试')
+  } finally {
+    expressionLoading.value = false
+  }
+}
+
 const load = async () => {
   if (!tenant.value.trim()) {
     ElMessage.warning('请先选择或填写租户')
@@ -63,6 +90,7 @@ const load = async () => {
     const [styleResult] = await Promise.all([
       chatApi.getStyle(tenant.value),
       loadJargon(),
+      loadExpressions(),
     ])
     style.value = styleResult.style
     loaded.value = true
@@ -125,6 +153,46 @@ const deleteJargon = async (row: ChatJargon) => {
   } catch (error) {
     console.error('删除黑话失败', error)
     ElMessage.error('删除黑话失败，请重试')
+  } finally {
+    acting.value = false
+  }
+}
+
+const reviewExpression = async (row: ChatExpression, rejected: boolean) => {
+  if (acting.value) return
+  acting.value = true
+  try {
+    await chatApi.reviewExpression(tenant.value, row.id, rejected)
+    ElMessage.success(rejected ? '已驳回该表达' : '已通过该表达')
+    await loadExpressions()
+  } catch (error) {
+    console.error('改判表达失败', error)
+    ElMessage.error('改判表达失败，请重试')
+  } finally {
+    acting.value = false
+  }
+}
+
+const deleteExpression = async (row: ChatExpression) => {
+  if (acting.value) return
+  try {
+    await ElMessageBox.confirm(
+      `确定删除表达「${row.style}」？删除后不再注入这条情境说法。`,
+      '删除表达',
+      { confirmButtonText: '确定删除', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch (action) {
+    if (action === 'cancel' || action === 'close') return
+    throw action
+  }
+  acting.value = true
+  try {
+    await chatApi.deleteExpression(tenant.value, row.id)
+    ElMessage.success('表达已删除')
+    await loadExpressions()
+  } catch (error) {
+    console.error('删除表达失败', error)
+    ElMessage.error('删除表达失败，请重试')
   } finally {
     acting.value = false
   }
@@ -248,6 +316,60 @@ onMounted(() => {
         <el-table-column label="操作" width="90" fixed="right">
           <template #default="{ row }">
             <el-button link type="danger" :disabled="acting" @click="deleteJargon(row)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </div>
+
+    <div v-if="loaded" class="panel">
+      <div class="panel-header">
+        <h3 class="panel-title">群表达</h3>
+        <div class="panel-actions">
+          <el-select v-model="expressionStatus" class="status-select" @change="loadExpressions">
+            <el-option label="全部" value="all" />
+            <el-option label="生效中" value="active" />
+            <el-option label="待复审" value="unchecked" />
+            <el-option label="已拒绝" value="rejected" />
+          </el-select>
+          <el-button :icon="Refresh" :loading="expressionLoading" @click="loadExpressions">刷新</el-button>
+        </div>
+      </div>
+      <el-table v-loading="expressionLoading" :data="expressions" row-key="id" empty-text="暂无表达条目">
+        <el-table-column prop="situation" label="情境" min-width="200" show-overflow-tooltip />
+        <el-table-column prop="style" label="说法" min-width="200" show-overflow-tooltip />
+        <el-table-column prop="type" label="类型" width="90" />
+        <el-table-column label="状态" width="100">
+          <template #default="{ row }">
+            <el-tag :type="expressionTag(row).type" size="small">{{ expressionTag(row).text }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="权重" width="90">
+          <template #default="{ row }">{{ formatCount(row.count) }}</template>
+        </el-table-column>
+        <el-table-column prop="learn_count" label="学习" width="80" />
+        <el-table-column prop="use_count" label="注入" width="80" />
+        <el-table-column label="最近更新" min-width="170">
+          <template #default="{ row }">{{ formatTime(row.updated_at) }}</template>
+        </el-table-column>
+        <el-table-column label="操作" width="190" fixed="right">
+          <template #default="{ row }">
+            <el-button
+              link
+              type="success"
+              :disabled="acting || (row.checked && !row.rejected)"
+              @click="reviewExpression(row, false)"
+            >
+              通过
+            </el-button>
+            <el-button
+              link
+              type="warning"
+              :disabled="acting || (row.checked && row.rejected)"
+              @click="reviewExpression(row, true)"
+            >
+              驳回
+            </el-button>
+            <el-button link type="danger" :disabled="acting" @click="deleteExpression(row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>

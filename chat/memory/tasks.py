@@ -7,6 +7,7 @@ from nonebot import logger
 from .style import style_job_tick
 from .config import memory_config
 from .pipeline import memory_job_tick, backfill_job_tick
+from .expression import expression_job_tick
 
 
 def setup_memory_tasks() -> None:
@@ -44,4 +45,16 @@ def setup_memory_tasks() -> None:
         max_instances=1,
         coalesce=True,
     )
-    logger.info(f"[ChatMemory] 批量抽取任务已注册: 每 {interval} 秒；回填每 10 秒；风格每小时")
+    expression_interval = max(60, interval)
+    scheduler.add_job(
+        expression_job_tick,
+        trigger="interval",
+        seconds=expression_interval,
+        id="fxbot_chat_expression",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    logger.info(
+        f"[ChatMemory] 批量抽取任务已注册: 每 {interval} 秒；回填每 10 秒；风格每小时；表达每 {expression_interval} 秒"
+    )

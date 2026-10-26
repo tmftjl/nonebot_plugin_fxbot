@@ -26,10 +26,18 @@ DEFAULTS: dict[str, Any] = {
     "inject_episodes_chars": 300,
     "inject_style_chars": 150,
     "inject_jargon_chars": 100,
+    "inject_expressions_chars": 200,
     "inject_total_chars": 1500,
 }
 
 JARGON_DEFAULTS: dict[str, Any] = {"enabled": True, "inject_max": 5}
+EXPRESSION_DEFAULTS: dict[str, Any] = {
+    "enabled": True,
+    "learn": True,
+    "llm_select": False,
+    "sample_size": 50,
+    "inject_top_k": 5,
+}
 
 
 def memory_config() -> dict[str, Any]:
@@ -79,3 +87,37 @@ def jargon_config() -> dict[str, Any]:
     if isinstance(value, dict):
         merged.update(value)
     return merged
+
+
+def expression_config() -> dict[str, Any]:
+    """返回带默认值的表达学习与注入配置。"""
+    try:
+        value = get_config_manager().get_system()["chat"].get("expression")
+    except Exception:
+        value = None
+    merged = dict(EXPRESSION_DEFAULTS)
+    if isinstance(value, dict):
+        merged.update(value)
+    return merged
+
+
+def expression_learning_enabled() -> bool:
+    """是否允许学习表达；隐私开关与表达开关都必须打开。"""
+    try:
+        chat = get_config_manager().get_system()["chat"]
+    except Exception:
+        return False
+    privacy = chat.get("privacy") or {}
+    cfg = chat.get("expression") or {}
+    return (
+        bool(privacy.get("expression_learn", False)) and bool(cfg.get("enabled", True)) and bool(cfg.get("learn", True))
+    )
+
+
+def expression_model_name() -> str:
+    """表达学习复用抽取模型；未配置时用 Provider 默认模型。"""
+    try:
+        routing = get_config_manager().get_system()["chat"].get("model_routing") or {}
+        return str(routing.get("extract") or "")
+    except Exception:
+        return ""

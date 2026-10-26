@@ -369,3 +369,30 @@ class ChatJargon(BaseIDModel, table=True):
     first_seen: datetime = Field(default_factory=utc_now_naive, nullable=False)
     last_seen: datetime = Field(default_factory=utc_now_naive, nullable=False)
     last_used_at: datetime | None = Field(default=None, nullable=True)
+
+
+class ChatExpression(BaseIDModel, table=True):
+    """情境到说法的表达参考；复审通过后才注入。"""
+
+    __tablename__ = "chat_expression"
+    __table_args__ = (
+        UniqueConstraint("tenant", "situation_hash", "style_hash"),
+        Index("ix_chat_expression_tenant_count", "tenant", "count"),
+    )
+
+    tenant: str = Field(nullable=False)
+    situation: str = Field(nullable=False)
+    situation_hash: str = Field(nullable=False)
+    style: str = Field(nullable=False)
+    style_hash: str = Field(nullable=False)
+    type: str = Field(default="phrase", nullable=False)
+    count: float = Field(default=0.0, nullable=False)
+    checked: bool = Field(default=False, nullable=False)
+    rejected: bool = Field(default=False, nullable=False)
+    source_message_seq: int = Field(default=0, nullable=False)
+    source_batch_id: str = Field(default="", nullable=False)
+    learn_count: int = Field(default=1, nullable=False)
+    use_count: int = Field(default=0, nullable=False)
+    last_used_at: datetime | None = Field(default=None, nullable=True)
+    created_at: datetime = Field(default_factory=utc_now_naive, nullable=False)
+    updated_at: datetime = Field(default_factory=utc_now_naive, nullable=False)

@@ -72,6 +72,7 @@ SYSTEM_DEFAULTS = {
             "group_opt_out_command": True,
         },
         "jargon": {"enabled": True, "inject_max": 5},
+        "expression": {"enabled": True, "learn": True, "llm_select": False, "sample_size": 50, "inject_top_k": 5},
         "behavior": {
             "anti_repeat": True,
             "anti_repeat_threshold": 85,
@@ -137,6 +138,19 @@ def validate_system_config(data: dict[str, Any]) -> None:
     inject_max = jargon.get("inject_max", SYSTEM_DEFAULTS["chat"]["jargon"]["inject_max"])
     if isinstance(inject_max, bool) or not isinstance(inject_max, int) or not 0 <= inject_max <= 20:
         raise ValueError("chat.jargon.inject_max 必须是 0 到 20 的整数")
+
+    expression = chat.get("expression", {})
+    if not isinstance(expression, dict):
+        raise ValueError("chat.expression 必须是对象")
+    for key in ("enabled", "learn", "llm_select"):
+        if key in expression and not isinstance(expression[key], bool):
+            raise ValueError(f"chat.expression.{key} 必须是布尔值")
+    sample_size = expression.get("sample_size", SYSTEM_DEFAULTS["chat"]["expression"]["sample_size"])
+    if isinstance(sample_size, bool) or not isinstance(sample_size, int) or not 1 <= sample_size <= 200:
+        raise ValueError("chat.expression.sample_size 必须是 1 到 200 的整数")
+    top_k = expression.get("inject_top_k", SYSTEM_DEFAULTS["chat"]["expression"]["inject_top_k"])
+    if isinstance(top_k, bool) or not isinstance(top_k, int) or not 1 <= top_k <= 20:
+        raise ValueError("chat.expression.inject_top_k 必须是 1 到 20 的整数")
 
     behavior = chat.get("behavior", {})
     if not isinstance(behavior, dict):
