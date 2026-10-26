@@ -36,6 +36,16 @@ class MentionRef:
         return f"{self.name}({self.user_id})" if self.name else self.user_id
 
 
+def speaker_label(user_id: str, user_name: str) -> str:
+    """生成发言人标识，用于区分同一会话里的不同成员。"""
+    user_id = str(user_id or "").strip()
+    # 昵称是用户可控的，压成单行并限长，避免用换行伪造出第二段消息
+    user_name = " ".join(str(user_name or "").split())[:32]
+    if not user_name or user_name == user_id:
+        return f"用户{user_id}" if user_id else "用户"
+    return f"{user_name}({user_id})" if user_id else user_name
+
+
 @dataclass
 class ChatRequest:
     """AI 对话请求。"""
@@ -58,6 +68,12 @@ class ChatRequest:
     platform: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
     mentions: list[MentionRef] = field(default_factory=list)
+    batched: bool = False
+    source_message_ids: list[str] = field(default_factory=list)
+    source_author_ids: list[str] = field(default_factory=list)
+    trigger_seq: int = 0
+    accepted_epoch: int | None = None
+    activity_seq: int = 0
 
     @property
     def is_group(self) -> bool:

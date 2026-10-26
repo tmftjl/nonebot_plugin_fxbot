@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 import tempfile
 import unittest
 from uuid import uuid4
@@ -17,12 +18,14 @@ from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from src.plugins.nonebot_plugin_fxbot.db import base_models
 from src.plugins.nonebot_plugin_fxbot.chat import router, service as service_module
+from src.plugins.nonebot_plugin_fxbot.chat.tools import ToolRuntime
 from src.plugins.nonebot_plugin_fxbot.chat.types import ChatRequest, ChatResponse
 from src.plugins.nonebot_plugin_fxbot.chat.memory import state as memory_state, migrate
 from src.plugins.nonebot_plugin_fxbot.chat.service import ChatService
 from src.plugins.nonebot_plugin_fxbot.chat.session import ChatSessionStore
 from src.plugins.nonebot_plugin_fxbot.chat.providers import LLMResponse, provider_manager
 from src.plugins.nonebot_plugin_fxbot.chat.memory.models import ChatTurn, ChatMessage, ChatTurnItem
+from src.plugins.nonebot_plugin_fxbot.chat.behavior.debounce import PendingBatch
 from src.plugins.nonebot_plugin_fxbot.chat.memory.repository import ChatRepository, chat_repository
 
 
@@ -311,13 +314,16 @@ class TurnPersistenceTests(unittest.IsolatedAsyncioTestCase):
             patch.object(chat_repository, "update_message_content", new=AsyncMock()) as update_message,
             patch.object(chat_repository, "append_turn_item", new=AsyncMock(return_value=12)) as append,
         ):
-            item_id = await self.service._persist_turn_end(request, (7, 9), response, "provider", "用户: 你好", [])
+            item_id = await self.service._persist_turn_end(
+                request, (7, 9), response, "provider", "用户: 你好", [], ["回复正文"]
+            )
 
-        self.assertEqual(item_id, 12)
+        self.assertEqual(item_id, [12])
         self.assertEqual(update_turn.await_args.kwargs["status"], "generated")
         self.assertEqual(update_turn.await_args.kwargs["generated_text"], "回复正文")
         item = append.await_args.args[0]
         self.assertFalse(item.visible)
+        self.assertEqual((item.item_seq, item.part_index), (1, 0))
         self.assertEqual(item.send_status, "pending")
         update_message.assert_not_awaited()
 
@@ -334,12 +340,12 @@ class TurnPersistenceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_mark_sent_uses_turn_item_id(self) -> None:
         request = _request()
-        response = ChatResponse(text="回复", metadata={"turn_item_id": 5})
+        response = ChatResponse(text="回复", metadata={"turn_item_ids": [5]})
         with (
             patch.object(memory_state, "is_ready", return_value=True),
             patch.object(chat_repository, "mark_turn_item_sent", new=AsyncMock()) as mark,
         ):
-            await self.service.mark_sent(request, response, "pmid")
+            await self.service.mark_sent(request, response, 0, "pmid")
 
         mark.assert_awaited_once_with("tenant", 5, "pmid")
 
@@ -398,7 +404,7 @@ class EmptyAndFailedSendTests(unittest.IsolatedAsyncioTestCase):
             patch.object(chat_repository, "append_turn_item", new=AsyncMock()) as append,
         ):
             item_id = await self.service._persist_turn_end(
-                request, (7, 9), LLMResponse(content=""), "p", "用户: 你好", []
+                request, (7, 9), LLMResponse(content=""), "p", "用户: 你好", [], []
             )
 
         self.assertIsNone(item_id)
@@ -408,7 +414,7 @@ class EmptyAndFailedSendTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_mark_sending_then_failure_updates_statuses(self) -> None:
         request = _request()
-        response = ChatResponse(text="回复", metadata={"turn_item_id": 5})
+        response = ChatResponse(text="回复", metadata={"turn_item_ids": [5]})
         with (
             patch.object(memory_state, "is_ready", return_value=True),
             patch.object(chat_repository, "update_turn_item", new=AsyncMock()) as update_item,
@@ -424,7 +430,7 @@ class EmptyAndFailedSendTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_mark_sent_appends_reply_once(self) -> None:
         request = _request()
-        response = ChatResponse(text="回复", metadata={"turn_item_id": 5})
+        response = ChatResponse(text="回复", metadata={"turn_item_ids": [5]})
         self.service.session_store.append("tenant", {"role": "user", "content": "你好"})
         mark = AsyncMock(side_effect=[True, False])
         with (
@@ -503,7 +509,7 @@ class SendStateTests(unittest.IsolatedAsyncioTestCase):
         response = await self._process(request, store, empty_lease)
 
         self.assertEqual(response.text, "  ")
-        self.assertNotIn("turn_item_id", response.metadata)
+        self.assertNotIn("turn_item_ids", response.metadata)
         turn = await self._turn(request)
         self.assertEqual((turn.status, turn.error), ("failed", "空响应"))
         self.assertEqual(
@@ -527,7 +533,7 @@ class SendStateTests(unittest.IsolatedAsyncioTestCase):
 
         response = await self._process(request, store, clearing_lease)
 
-        self.assertNotIn("turn_item_id", response.metadata)
+        self.assertNotIn("turn_item_ids", response.metadata)
         self.assertFalse(ChatService(store).is_current(self.tenant, response.epoch))
         self.assertEqual((await self._turn(request)).status, "aborted")
         self.assertEqual(
@@ -542,8 +548,8 @@ class SendStateTests(unittest.IsolatedAsyncioTestCase):
         service = ChatService(store)
         with patch.object(service_module, "get_config_manager", return_value=_FakeConfig()):
             await service.mark_sending(request, response)
-            await service.mark_sent(request, response, "pmid")
-            await service.mark_sent(request, response, "pmid")
+            await service.mark_sent(request, response, 0, "pmid")
+            await service.mark_sent(request, response, 0, "pmid")
 
         expected = [
             {"role": "user", "content": "Alice(user): 你好"},
@@ -553,18 +559,272 @@ class SendStateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await chat_repository.get_recent_messages(self.tenant, 10), expected)
         self.assertEqual((await self._turn(request)).status, "sent")
 
+    async def test_same_user_new_trigger_aborts_before_generation(self) -> None:
+        request = self._new_request()
+        store = ChatSessionStore()
+        request.trigger_seq = store.next_seq(self.tenant, request.user_id)
+        request.accepted_epoch = store.epoch(self.tenant)
+        store.next_seq(self.tenant, request.user_id)
+
+        response = await self._process(request, store, _fake_lease)
+
+        self.assertEqual(response.text, "")
+        self.assertNotIn("turn_item_ids", response.metadata)
+        self.assertEqual((await self._turn(request)).status, "aborted")
+        self.assertEqual(
+            await chat_repository.get_recent_messages(self.tenant, 10),
+            [{"role": "user", "content": "Alice(user): 你好"}],
+        )
+
+    async def test_other_user_trigger_does_not_abort(self) -> None:
+        request = self._new_request()
+        store = ChatSessionStore()
+        request.trigger_seq = store.next_seq(self.tenant, request.user_id)
+        request.accepted_epoch = store.epoch(self.tenant)
+        store.next_seq(self.tenant, "other")
+
+        response = await self._process(request, store, _fake_lease)
+
+        self.assertEqual(response.text, "回复")
+        self.assertIn("turn_item_ids", response.metadata)
+
+    async def test_new_trigger_during_generation_voids_reply(self) -> None:
+        request = self._new_request()
+        store = ChatSessionStore()
+        tenant, user_id = self.tenant, request.user_id
+        request.trigger_seq = store.next_seq(tenant, user_id)
+        request.accepted_epoch = store.epoch(tenant)
+
+        class _InterruptingProvider:
+            async def chat(self, messages: list[dict[str, object]], tools: object = None) -> LLMResponse:
+                store.next_seq(tenant, user_id)
+                return LLMResponse(content="回复")
+
+        @asynccontextmanager
+        async def interrupting_lease(_name: str):
+            yield _InterruptingProvider()
+
+        response = await self._process(request, store, interrupting_lease)
+
+        self.assertEqual(response.text, "回复")
+        self.assertNotIn("turn_item_ids", response.metadata)
+        self.assertEqual((await self._turn(request)).status, "aborted")
+        self.assertEqual(
+            await chat_repository.get_recent_messages(self.tenant, 10),
+            [{"role": "user", "content": "Alice(user): 你好"}],
+        )
+
+    async def test_cleared_queued_turn_is_dropped(self) -> None:
+        request = self._new_request()
+        store = ChatSessionStore()
+        request.trigger_seq = store.next_seq(self.tenant, request.user_id)
+        request.accepted_epoch = store.epoch(self.tenant)
+        store.clear(self.tenant)
+
+        response = await self._process(request, store, _fake_lease)
+
+        self.assertEqual(response.text, "")
+        self.assertEqual(await chat_repository.get_recent_messages(self.tenant, 10), [])
+
+    async def test_abort_before_send_voids_turn_item(self) -> None:
+        request = self._new_request()
+        store = ChatSessionStore()
+        request.trigger_seq = store.next_seq(self.tenant, request.user_id)
+        request.accepted_epoch = store.epoch(self.tenant)
+        response = await self._process(request, store, _fake_lease)
+        service = ChatService(store)
+        await service.mark_sending(request, response)
+        await service.mark_send_aborted(request, response)
+
+        self.assertEqual((await self._turn(request)).status, "aborted")
+        async with base_models.async_maker() as session:
+            item = (
+                await ChatTurnItem.select_rows(
+                    tenant=self.tenant, id=response.metadata["turn_item_ids"][0], session=session
+                )
+            )[0]
+        self.assertEqual((item.send_status, item.visible), ("skipped", False))
+        self.assertEqual(
+            await chat_repository.get_recent_messages(self.tenant, 10),
+            [{"role": "user", "content": "Alice(user): 你好"}],
+        )
+
+
+class _RecordingMatcher:
+    """记录发送内容，可在指定序号抛错。"""
+
+    def __init__(self, fail_at: int | None = None) -> None:
+        self.sent: list[str] = []
+        self.fail_at = fail_at
+
+    async def send(self, text: str) -> SimpleNamespace:
+        if self.fail_at is not None and len(self.sent) == self.fail_at:
+            raise RuntimeError("net down")
+        await asyncio.sleep(0)
+        self.sent.append(text)
+        return SimpleNamespace(message_id=f"pmid-{len(self.sent)}")
+
+
+_LONG_REPLY = "第一段。" * 100
+
+
+class SplitSendTests(unittest.IsolatedAsyncioTestCase):
+    """长回复拆分、分段失败与同租户串行发送。"""
+
+    async def asyncSetUp(self) -> None:
+        await base_models.init_database()
+        await migrate.ensure_schema()
+        memory_state.mark_ready()
+        self.addCleanup(memory_state.mark_ready)
+        self.tenant = f"split-{uuid4().hex}"
+        self.addAsyncCleanup(chat_repository.clear_tenant, self.tenant)
+
+    def _new_request(self, *, user_id: str = "user", text: str = "你好") -> ChatRequest:
+        return _request(
+            session_id=self.tenant,
+            user_id=user_id,
+            group_id=None,
+            user_name=user_id.title(),
+            text=text,
+            turn_id=uuid4().hex,
+            dedupe_key=f"msg:{uuid4().hex}",
+            trigger_kind="private",
+        )
+
+    @staticmethod
+    def _lease_for(text: str):
+        @asynccontextmanager
+        async def lease(_name: str):
+            class _Provider:
+                async def chat(self, messages: list[dict[str, object]], tools: object = None) -> LLMResponse:
+                    return LLMResponse(content=text)
+
+            yield _Provider()
+
+        return lease
+
+    async def _send(
+        self, request: ChatRequest, store: ChatSessionStore, matcher: object, text: str = _LONG_REPLY
+    ) -> bool:
+        with (
+            patch.object(service_module, "get_config_manager", return_value=_FakeConfig()),
+            patch.object(provider_manager, "lease", self._lease_for(text)),
+            patch.object(service_module, "part_delay", return_value=0.0),
+        ):
+            return await ChatService(store).process_and_send(request, ToolRuntime(matcher=matcher))
+
+    async def _turn(self, request: ChatRequest) -> ChatTurn:
+        async with base_models.async_maker() as session:
+            rows = await ChatTurn.select_rows(tenant=self.tenant, turn_key=request.turn_id, session=session)
+        return rows[0]
+
+    async def _assistant_items(self, request: ChatRequest) -> list[ChatTurnItem]:
+        turn = await self._turn(request)
+        async with base_models.async_maker() as session:
+            rows = await ChatTurnItem.select_rows(
+                tenant=self.tenant, turn_id=turn.id, role="assistant", session=session
+            )
+        return sorted(rows, key=lambda row: row.item_seq)
+
+    async def test_long_reply_is_split_and_all_parts_enter_history(self) -> None:
+        request = self._new_request()
+        store = ChatSessionStore()
+        matcher = _RecordingMatcher()
+
+        self.assertTrue(await self._send(request, store, matcher))
+
+        self.assertEqual(matcher.sent, ["第一段。" * 30, "第一段。" * 30, "第一段。" * 40])
+        self.assertEqual("".join(matcher.sent), _LONG_REPLY)
+        self.assertEqual((await self._turn(request)).status, "sent")
+        items = await self._assistant_items(request)
+        self.assertEqual([item.part_index for item in items], [0, 1, 2])
+        self.assertEqual([item.send_status for item in items], ["sent", "sent", "sent"])
+        self.assertEqual([item.visible for item in items], [True, True, True])
+        self.assertEqual([item.platform_message_id for item in items], ["pmid-1", "pmid-2", "pmid-3"])
+        history = await chat_repository.get_recent_messages(self.tenant, 10)
+        self.assertEqual([entry["content"] for entry in history[1:]], matcher.sent)
+        self.assertEqual([entry["content"] for entry in store.get(self.tenant)[1:]], matcher.sent)
+
+    async def test_first_segment_failure_marks_turn_failed(self) -> None:
+        request = self._new_request()
+        store = ChatSessionStore()
+        matcher = _RecordingMatcher(fail_at=0)
+
+        self.assertFalse(await self._send(request, store, matcher))
+
+        self.assertEqual(matcher.sent, [])
+        self.assertEqual((await self._turn(request)).status, "failed")
+        items = await self._assistant_items(request)
+        self.assertEqual([item.send_status for item in items], ["failed", "skipped", "skipped"])
+        self.assertEqual(
+            await chat_repository.get_recent_messages(self.tenant, 10),
+            [{"role": "user", "content": "User(user): 你好"}],
+        )
+
+    async def test_middle_segment_failure_keeps_sent_history(self) -> None:
+        request = self._new_request()
+        store = ChatSessionStore()
+        matcher = _RecordingMatcher(fail_at=1)
+
+        self.assertTrue(await self._send(request, store, matcher))
+
+        self.assertEqual(matcher.sent, ["第一段。" * 30])
+        self.assertEqual((await self._turn(request)).status, "partial")
+        items = await self._assistant_items(request)
+        self.assertEqual([item.send_status for item in items], ["sent", "failed", "skipped"])
+        self.assertEqual([item.visible for item in items], [True, False, False])
+        self.assertEqual(
+            await chat_repository.get_recent_messages(self.tenant, 10),
+            [
+                {"role": "user", "content": "User(user): 你好"},
+                {"role": "assistant", "content": "第一段。" * 30},
+            ],
+        )
+
+    async def test_sends_are_serialized_per_tenant(self) -> None:
+        store = ChatSessionStore()
+        matcher = _RecordingMatcher()
+        first = self._new_request(user_id="alice", text="问题甲")
+        second = self._new_request(user_id="bob", text="问题乙")
+        for request in (first, second):
+            request.trigger_seq = store.next_seq(self.tenant, request.user_id)
+            request.accepted_epoch = store.epoch(self.tenant)
+
+        class _LabelledProvider:
+            async def chat(self, messages: list[dict[str, object]], tools: object = None) -> LLMResponse:
+                content = str(messages[-1].get("content", ""))
+                mark = "甲" if "甲" in content else "乙"
+                return LLMResponse(content=f"{mark * 101}。" * 3)
+
+        @asynccontextmanager
+        async def labelled_lease(_name: str):
+            yield _LabelledProvider()
+
+        with (
+            patch.object(service_module, "get_config_manager", return_value=_FakeConfig()),
+            patch.object(provider_manager, "lease", labelled_lease),
+            patch.object(service_module, "part_delay", return_value=0.0),
+        ):
+            await asyncio.gather(
+                ChatService(store).process_and_send(first, ToolRuntime(matcher=matcher)),
+                ChatService(store).process_and_send(second, ToolRuntime(matcher=matcher)),
+            )
+
+        marks = [part[0] for part in matcher.sent]
+        self.assertEqual(len(marks), 6)
+        self.assertEqual(len(set(marks[:3])), 1)
+        self.assertEqual(len(set(marks[3:])), 1)
+        self.assertNotEqual(marks[0], marks[3])
+
 
 class RouterSendTests(unittest.IsolatedAsyncioTestCase):
-    """路由只在发送成功后标记可见。"""
+    """路由只负责调用服务层发送，并按发送结果结束事件。"""
 
-    def _service(self) -> SimpleNamespace:
+    def _service(self, sent: bool = True) -> SimpleNamespace:
         return SimpleNamespace(
             session_store=ChatSessionStore(),
-            process=AsyncMock(return_value=ChatResponse(text="回复", epoch=0)),
-            is_current=lambda *_: True,
-            mark_sending=AsyncMock(),
-            mark_sent=AsyncMock(),
-            mark_send_failed=AsyncMock(),
+            ensure_hydrated=AsyncMock(),
+            process_and_send=AsyncMock(return_value=sent),
         )
 
     async def _handle(self, service: SimpleNamespace, matcher: SimpleNamespace) -> None:
@@ -584,25 +844,29 @@ class RouterSendTests(unittest.IsolatedAsyncioTestCase):
         ):
             await router._handle_ai_fallback(SimpleNamespace(), SimpleNamespace(), matcher)
 
-    async def test_send_failure_is_recorded_and_not_finished(self) -> None:
+    async def test_finishes_after_successful_send(self) -> None:
         service = self._service()
-        matcher = SimpleNamespace(send=AsyncMock(side_effect=RuntimeError("net")), finish=AsyncMock())
+        matcher = SimpleNamespace(finish=AsyncMock())
         await self._handle(service, matcher)
 
-        service.mark_sending.assert_awaited_once()
-        service.mark_sent.assert_not_awaited()
-        service.mark_send_failed.assert_awaited_once()
-        matcher.finish.assert_not_awaited()
+        service.process_and_send.assert_awaited_once()
+        matcher.finish.assert_awaited_once_with()
 
-    async def test_empty_response_is_not_sent(self) -> None:
-        service = self._service()
-        service.process = AsyncMock(return_value=ChatResponse(text="", epoch=0))
-        matcher = SimpleNamespace(send=AsyncMock(), finish=AsyncMock())
+    async def test_failed_send_does_not_finish(self) -> None:
+        service = self._service(sent=False)
+        matcher = SimpleNamespace(finish=AsyncMock())
         await self._handle(service, matcher)
 
-        matcher.send.assert_not_awaited()
-        service.mark_sending.assert_not_awaited()
+        service.process_and_send.assert_awaited_once()
         matcher.finish.assert_not_awaited()
+
+    async def test_processing_error_reports_unavailable(self) -> None:
+        service = self._service()
+        service.process_and_send = AsyncMock(side_effect=RuntimeError("boom"))
+        matcher = SimpleNamespace(finish=AsyncMock())
+        await self._handle(service, matcher)
+
+        matcher.finish.assert_awaited_once_with("AI 服务暂时不可用")
 
 
 class ClearTests(unittest.IsolatedAsyncioTestCase):
@@ -693,3 +957,67 @@ class MaxHistoryTests(unittest.IsolatedAsyncioTestCase):
             await service.process(_request(session_id="hot", turn_id="turn-2", dedupe_key="msg:2"))
 
         self.assertEqual(len(store.get("hot")), 1)
+
+
+class BatchPersistenceTests(unittest.IsolatedAsyncioTestCase):
+    """合并批次逐条落库，合并内容只作为本轮 user 条目。"""
+
+    async def asyncSetUp(self) -> None:
+        await base_models.init_database()
+        await migrate.ensure_schema()
+        memory_state.mark_ready()
+        self.addCleanup(memory_state.mark_ready)
+        self.tenant = f"batch-{uuid4().hex}"
+        self.addAsyncCleanup(chat_repository.clear_tenant, self.tenant)
+
+    async def test_batch_keeps_raw_messages_and_one_turn(self) -> None:
+        first = _request(
+            session_id=self.tenant,
+            group_id=None,
+            user_name="Alice",
+            turn_id="turn",
+            dedupe_key="msg:1",
+            message_id="1",
+            trigger_kind="private",
+        )
+        second = _request(
+            session_id=self.tenant,
+            group_id=None,
+            user_name="Alice",
+            turn_id="turn-2",
+            dedupe_key="msg:2",
+            message_id="2",
+            text="在吗",
+        )
+        batch = PendingBatch(tenant=self.tenant, owner_id="user", requests=[first, second], started=0.0, deadline=0.0)
+        merged = batch.merge()
+        self.assertTrue(merged.batched)
+
+        store = ChatSessionStore()
+        with (
+            patch.object(service_module, "get_config_manager", return_value=_FakeConfig()),
+            patch.object(provider_manager, "lease", _fake_lease),
+        ):
+            await ChatService(store).persist_batch(batch.requests)
+            response = await ChatService(store).process(merged)
+
+        self.assertEqual(response.text, "回复")
+        # 本轮只把合并内容放进内存历史，原始消息留在库里等重启后恢复
+        self.assertEqual([entry["content"] for entry in store.get(self.tenant)], ["Alice(user): 你好\n在吗"])
+        self.assertEqual(
+            await chat_repository.get_recent_messages(self.tenant, 10),
+            [
+                {"role": "user", "content": "Alice(user): 你好"},
+                {"role": "user", "content": "Alice(user): 在吗"},
+            ],
+        )
+        async with base_models.async_maker() as session:
+            turns = await ChatTurn.select_rows(tenant=self.tenant, session=session)
+            items = await ChatTurnItem.select_rows(tenant=self.tenant, session=session)
+        self.assertEqual(len(turns), 1)
+        self.assertEqual(json.loads(turns[0].trigger_message_ids), ["1", "2"])
+        self.assertEqual(json.loads(turns[0].author_ids), ["user"])
+        user_items = [item for item in items if item.role == "user"]
+        self.assertEqual(len(user_items), 1)
+        self.assertIn("你好\n在吗", user_items[0].content)
+        self.assertIsNone(user_items[0].source_message_id)

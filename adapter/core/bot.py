@@ -65,6 +65,14 @@ class PlatformAdapter(ABC):
         """图片段能否只携带 URL 交给平台自行下载。"""
         return True
 
+    def supports_reply(self) -> bool:
+        """当前平台能否构造引用回复段。"""
+        return False
+
+    def build_reply_segment(self, bot: Any, message_id: int | str) -> Any:
+        """构造平台引用段；不支持时抛 UnsupportedCapability。"""
+        raise UnsupportedCapability("引用回复")
+
     def extract_group_member_add(self, event: Any) -> dict[str, str] | None:
         """识别成员入群事件并返回统一的群 ID、成员 ID。"""
         return None

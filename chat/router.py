@@ -9,7 +9,8 @@ from nonebot.rule import Rule
 from nonebot.matcher import Matcher
 from nonebot.adapters import Bot, Event
 
-from .types import TriggerKind
+from .tools import ToolRuntime
+from .types import ChatRequest, TriggerKind
 from ..config import get_manager as get_config_manager
 from .service import chat_service
 from ..adapter import (
@@ -31,6 +32,7 @@ from .message_adapter import (
     session_id_for_event,
     image_sources_for_event,
 )
+from .behavior.debounce import default_debounce_registry
 from ..permission.message_policy import should_process_fxbot_message
 
 
@@ -137,6 +139,11 @@ async def _handle_context(bot: Bot, event: Event) -> None:
     if not chat_service.session_store.mark_seen(identity.session_id, identity.dedupe_key):
         return
     user_id = normalize_id(event_user_id(event)) or ""
+    batch = default_debounce_registry.get(identity.session_id)
+    if batch is not None and batch.owner_id == user_id and not batch.full:
+        # 同作者在等待窗口内续发，完整适配后并入本轮而不是单独开一轮
+        if default_debounce_registry.merge_context(await adapt_message_event(bot, event, trigger_kind="mention")):
+            return
     has_image = _has_image(event)
     images = image_sources_for_event(event) if has_image else []
     # 上下文消息只做廉价提取：昵称取消息段里现成的，不额外查成员接口
@@ -157,31 +164,49 @@ async def _handle_context(bot: Bot, event: Event) -> None:
     )
 
 
+async def _process_and_send(request: ChatRequest, runtime: ToolRuntime, matcher: Matcher) -> None:
+    """生成并按段发送；拆分、发送状态与轮次锁由服务层负责。"""
+    try:
+        sent = await chat_service.process_and_send(request, runtime)
+    except Exception as exc:
+        logger.opt(exception=True).warning(f"[Chat] AI 兜底处理失败: {exc}")
+        await matcher.finish("AI 服务暂时不可用")
+        return
+    if sent:
+        await matcher.finish()
+
+
 @ai_router.handle()
 async def _handle_ai_fallback(bot: Bot, event: Event, matcher: Matcher) -> None:
-    """处理 AI 兜底消息。"""
+    """处理 AI 兜底消息；首个触发消息等完防抖窗口后统一生成一轮。"""
     identity = event_identity(bot, event)
     if not chat_service.session_store.mark_seen(identity.session_id, identity.dedupe_key):
         logger.debug("[Chat] 忽略重复投递的 AI 消息")
         return
     trigger_kind: TriggerKind = "private" if not event_group_id(event) else "mention" if _is_to_me(event) else "persona"
     request = await adapt_message_event(bot, event, trigger_kind=trigger_kind)
+    # 序号与代次在进入 turn_lock 前捕获，用于丢弃被新消息或清空取代的旧回复
+    await chat_service.ensure_hydrated(request.session_id)
+    request.trigger_seq = chat_service.session_store.next_seq(request.session_id, request.user_id)
+    request.accepted_epoch = chat_service.session_store.epoch(request.session_id)
+    request.activity_seq = chat_service.session_store.activity(request.session_id)
     runtime = default_runtime_factory.create(bot=bot, event=event, matcher=matcher)
+    registered = default_debounce_registry.get(identity.session_id)
+    if registered is not None:
+        # 并入已有批次由 owner 回复；批次已满时立即处理，避免丢掉这条触发
+        if default_debounce_registry.merge_trigger(request) is not None:
+            return
+        await _process_and_send(request, runtime, matcher)
+        return
+    batch = default_debounce_registry.create(request)
     try:
-        response = await chat_service.process(request, runtime)
-    except Exception as exc:
-        logger.opt(exception=True).warning(f"[Chat] AI 兜底处理失败: {exc}")
-        await matcher.finish("AI 服务暂时不可用")
-    if not chat_service.is_current(request.session_id, response.epoch):
+        await batch.wait()
+    finally:
+        default_debounce_registry.pop(batch)
+    if batch.cancelled:
         return
-    if not response.text:
-        return
-    await chat_service.mark_sending(request, response)
-    try:
-        await matcher.send(response.text)
-    except Exception as exc:
-        logger.opt(exception=True).warning(f"[Chat] 回复发送失败: {exc}")
-        await chat_service.mark_send_failed(request, response, exc)
-        return
-    await chat_service.mark_sent(request, response)
-    await matcher.finish()
+    merged = batch.merge()
+    if merged.batched and merged.accepted_epoch is not None:
+        if chat_service.is_current(merged.session_id, merged.accepted_epoch):
+            await chat_service.persist_batch(batch.requests)
+    await _process_and_send(merged, runtime, matcher)

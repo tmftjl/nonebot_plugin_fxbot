@@ -9,9 +9,11 @@ from dataclasses import FrozenInstanceError
 from unittest.mock import AsyncMock, patch
 
 from src.plugins.nonebot_plugin_fxbot.chat import router, message_adapter
+from src.plugins.nonebot_plugin_fxbot.chat.types import ChatRequest
 from src.plugins.nonebot_plugin_fxbot.chat.session import ChatSessionStore
 from src.plugins.nonebot_plugin_fxbot.adapter.core.bot import PlatformAdapter
 from src.plugins.nonebot_plugin_fxbot.adapter.platforms.qq import QQOfficialMessageAdapter
+from src.plugins.nonebot_plugin_fxbot.chat.behavior.debounce import PendingBatch, DebounceRegistry
 from src.plugins.nonebot_plugin_fxbot.adapter.platforms.onebot11 import OneBotV11MessageAdapter
 from src.plugins.nonebot_plugin_fxbot.adapter.platforms.onebot12 import OneBotV12MessageAdapter
 
@@ -151,6 +153,21 @@ class SessionDedupeTests(unittest.TestCase):
         self.assertEqual(store.get("session"), [])
         self.assertTrue(store.mark_seen("session", "msg:1"))
 
+    def test_trigger_seq_is_per_user_and_session(self) -> None:
+        store = ChatSessionStore()
+        first = store.next_seq("session", "a")
+        second = store.next_seq("session", "b")
+        third = store.next_seq("session", "a")
+        self.assertEqual((first, second, third), (1, 2, 3))
+        self.assertFalse(store.is_latest_seq("session", "a", first))
+        self.assertTrue(store.is_latest_seq("session", "a", third))
+        self.assertTrue(store.is_latest_seq("session", "b", second))
+        self.assertFalse(store.is_latest_seq("session", "a", 0))
+
+        store.clear("session")
+        self.assertFalse(store.is_latest_seq("session", "a", third))
+        self.assertEqual(store.next_seq("session", "a"), 1)
+
     def test_fifo_limit_does_not_refresh_duplicates(self) -> None:
         store = ChatSessionStore()
         for index in range(256):
@@ -201,34 +218,47 @@ class RequestAndRouterTests(unittest.IsolatedAsyncioTestCase):
                 matcher = SimpleNamespace(finish=AsyncMock())
                 service = SimpleNamespace(
                     session_store=store,
-                    process=AsyncMock(return_value=SimpleNamespace(text="", epoch=0)),
-                    is_current=lambda *_: True,
+                    process_and_send=AsyncMock(return_value=False),
+                    ensure_hydrated=AsyncMock(),
                 )
-                adapt = AsyncMock(return_value=SimpleNamespace(session_id="session"))
+                adapt = AsyncMock(
+                    return_value=ChatRequest(
+                        session_id="session",
+                        user_id="user",
+                        group_id=group_id,
+                        text="你好",
+                        turn_id="turn",
+                        dedupe_key="msg:message",
+                        trigger_kind=kind,
+                    )
+                )
                 with (
                     patch.object(message_adapter, "get_platform_adapter", return_value=OneBotV12MessageAdapter()),
                     patch.object(router, "chat_service", service),
                     patch.object(router, "adapt_message_event", adapt),
+                    patch.object(router, "default_debounce_registry", DebounceRegistry()),
+                    patch.object(PendingBatch, "wait", new=AsyncMock()),
                     patch.object(router.default_runtime_factory, "create", return_value=object()),
                 ):
                     await router._handle_ai_fallback(make_bot(), event, matcher)
                     await router._handle_ai_fallback(make_bot(), event, matcher)
                 adapt.assert_awaited_once_with(unittest.mock.ANY, event, trigger_kind=kind)
-                service.process.assert_awaited_once()
+                service.process_and_send.assert_awaited_once()
                 matcher.finish.assert_not_awaited()
 
     async def test_context_cannot_also_write_ai_history(self) -> None:
         event = make_event(message_id="message")
         service = SimpleNamespace(
-            session_store=ChatSessionStore(), record_group_message=AsyncMock(), process=AsyncMock()
+            session_store=ChatSessionStore(), record_group_message=AsyncMock(), process_and_send=AsyncMock()
         )
         with (
             patch.object(message_adapter, "get_platform_adapter", return_value=OneBotV12MessageAdapter()),
             patch.object(router, "chat_service", service),
+            patch.object(router, "default_debounce_registry", DebounceRegistry()),
             patch.object(router, "collect_mentions", new=AsyncMock(return_value=[])),
         ):
             await router._handle_context(make_bot(), event)
             await router._handle_context(make_bot(), event)
             await router._handle_ai_fallback(make_bot(), event, SimpleNamespace(finish=AsyncMock()))
         service.record_group_message.assert_awaited_once()
-        service.process.assert_not_awaited()
+        service.process_and_send.assert_not_awaited()

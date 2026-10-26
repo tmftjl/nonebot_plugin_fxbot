@@ -82,6 +82,14 @@ class OneBotV11MessageAdapter(PlatformAdapter):
             return MessageSegment.video(data)
         raise ValueError(f"不支持的消息段类型: {seg_type}")
 
+    def supports_reply(self) -> bool:
+        return True
+
+    def build_reply_segment(self, bot: Bot, message_id: int | str) -> Any:
+        from nonebot.adapters.onebot.v11 import MessageSegment
+
+        return MessageSegment.reply(str(message_id))
+
     def build_message(self, bot: Bot, segments: list[Any]) -> Any:
         from nonebot.adapters.onebot.v11 import Message
 

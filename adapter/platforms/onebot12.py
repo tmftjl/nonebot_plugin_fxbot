@@ -69,6 +69,14 @@ class OneBotV12MessageAdapter(PlatformAdapter):
             return MessageSegment.file(self._file_id(data))
         raise ValueError(f"unsupported OneBot V12 segment type: {seg_type}")
 
+    def supports_reply(self) -> bool:
+        return True
+
+    def build_reply_segment(self, bot: Bot, message_id: int | str) -> Any:
+        from nonebot.adapters.onebot.v12 import MessageSegment
+
+        return MessageSegment.reply(str(message_id))
+
     def build_message(self, bot: Bot, segments: list[Any]) -> Any:
         from nonebot.adapters.onebot.v12 import Message
 

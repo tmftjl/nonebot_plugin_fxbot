@@ -12,16 +12,20 @@ from datetime import datetime
 from nonebot import logger
 
 from .tools import ToolContext, ToolRuntime, execute_tool, tool_allowed, default_registry
-from .types import MentionRef, ChatRequest, ChatResponse
+from .types import MentionRef, ChatRequest, ChatResponse, speaker_label
 from .memory import state as memory_state
 from ..config import get_manager as get_config_manager
 from .session import ChatSessionStore, default_session_store
+from ..adapter import build_message, supports_reply, build_reply_segment, build_message_segment
 from .bindings import PERSONA, PROVIDER, get_binding
 from .personas import DEFAULT_PERSONA, get_persona_text
 from ..utils.tz import to_naive_utc
 from .providers import LLMResponse, provider_manager
+from .behavior.send import part_delay, split_reply
 from .memory.models import ChatTurn, ChatMessage, ChatTurnItem, utc_now_naive
+from .behavior.quote import should_quote, normalize_quote_mode
 from .message_adapter import load_images
+from .behavior.debounce import default_debounce_registry
 from .memory.repository import chat_repository
 
 
@@ -57,16 +61,6 @@ def _session_provider(session_id: str) -> str:
     """返回会话绑定的 Provider，失效时回退全局默认。"""
     name = get_binding(PROVIDER, session_id)
     return name if name in provider_manager.list_providers_by_type("chat") else ""
-
-
-def _speaker_label(user_id: str, user_name: str) -> str:
-    """生成发言人标识，用于区分同一会话里的不同成员。"""
-    user_id = str(user_id or "").strip()
-    # 昵称是用户可控的，压成单行并限长，避免用换行伪造出第二段消息
-    user_name = " ".join(str(user_name or "").split())[:32]
-    if not user_name or user_name == user_id:
-        return f"用户{user_id}" if user_id else "用户"
-    return f"{user_name}({user_id})" if user_id else user_name
 
 
 def _mentions_line(mentions: list[MentionRef]) -> str:
@@ -149,7 +143,7 @@ def _build_user_content(request: ChatRequest) -> str | list[dict[str, Any]]:
     text = request.text
     if request.quoted_text:
         text = f"{request.quoted_text}\n{text}" if text else request.quoted_text
-    label = _speaker_label(request.user_id, request.user_name)
+    label = speaker_label(request.user_id, request.user_name)
     if text:
         text = f"{label}: {text}"
     else:
@@ -181,6 +175,12 @@ async def _allowed_tools(runtime: ToolRuntime) -> tuple[set[str], list[dict[str,
     }
     tools = [tool for tool in default_registry.to_openai_tools() if tool["function"]["name"] in names]
     return names, tools
+
+
+def _receipt_id(receipt: Any) -> str | None:
+    """取发送回执里的平台消息 ID，没有回执时返回 None。"""
+    value = getattr(receipt, "message_id", None)
+    return str(value) if value is not None else None
 
 
 def _clean_description(text: str) -> str:
@@ -287,18 +287,125 @@ class ChatService:
         self.session_store = session_store
 
     async def process(self, request: ChatRequest, runtime: ToolRuntime | None = None) -> ChatResponse:
-        """处理一次对话请求。"""
+        """处理一次对话请求；排队期间被清空或同用户新触发取代时直接作废。"""
         async with self.session_store.turn_lock(request.session_id):
+            return await self._process_locked(request, runtime)
+
+    async def process_and_send(self, request: ChatRequest, runtime: ToolRuntime | None = None) -> bool:
+        """生成并逐段发送；发送结束前一直持有轮次锁，下一轮必须排队。"""
+        async with self.session_store.turn_lock(request.session_id):
+            response = await self._process_locked(request, runtime)
+            if not response.text or not self.is_current(request.session_id, response.epoch):
+                return False
+            if not self.is_latest(request):
+                logger.debug(f"[Chat] 回复已被新触发取代，取消发送: session={request.session_id}")
+                return False
+            matcher = getattr(runtime, "matcher", None)
+            if matcher is None:
+                logger.warning("[Chat] 缺少发送目标，已跳过发送")
+                return False
+            return await self._send_parts(request, response, runtime, matcher)
+
+    async def _process_locked(self, request: ChatRequest, runtime: ToolRuntime | None) -> ChatResponse:
+        """调用方已持有轮次锁。"""
+        limit = int(get_config_manager().get_system()["chat"]["max_history"])
+        await self._hydrate(request.session_id, limit)
+        if request.accepted_epoch is None:
+            request.accepted_epoch = self.session_store.epoch(request.session_id)
+        if not self.is_current(request.session_id, request.accepted_epoch):
+            logger.debug(f"[Chat] 清空后跳过排队轮次: session={request.session_id}")
+            return ChatResponse(text="", epoch=request.accepted_epoch)
+        try:
+            return await self._process(request, runtime)
+        except Exception as exc:
+            await self._mark_turn_failed(request, exc)
+            raise
+
+    @staticmethod
+    def _item_id(response: ChatResponse, index: int) -> int | None:
+        """取第 index 段对应的轮内条目 ID。"""
+        ids = response.metadata.get("turn_item_ids") or []
+        return int(ids[index]) if 0 <= index < len(ids) else None
+
+    @staticmethod
+    def _parts(response: ChatResponse) -> list[str]:
+        """发送分段；持久化关闭时按同一规则重新拆分。"""
+        parts = response.metadata.get("reply_parts")
+        return [str(part) for part in parts] if isinstance(parts, list) and parts else split_reply(response.text)
+
+    @staticmethod
+    def _quote_mode() -> str:
+        """读取引用模式；配置缺失或非法时按 auto。"""
+        try:
+            behavior = get_config_manager().get_system()["chat"].get("behavior") or {}
+            return normalize_quote_mode(behavior.get("quote_mode"))
+        except Exception:
+            return "auto"
+
+    def _quote_payload(self, request: ChatRequest, runtime: ToolRuntime, part: str) -> Any | None:
+        """构造「引用段 + 正文」；平台不支持或构造失败时返回 None 走纯文本。"""
+        bot = getattr(runtime, "bot", None)
+        if bot is None or not request.message_id:
+            return None
+        has_newer = bool(request.activity_seq) and (
+            self.session_store.activity(request.session_id) > request.activity_seq
+        )
+        if not should_quote(request, mode=self._quote_mode(), has_newer=has_newer):
+            return None
+        try:
+            if not supports_reply(bot):
+                return None
+            return build_message(
+                bot,
+                build_reply_segment(bot, request.message_id),
+                build_message_segment(bot, "text", part),
+            )
+        except Exception:
+            logger.opt(exception=True).debug("[Chat] 引用构造失败，降级为纯文本")
+            return None
+
+    async def _send_parts(
+        self, request: ChatRequest, response: ChatResponse, runtime: ToolRuntime, matcher: Any
+    ) -> bool:
+        """逐段发送；同租户发送期间不交错，任何一段失效后不再继续。"""
+        parts = self._parts(response)
+        if not parts:
+            return False
+        sent = 0
+        async with self.session_store.send_lock(request.session_id):
+            for index, part in enumerate(parts):
+                if index:
+                    await asyncio.sleep(part_delay(part, is_group=request.is_group))
+                if not self.is_current(request.session_id, response.epoch) or not self.is_latest(request):
+                    await self.mark_send_aborted(request, response, index)
+                    break
+                await self.mark_sending(request, response, index)
+                # 标记发送中会写库，期间同一用户可能已经发来新消息
+                if not self.is_current(request.session_id, response.epoch) or not self.is_latest(request):
+                    await self.mark_send_aborted(request, response, index)
+                    break
+                quoted = self._quote_payload(request, runtime, part) if index == 0 else None
+                try:
+                    receipt = await matcher.send(quoted if quoted is not None else part)
+                except Exception as exc:
+                    logger.opt(exception=True).warning(f"[Chat] 回复第 {index + 1} 段发送失败: {exc}")
+                    await self.mark_send_failed(request, response, exc, index)
+                    break
+                await self.mark_sent(request, response, index, _receipt_id(receipt))
+                sent += 1
+        return sent > 0
+
+    async def ensure_hydrated(self, session_id: str) -> None:
+        """接入触发前恢复历史与持久化代次，供路由捕获准确的 generation。"""
+        try:
             limit = int(get_config_manager().get_system()["chat"]["max_history"])
-            await self._hydrate(request.session_id, limit)
-            try:
-                return await self._process(request, runtime)
-            except Exception as exc:
-                await self._mark_turn_failed(request, exc)
-                raise
+        except Exception:
+            return
+        await self._hydrate(session_id, limit)
 
     async def clear_session(self, session_id: str) -> None:
-        """清空会话历史；内存、数据库与在途轮次一起失效。"""
+        """清空会话历史；内存、数据库、待合并批次与在途轮次一起失效。"""
+        default_debounce_registry.clear(session_id)
         async with self.session_store.lock(session_id):
             self.session_store.clear(session_id)
         if not memory_state.is_ready():
@@ -340,23 +447,10 @@ class ChatService:
             self.session_store.append_many(session_id, history, limit=limit)
             self.session_store.mark_hydrated(session_id)
 
-    async def _persist_turn_start(self, request: ChatRequest, content: str, epoch: int) -> tuple[int, int] | None:
-        """写入用户消息、轮次和用户条目；失败只降级本轮持久化。"""
-        if not memory_state.is_ready() or not self._history_enabled():
-            return None
-        payload = json.dumps({"has_image": True}) if request.images else "{}"
-        turn = ChatTurn(
-            tenant=request.session_id,
-            turn_key=request.turn_id,
-            generation=epoch,
-            trigger_message_ids=json.dumps([request.message_id or request.dedupe_key], ensure_ascii=False),
-            author_ids=json.dumps([request.user_id], ensure_ascii=False),
-            trigger_kind=request.trigger_kind,
-            request_digest=hashlib.sha1(content.encode("utf-8")).hexdigest(),
-            status="generating",
-            started_at=utc_now_naive(),
-        )
-        message = ChatMessage(
+    @staticmethod
+    def _message_row(request: ChatRequest, content: str) -> ChatMessage:
+        """构造原始消息行；合并批次里的每条消息都先按原样落库。"""
+        return ChatMessage(
             tenant=request.session_id,
             kind="user",
             platform=request.platform,
@@ -366,14 +460,53 @@ class ChatService:
             sender_id=request.user_id,
             sender_name=request.user_name,
             content=content,
-            payload=payload,
+            payload=json.dumps({"has_image": True}) if request.images else "{}",
             source="live",
             dedupe_key=request.dedupe_key,
             occurred_at=to_naive_utc(request.occurred_at),
         )
+
+    async def persist_batch(self, requests: list[ChatRequest]) -> None:
+        """缓冲里的原始消息逐条落库；合并内容只作为本轮 user 条目。"""
+        if not requests or not memory_state.is_ready() or not self._history_enabled():
+            return
+        # 先恢复旧历史，避免刚写入的本轮消息被 process 的 _hydrate 当作背景重复注入
+        limit = int(get_config_manager().get_system()["chat"]["max_history"])
+        await self._hydrate(requests[0].session_id, limit)
+        for request in requests:
+            content = _strip_images([{"role": "user", "content": _build_user_content(request)}])[0]["content"]
+            try:
+                await chat_repository.append_message(self._message_row(request, str(content)))
+            except Exception:
+                logger.opt(exception=True).warning("[Chat] 缓冲消息落库失败，跳过剩余消息")
+                return
+
+    async def _persist_turn_start(
+        self, request: ChatRequest, content: str, epoch: int
+    ) -> tuple[int, int | None] | None:
+        """写入用户消息、轮次和用户条目；失败只降级本轮持久化。"""
+        if not memory_state.is_ready() or not self._history_enabled():
+            return None
+        payload = json.dumps({"has_image": True}) if request.images else "{}"
+        trigger_ids = request.source_message_ids or [request.message_id or request.dedupe_key]
+        author_ids = request.source_author_ids or [request.user_id]
+        turn = ChatTurn(
+            tenant=request.session_id,
+            turn_key=request.turn_id,
+            generation=epoch,
+            trigger_message_ids=json.dumps(trigger_ids, ensure_ascii=False),
+            author_ids=json.dumps(author_ids, ensure_ascii=False),
+            trigger_kind=request.trigger_kind,
+            request_digest=hashlib.sha1(content.encode("utf-8")).hexdigest(),
+            status="generating",
+            started_at=utc_now_naive(),
+        )
         try:
             turn_id = await chat_repository.upsert_turn(turn)
-            message_id = await chat_repository.append_message(message)
+            # 合并批次的原始消息已由 persist_batch 写入，这里只写合并后的 user 条目
+            message_id = (
+                None if request.batched else await chat_repository.append_message(self._message_row(request, content))
+            )
             await chat_repository.append_turn_item(
                 ChatTurnItem(
                     tenant=request.session_id,
@@ -395,13 +528,14 @@ class ChatService:
     async def _persist_turn_end(
         self,
         request: ChatRequest,
-        persisted: tuple[int, int] | None,
+        persisted: tuple[int, int | None] | None,
         response: LLMResponse,
         provider_name: str,
         content: str,
         descriptions: list[str],
-    ) -> int | None:
-        """生成完成后写 generated_text 与待发送的助手条目。"""
+        parts: list[str],
+    ) -> list[int] | None:
+        """生成完成后写 generated_text 与逐段待发送的助手条目。"""
         if persisted is None or not memory_state.is_ready() or not self._history_enabled():
             return None
         turn_id, message_id = persisted
@@ -425,69 +559,107 @@ class ChatService:
                 provider=provider_name,
                 finished_at=utc_now_naive(),
             )
-            if descriptions:
+            if descriptions and message_id is not None:
                 await chat_repository.update_message_content(request.session_id, message_id, content)
-            return await chat_repository.append_turn_item(
-                ChatTurnItem(
-                    tenant=request.session_id,
-                    turn_id=turn_id,
-                    item_seq=1,
-                    role="assistant",
-                    content=text,
-                    visible=False,
-                    send_status="pending",
+            item_ids: list[int] = []
+            for index, part in enumerate(parts):
+                item_ids.append(
+                    await chat_repository.append_turn_item(
+                        ChatTurnItem(
+                            tenant=request.session_id,
+                            turn_id=turn_id,
+                            item_seq=1 + index,
+                            part_index=index,
+                            role="assistant",
+                            content=part,
+                            visible=False,
+                            send_status="pending",
+                        )
+                    )
                 )
-            )
+            return item_ids
         except Exception:
             logger.opt(exception=True).warning("[Chat] 助手回复落库失败")
             return None
 
-    async def mark_sending(self, request: ChatRequest, response: ChatResponse) -> None:
-        """发送前把轮次与条目标为发送中。"""
-        item_id = response.metadata.get("turn_item_id")
-        if not item_id or not memory_state.is_ready():
+    async def mark_sending(self, request: ChatRequest, response: ChatResponse, index: int = 0) -> None:
+        """发送前把轮次与第 index 段标为发送中。"""
+        if not memory_state.is_ready():
             return
+        item_id = self._item_id(response, index)
         try:
-            await chat_repository.update_turn_item(request.session_id, int(item_id), send_status="sending")
+            if item_id is not None:
+                await chat_repository.update_turn_item(request.session_id, item_id, send_status="sending")
             await chat_repository.update_turn(request.session_id, request.turn_id, status="sending")
         except Exception:
             logger.opt(exception=True).warning("[Chat] 记录发送中状态失败")
 
     async def mark_sent(
-        self, request: ChatRequest, response: ChatResponse, platform_message_id: str | None = None
+        self,
+        request: ChatRequest,
+        response: ChatResponse,
+        index: int = 0,
+        platform_message_id: str | None = None,
     ) -> None:
-        """发送成功后把助手条目写入可见历史；重复调用不重复追加。"""
+        """发送成功后把该段写入可见历史；重复调用不重复追加。"""
         repeat = False
-        item_id = response.metadata.get("turn_item_id")
-        if item_id and memory_state.is_ready():
+        item_id = self._item_id(response, index)
+        if item_id is not None and memory_state.is_ready():
             try:
-                repeat = not await chat_repository.mark_turn_item_sent(
-                    request.session_id, int(item_id), platform_message_id
-                )
+                repeat = not await chat_repository.mark_turn_item_sent(request.session_id, item_id, platform_message_id)
             except Exception:
                 logger.opt(exception=True).warning("[Chat] 记录发送结果失败")
-        if repeat or not response.text or not self.is_current(request.session_id, response.epoch):
+        parts = self._parts(response)
+        text = parts[index] if 0 <= index < len(parts) else response.text
+        if repeat or not text or not self.is_current(request.session_id, response.epoch):
             return
         limit = int(get_config_manager().get_system()["chat"]["max_history"])
         async with self.session_store.lock(request.session_id):
             if self.is_current(request.session_id, response.epoch):
-                entry = {"role": "assistant", "content": response.text}
-                self.session_store.append(request.session_id, entry, limit=limit)
+                self.session_store.append(request.session_id, {"role": "assistant", "content": text}, limit=limit)
 
-    async def mark_send_failed(self, request: ChatRequest, response: ChatResponse, exc: Exception) -> None:
-        """发送失败时保留生成文本，但条目不可见、轮次标为失败。"""
+    async def _skip_items(self, request: ChatRequest, response: ChatResponse, start: int) -> None:
+        """把未发送的段标成 skipped，避免留下待发送状态。"""
+        for index in range(start, len(self._parts(response))):
+            item_id = self._item_id(response, index)
+            if item_id is not None:
+                await chat_repository.update_turn_item(
+                    request.session_id, item_id, send_status="skipped", visible=False
+                )
+
+    async def mark_send_aborted(
+        self, request: ChatRequest, response: ChatResponse, index: int = 0, error: str = "发送前已被新触发取代"
+    ) -> None:
+        """发送前复核失败：从第 index 段起作废，至少有一段成功时轮次标为部分发送。"""
         if not memory_state.is_ready():
             return
-        item_id = response.metadata.get("turn_item_id")
         try:
-            if item_id:
-                await chat_repository.update_turn_item(
-                    request.session_id, int(item_id), send_status="failed", visible=False
-                )
+            await self._skip_items(request, response, index)
             await chat_repository.update_turn(
                 request.session_id,
                 request.turn_id,
-                status="failed",
+                status="partial" if index else "aborted",
+                error=error[:500],
+                finished_at=utc_now_naive(),
+            )
+        except Exception:
+            logger.opt(exception=True).warning("[Chat] 记录发送作废状态时出错")
+
+    async def mark_send_failed(
+        self, request: ChatRequest, response: ChatResponse, exc: Exception, index: int = 0
+    ) -> None:
+        """发送失败时保留生成文本；已成功的前几段不回滚，轮次按是否发过区分。"""
+        if not memory_state.is_ready():
+            return
+        try:
+            item_id = self._item_id(response, index)
+            if item_id is not None:
+                await chat_repository.update_turn_item(request.session_id, item_id, send_status="failed", visible=False)
+            await self._skip_items(request, response, index + 1)
+            await chat_repository.update_turn(
+                request.session_id,
+                request.turn_id,
+                status="partial" if index else "failed",
                 error=f"发送失败: {type(exc).__name__}: {exc}"[:500],
                 finished_at=utc_now_naive(),
             )
@@ -528,6 +700,16 @@ class ChatService:
         """判断轮次是否仍属于当前会话，清空后的旧轮次不可继续生效。"""
         return self.session_store.epoch(session_id) == epoch
 
+    def is_latest(self, request: ChatRequest) -> bool:
+        """该轮次之后没有同一用户的新触发。"""
+        if not request.trigger_seq:
+            return True
+        return self.session_store.is_latest_seq(request.session_id, request.user_id, request.trigger_seq)
+
+    def _alive(self, request: ChatRequest, epoch: int) -> bool:
+        """轮次仍有效：未被清空，也没有被同一用户的新触发取代。"""
+        return self.is_current(request.session_id, epoch) and self.is_latest(request)
+
     async def record_group_message(
         self,
         session_id: str,
@@ -557,7 +739,7 @@ class ChatService:
         placeholders = ["[图片]"] * len(images)
         if not placeholders and has_image:
             placeholders = ["[图片]"]
-        label = _speaker_label(user_id, user_name)
+        label = speaker_label(user_id, user_name)
         lines = [f"{label}: {text}" if text else f"{label}:"]
         if mentions_line := _mentions_line(mentions or []):
             lines.append(mentions_line)
@@ -636,10 +818,17 @@ class ChatService:
                 history = [m for m in self.session_store.get(request.session_id) if m.get("role") != "system"]
                 while history and history[0].get("role") != "user":
                     history.pop(0)
-                epoch = self.session_store.epoch(request.session_id)
+                epoch = (
+                    request.accepted_epoch
+                    if request.accepted_epoch is not None
+                    else self.session_store.epoch(request.session_id)
+                )
                 entry = _strip_images([{"role": "user", "content": user_content}])[0]
                 self.session_store.append(request.session_id, entry, limit=limit)
             persisted = await self._persist_turn_start(request, str(entry["content"]), epoch)
+            if not self._alive(request, epoch):
+                await self._mark_turn_aborted(request, "生成前已被新触发取代")
+                return ChatResponse(text="", epoch=epoch)
 
             messages: list[dict[str, Any]] = []
             if persona_text:
@@ -662,7 +851,7 @@ class ChatService:
             tool_calls_seen = 0
             deadline = asyncio.get_running_loop().time() + _TOOL_BUDGET
             for round_index in range(_MAX_TOOL_ROUNDS):
-                if not self.is_current(request.session_id, epoch) or not response.has_tool_calls:
+                if not self._alive(request, epoch) or not response.has_tool_calls:
                     break
                 trace = [response.to_message_dict()]
                 context = ToolContext(
@@ -678,7 +867,7 @@ class ChatService:
                     for index, tool_call in enumerate(response.tool_calls):
                         func = tool_call.get("function", {})
                         remaining = deadline - asyncio.get_running_loop().time()
-                        if not self.is_current(request.session_id, epoch):
+                        if not self._alive(request, epoch):
                             tool_result = {"ok": False, "error": "会话已失效"}
                         elif index >= _MAX_TOOL_CALLS_PER_ROUND:
                             tool_result = {"ok": False, "error": "超过单轮工具调用上限"}
@@ -720,10 +909,10 @@ class ChatService:
                             }
                         )
                     async with self.session_store.lock(request.session_id):
-                        if self.is_current(request.session_id, epoch):
+                        if self._alive(request, epoch):
                             self.session_store.append_many(request.session_id, _history_trace(trace), limit=limit)
                 messages.extend(trace)
-                if not self.is_current(request.session_id, epoch):
+                if not self._alive(request, epoch):
                     break
                 exhausted = (
                     tool_calls_seen >= _MAX_TOOL_CALLS
@@ -734,22 +923,26 @@ class ChatService:
                 if exhausted:
                     break
 
-            if response.has_tool_calls and self.is_current(request.session_id, epoch):
+            if response.has_tool_calls and self._alive(request, epoch):
                 logger.warning(f"[Chat] 达到最大工具轮数，已丢弃残留工具调用: session={request.session_id}")
             response = _finalize_response(response)
             descriptions = await description_task if description_task is not None else []
             if descriptions:
                 stripped = _strip_images([{"role": "user", "content": user_content}], descriptions)[0]
                 entry["content"] = stripped["content"]
-            if not self.is_current(request.session_id, epoch):
-                await self._mark_turn_aborted(request, "会话已清空")
+            if not self._alive(request, epoch):
+                reason = "会话已清空" if not self.is_current(request.session_id, epoch) else "已被新触发取代"
+                await self._mark_turn_aborted(request, reason)
                 return ChatResponse(text=response.content, raw=response, epoch=epoch)
-            item_id = await self._persist_turn_end(
-                request, persisted, response, provider_name, str(entry["content"]), descriptions
+            parts = split_reply(response.content or "")
+            item_ids = await self._persist_turn_end(
+                request, persisted, response, provider_name, str(entry["content"]), descriptions, parts
             )
             result = ChatResponse(text=response.content, raw=response, epoch=epoch)
-            if item_id is not None:
-                result.metadata["turn_item_id"] = item_id
+            if parts:
+                result.metadata["reply_parts"] = parts
+            if item_ids is not None:
+                result.metadata["turn_item_ids"] = item_ids
             return result
         finally:
             if description_task is not None:

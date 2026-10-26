@@ -20,8 +20,12 @@ class ChatSessionStore:
         self._store: dict[str, deque[dict[str, Any]]] = {}
         self._locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._turn_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+        self._send_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._epochs: dict[str, int] = {}
         self._seen: dict[str, OrderedDict[str, None]] = {}
+        self._seq_counters: dict[str, int] = {}
+        self._user_seqs: dict[tuple[str, str], int] = {}
+        self._activities: dict[str, int] = {}
         self._hydrated: set[str] = set()
         self._accessed: OrderedDict[str, float] = OrderedDict()
         self._access_count = 0
@@ -38,14 +42,30 @@ class ChatSessionStore:
                 break
             if candidate == session_id:
                 continue
-            locks = (self._locks.get(candidate), self._turn_locks.get(candidate))
+            locks = (
+                self._locks.get(candidate),
+                self._turn_locks.get(candidate),
+                self._send_locks.get(candidate),
+            )
             if any(
                 lock is not None and (lock.locked() or any(not waiter.cancelled() for waiter in (lock._waiters or ())))
                 for lock in locks
             ):
                 continue
-            for mapping in (self._store, self._locks, self._turn_locks, self._epochs, self._seen, self._accessed):
+            for mapping in (
+                self._store,
+                self._locks,
+                self._turn_locks,
+                self._send_locks,
+                self._epochs,
+                self._seen,
+                self._accessed,
+            ):
                 mapping.pop(candidate, None)
+            self._seq_counters.pop(candidate, None)
+            self._activities.pop(candidate, None)
+            for key in [key for key in self._user_seqs if key[0] == candidate]:
+                self._user_seqs.pop(key, None)
             self._hydrated.discard(candidate)
 
     def mark_seen(self, session_id: str, dedupe_key: str) -> bool:
@@ -55,6 +75,7 @@ class ChatSessionStore:
         if dedupe_key in seen:
             return False
         seen[dedupe_key] = None
+        self._activities[session_id] = self._activities.get(session_id, 0) + 1
         if len(seen) > 256:
             seen.popitem(last=False)
         return True
@@ -69,6 +90,16 @@ class ChatSessionStore:
         self._touch(session_id)
         return self._turn_locks[session_id]
 
+    def send_lock(self, session_id: str) -> asyncio.Lock:
+        """返回发送锁；同一会话的多段回复不允许与其他轮次交错。"""
+        self._touch(session_id)
+        return self._send_locks[session_id]
+
+    def activity(self, session_id: str) -> int:
+        """返回会话内已接收的唯一消息计数，用于判断发送时是否有更新消息。"""
+        self._touch(session_id)
+        return self._activities.get(session_id, 0)
+
     def epoch(self, session_id: str) -> int:
         """返回会话代次；清空后递增，用于丢弃清空前发出的回复。"""
         self._touch(session_id)
@@ -78,6 +109,19 @@ class ChatSessionStore:
         """与持久化代次对齐，避免重启后旧代次被当成当前轮次。"""
         self._touch(session_id)
         self._epochs[session_id] = int(epoch)
+
+    def next_seq(self, session_id: str, user_id: str) -> int:
+        """为一次触发分配单调递增序号，并记录该用户的最新序号。"""
+        self._touch(session_id)
+        seq = self._seq_counters.get(session_id, 0) + 1
+        self._seq_counters[session_id] = seq
+        self._user_seqs[(session_id, user_id)] = seq
+        return seq
+
+    def is_latest_seq(self, session_id: str, user_id: str, seq: int) -> bool:
+        """该触发之后没有同一用户的新触发。"""
+        self._touch(session_id)
+        return bool(seq) and self._user_seqs.get((session_id, user_id)) == seq
 
     def is_hydrated(self, session_id: str) -> bool:
         """是否已从数据库恢复过该会话。"""
@@ -125,9 +169,13 @@ class ChatSessionStore:
         self._trim_head(history)
 
     def clear(self, session_id: str) -> None:
-        """清空会话历史。"""
+        """清空会话历史与触发序号。"""
         self._store.pop(session_id, None)
         self._seen.pop(session_id, None)
+        self._seq_counters.pop(session_id, None)
+        self._activities.pop(session_id, None)
+        for key in [key for key in self._user_seqs if key[0] == session_id]:
+            self._user_seqs.pop(key, None)
         self._epochs[session_id] = self.epoch(session_id) + 1
 
 

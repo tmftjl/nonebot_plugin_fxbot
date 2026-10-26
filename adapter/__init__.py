@@ -67,6 +67,16 @@ def build_message(bot, *segments):
     return get_platform_adapter(bot).build_message(bot, [item for item in segments if item is not None])
 
 
+def supports_reply(bot) -> bool:
+    """当前平台能否构造引用回复段。"""
+    return get_platform_adapter(bot).supports_reply()
+
+
+def build_reply_segment(bot, message_id):
+    """构造引用段；平台不支持或构造失败时由调用方降级为纯文本。"""
+    return get_platform_adapter(bot).build_reply_segment(bot, message_id)
+
+
 def extract_image_sources(message):
     result = []
     for segment in list(message or []):
@@ -197,6 +207,8 @@ __all__ = [
     "QQOfficialMessageAdapter",
     "build_message",
     "build_message_segment",
+    "build_reply_segment",
+    "supports_reply",
     "event_message",
     "event_plain_text",
     "normalize_id",

@@ -121,6 +121,13 @@ class QQOfficialMessageAdapter(PlatformAdapter):
             raise ValueError("QQ 官方适配器视频发送仅支持 URL、base64、本地路径或字节数据")
         raise ValueError(f"不支持的消息段类型: {seg_type}")
 
+    def supports_reply(self) -> bool:
+        return True
+
+    def build_reply_segment(self, bot: Bot, message_id: int | str) -> Any:
+        """QQ 官方用 reference 段，msg_seq 由 SDK 自增。"""
+        return MessageSegment.reference(str(message_id))
+
     def build_message(self, bot: Bot, segments: list[Any]) -> Any:
         return Message(segments)
 

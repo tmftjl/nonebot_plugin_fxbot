@@ -138,7 +138,7 @@ class ChatRepository:
     async def mark_turn_item_sent(
         self, session: AsyncSession, tenant: str, item_id: int, platform_message_id: str | None = None
     ) -> bool:
-        """发送成功后让助手条目进入历史，并把轮次标为已发送；重复调用返回 False。"""
+        """发送成功后让助手条目进入历史；全部段发完才把轮次标为已发送。"""
         rows = await ChatTurnItem.select_rows(tenant=tenant, id=item_id, session=session)
         if not rows:
             return False
@@ -150,11 +150,14 @@ class ChatRepository:
             .where(ChatTurnItem.tenant == tenant, ChatTurnItem.id == item_id)
             .values(visible=True, send_status="sent", platform_message_id=platform_message_id)
         )
-        await session.execute(
-            update(ChatTurn)
-            .where(ChatTurn.tenant == tenant, ChatTurn.id == item.turn_id)
-            .values(status="sent", finished_at=utc_now_naive())
-        )
+        items = await ChatTurnItem.select_rows(tenant=tenant, turn_id=item.turn_id, session=session)
+        assistant = [row for row in items if row.role == "assistant"]
+        if assistant and all(row.id == item_id or row.send_status == "sent" for row in assistant):
+            await session.execute(
+                update(ChatTurn)
+                .where(ChatTurn.tenant == tenant, ChatTurn.id == item.turn_id)
+                .values(status="sent", finished_at=utc_now_naive())
+            )
         return True
 
     @with_session
