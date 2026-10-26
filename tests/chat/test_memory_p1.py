@@ -440,7 +440,12 @@ class ServiceInjectionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual([message["role"] for message in provider.messages[:2]], ["system", "system"])
         self.assertEqual(provider.messages[1]["content"], "【画像】小明：name：小明")
-        memory.assert_awaited_once_with("tenant", U1, extra_subject_ids=[])
+        memory.assert_awaited_once_with(
+            "tenant",
+            U1,
+            extra_subject_ids=[],
+            query="你还记得我叫什么吗",
+        )
 
     async def test_memory_failure_does_not_break_reply(self) -> None:
         memory = AsyncMock(side_effect=RuntimeError("db down"))

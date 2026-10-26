@@ -20,6 +20,7 @@ from .models import (
     ChatMessage,
     ChatProfile,
     ChatJobBatch,
+    ChatRelation,
     ChatTurnItem,
     ChatJobCursor,
     ChatForgetMarker,
@@ -498,6 +499,71 @@ class ChatRepository:
         return list((await session.execute(statement)).scalars().all())
 
     @with_session
+    async def list_active_episodes(self, session: AsyncSession, tenant: str, limit: int = 10000) -> list[ChatEpisode]:
+        """读取检索索引需要的可用 Episode。"""
+        statement = (
+            select(ChatEpisode)
+            .where(ChatEpisode.tenant == tenant, ChatEpisode.status == "active")
+            .order_by(ChatEpisode.id.desc())
+            .limit(limit)
+        )
+        return list((await session.execute(statement)).scalars().all())
+
+    @with_session
+    async def list_active_facts(self, session: AsyncSession, tenant: str, limit: int = 10000) -> list[ChatMemory]:
+        """读取检索索引需要的事实，只保留证据仍有效的行。"""
+        statement = (
+            select(ChatMemory)
+            .where(
+                ChatMemory.tenant == tenant,
+                ChatMemory.status == "active",
+                ChatMemory.valid_evidence_count > 0,
+            )
+            .order_by(ChatMemory.id.desc())
+            .limit(limit)
+        )
+        return list((await session.execute(statement)).scalars().all())
+
+    @with_session
+    async def get_facts_for_subjects(
+        self, session: AsyncSession, tenant: str, subject_ids: list[str], limit: int = 60
+    ) -> list[ChatMemory]:
+        """一次读出多个主体的有效事实，用于关系扩展。"""
+        if not subject_ids:
+            return []
+        statement = (
+            select(ChatMemory)
+            .where(
+                ChatMemory.tenant == tenant,
+                ChatMemory.subject_id.in_(subject_ids),
+                ChatMemory.status == "active",
+                ChatMemory.valid_evidence_count > 0,
+            )
+            .order_by(ChatMemory.importance.desc(), ChatMemory.confidence.desc(), ChatMemory.updated_at.desc())
+            .limit(limit)
+        )
+        return list((await session.execute(statement)).scalars().all())
+
+    @with_session
+    async def get_relations(
+        self, session: AsyncSession, tenant: str, subject_ids: list[str], limit: int = 200
+    ) -> list[ChatRelation]:
+        """读取这些主体出发的仍有效关系边。"""
+        if not subject_ids:
+            return []
+        statement = (
+            select(ChatRelation)
+            .where(
+                ChatRelation.tenant == tenant,
+                ChatRelation.subject_id.in_(subject_ids),
+                ChatRelation.status == "active",
+            )
+            .order_by(ChatRelation.confidence.desc(), ChatRelation.id.desc())
+            .limit(limit)
+        )
+        return list((await session.execute(statement)).scalars().all())
+
+    @with_session
     async def get_profile(self, session: AsyncSession, tenant: str, subject_id: str) -> ChatProfile | None:
         """读取主体画像；不存在时返回 None。"""
         rows = await ChatProfile.select_rows(tenant=tenant, subject_id=subject_id, session=session)
@@ -572,10 +638,10 @@ class ChatRepository:
         from .extract import ExtractionResult
 
         if not messages or not isinstance(result, ExtractionResult):
-            return {"facts": 0, "episodes": 0}
+            return {"facts": 0, "episodes": 0, "relations": 0}
         message_by_id = {int(message.id): message for message in messages if message.id is not None}
         if not message_by_id:
-            return {"facts": 0, "episodes": 0}
+            return {"facts": 0, "episodes": 0, "relations": 0}
         seq_start, seq_end = min(message_by_id), max(high_water, min(message_by_id))
         author_names = {message.sender_id: message.sender_name for message in messages if message.sender_id}
         participants = sorted(author_names)
@@ -694,6 +760,42 @@ class ChatRepository:
             touched_subjects.add(fact.subject_id)
             written += 1
 
+        relations_written = 0
+        if source != "backfill":
+            for relation in result.relations:
+                if relation.subject_id in subject_markers:
+                    continue
+                if relation.object_kind == "user" and relation.object_key in subject_markers:
+                    continue
+                statement = (
+                    sqlite_insert(ChatRelation)
+                    .values(
+                        tenant=tenant,
+                        subject_id=relation.subject_id,
+                        predicate=relation.predicate,
+                        object_kind=relation.object_kind,
+                        object_key=relation.object_key,
+                        object_name=relation.object_name,
+                        object_user_id=relation.object_user_id,
+                        confidence=relation.confidence,
+                        status="active",
+                        created_at=now,
+                        updated_at=now,
+                    )
+                    .on_conflict_do_update(
+                        index_elements=["tenant", "subject_id", "predicate", "object_kind", "object_key"],
+                        set_={
+                            "object_name": relation.object_name,
+                            "object_user_id": relation.object_user_id,
+                            "confidence": func.max(ChatRelation.confidence, relation.confidence),
+                            "status": "active",
+                            "updated_at": now,
+                        },
+                    )
+                )
+                await session.execute(statement)
+                relations_written += 1
+
         state.facts_version += written
         profile_changes = 0
         for subject_id in touched_subjects:
@@ -728,7 +830,7 @@ class ChatRepository:
             direction=direction,
             last_error="",
         )
-        return {"facts": written, "episodes": len(episode_ids)}
+        return {"facts": written, "episodes": len(episode_ids), "relations": relations_written}
 
     @with_session
     async def forget_subject(self, session: AsyncSession, tenant: str, subject_id: str, *, reason: str = "user") -> int:
@@ -765,9 +867,21 @@ class ChatRepository:
             .where(ChatMessage.tenant == tenant, ChatMessage.sender_id == subject_id)
             .values(content="[已忘记]", payload="{}")
         )
-        await self._mark_episodes_stale(session, tenant, {subject_id})
+        # 主体既可能出现在边的一端，也可能作为 user 目标出现在另一端
+        await session.execute(
+            delete(ChatRelation).where(ChatRelation.tenant == tenant, ChatRelation.subject_id == subject_id)
+        )
+        await session.execute(
+            delete(ChatRelation).where(
+                ChatRelation.tenant == tenant,
+                ChatRelation.object_kind == "user",
+                ChatRelation.object_key == subject_id,
+            )
+        )
+        stale_episodes = await self._mark_episodes_stale(session, tenant, {subject_id})
         state = await self._state_row(session, tenant)
         state.facts_version += len(memory_ids)
+        state.episodes_version += stale_episodes
         state.profile_version += 1
         state.updated_at = utc_now_naive()
         return len(memory_ids)

@@ -14,6 +14,7 @@ from .models import ChatMessage
 from .filtering import sanitize_line
 
 FACT_CATEGORIES = frozenset({"identity", "preference", "relationship", "event", "skill", "opinion", "other"})
+RELATION_OBJECT_KINDS = frozenset({"user", "org", "place", "thing"})
 _SENSITIVE = re.compile(
     r"(密码|口令|token|secret|api[_ ]?key|身份证|银行卡|信用卡|手机号|\b1[3-9]\d{9}\b|住址)",
     re.I,
@@ -51,6 +52,23 @@ _SCHEMA: dict[str, Any] = {
                 },
             },
         },
+        "relations": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "subject_id": {"type": "string"},
+                    "predicate": {"type": "string"},
+                    "object_kind": {"type": "string"},
+                    "object_key": {"type": "string"},
+                    "object_name": {"type": "string"},
+                    "object_user_id": {"type": "string"},
+                    "confidence": {"type": "number"},
+                    "evidence": {"type": "array"},
+                },
+            },
+        },
         "emotion": {"type": "object"},
     },
 }
@@ -82,12 +100,26 @@ class ExtractionFact:
 
 
 @dataclass(frozen=True)
+class ExtractionRelation:
+    """一条类型明确的关系边。"""
+
+    subject_id: str
+    predicate: str
+    object_kind: str
+    object_key: str
+    object_name: str
+    object_user_id: str
+    confidence: float
+
+
+@dataclass(frozen=True)
 class ExtractionResult:
     """一次抽取的完整结果。"""
 
     topics: tuple[ExtractionTopic, ...]
     facts: tuple[ExtractionFact, ...]
     emotion: tuple[float, float] | None = None
+    relations: tuple[ExtractionRelation, ...] = ()
 
 
 def normalize_key(category: str, key: str) -> str:
@@ -102,6 +134,11 @@ def normalize_key(category: str, key: str) -> str:
 def _normalized_value(value: str) -> str:
     """值归一化后用于去重指纹。"""
     return " ".join(sanitize_line(value, 200).casefold().split())
+
+
+def _normalize_predicate(value: object) -> str:
+    """关系谓词压成短标识，中英文都保留。"""
+    return re.sub(r"[\s\W_]+", "_", str(value or "").casefold()).strip("_")[:40]
 
 
 def _clamp(value: object, default: float, low: float = 0.0, high: float = 1.0) -> float:
@@ -120,12 +157,18 @@ def build_prompt(messages: list[ChatMessage]) -> list[dict[str, Any]]:
         lines.append(f"[{int(message.id or 0)}] {name}({message.sender_id}): {message.content}")
     system = (
         "你是群聊长期记忆抽取器。只输出 JSON，不要解释。\n"
-        "只从给定的人类消息中抽取稳定事实和最多 3 个主题；不要抽取密码、令牌、身份证、银行卡、手机号、住址。\n"
+        "只从给定的人类消息中抽取稳定事实、最多 3 个主题和类型明确的关系；"
+        "不要抽取密码、令牌、身份证、银行卡、手机号、住址。\n"
         "fact 的 subject_id 和 asserted_by 必须是输入中出现过的用户 ID；evidence 必须使用方括号里的消息序号。\n"
         "key 使用简短谓词，例如 identity.name；value 保持原文含义，不编造。\n"
+        "relation 的 subject_id 必须是输入中出现过的用户 ID；object_kind 只能是 user/org/place/thing。\n"
+        "object_kind=user 时 object_key 和 object_user_id 必须是输入中出现过的用户 ID；"
+        "公司、地点、物品用 object_name 表示，object_user_id 留空；关系必须有 evidence。\n"
         '输出格式：{"topics":[{"title":"","keywords":[],"summary":""}],'
         '"facts":[{"subject_id":"","subject_name":"","key":"","value":"","category":"identity",'
         '"confidence":0.8,"importance":0.6,"asserted_by":"","evidence":[1]}],'
+        '"relations":[{"subject_id":"","predicate":"","object_kind":"user","object_key":"",'
+        '"object_name":"","object_user_id":"","confidence":0.7,"evidence":[1]}],'
         '"emotion":{"valence":0.0,"arousal":0.0}}'
     )
     return [{"role": "system", "content": system}, {"role": "user", "content": "\n".join(lines)}]
@@ -196,6 +239,63 @@ def parse_extraction(data: object, messages: list[ChatMessage]) -> ExtractionRes
                 evidence=evidence,
             )
         )
+    relations: list[ExtractionRelation] = []
+    seen_relations: set[tuple[str, str, str, str]] = set()
+    batch_text = " ".join(str(message.content or "") for message in messages).casefold()
+    raw_relations = data.get("relations")
+    for item in raw_relations[:20] if isinstance(raw_relations, list) else []:
+        if not isinstance(item, dict):
+            continue
+        subject_id = str(item.get("subject_id") or "").strip()
+        if subject_id not in authors:
+            continue
+        predicate = _normalize_predicate(item.get("predicate"))
+        if not predicate:
+            continue
+        object_kind = str(item.get("object_kind") or "").strip().lower()
+        if object_kind not in RELATION_OBJECT_KINDS:
+            continue
+        raw_evidence = item.get("evidence")
+        evidence = ()
+        if isinstance(raw_evidence, list):
+            evidence = tuple(
+                sorted({int(seq) for seq in raw_evidence if str(seq).strip().isdigit() and int(seq) in allowed_ids})
+            )
+        if not evidence:
+            continue
+        if object_kind == "user":
+            # 用户边必须落到本批次出现过的人，公司名之类不能冒充用户
+            candidate = str(item.get("object_key") or "").strip()
+            if candidate not in authors:
+                candidate = str(item.get("object_user_id") or "").strip()
+            if candidate not in authors:
+                continue
+            object_key = candidate
+            object_name = sanitize_line(authors[candidate], 32)
+            object_user_id = candidate
+        else:
+            object_name = sanitize_line(item.get("object_name"), 60)
+            if not object_name or _SENSITIVE.search(object_name):
+                continue
+            object_key = _normalized_value(object_name)[:80]
+            if not object_key or object_key not in batch_text:
+                continue
+            object_user_id = ""
+        fingerprint = (subject_id, predicate, object_kind, object_key)
+        if fingerprint in seen_relations:
+            continue
+        seen_relations.add(fingerprint)
+        relations.append(
+            ExtractionRelation(
+                subject_id=subject_id,
+                predicate=predicate,
+                object_kind=object_kind,
+                object_key=object_key,
+                object_name=object_name,
+                object_user_id=object_user_id,
+                confidence=_clamp(item.get("confidence"), 0.6),
+            )
+        )
     emotion: tuple[float, float] | None = None
     raw_emotion = data.get("emotion")
     if isinstance(raw_emotion, dict):
@@ -203,7 +303,7 @@ def parse_extraction(data: object, messages: list[ChatMessage]) -> ExtractionRes
         arousal = raw_emotion.get("arousal")
         if isinstance(valence, (int, float)) and isinstance(arousal, (int, float)):
             emotion = (_clamp(valence, 0.0, -1.0, 1.0), _clamp(arousal, 0.0, -1.0, 1.0))
-    return ExtractionResult(topics=tuple(topics), facts=tuple(facts), emotion=emotion)
+    return ExtractionResult(topics=tuple(topics), facts=tuple(facts), emotion=emotion, relations=tuple(relations))
 
 
 async def request_extraction(provider: Any, messages: list[ChatMessage], *, model: str = "") -> ExtractionResult | None:

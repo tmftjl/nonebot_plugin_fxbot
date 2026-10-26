@@ -226,13 +226,22 @@ def _build_user_content(request: ChatRequest) -> str | list[dict[str, Any]]:
     return content
 
 
-async def _memory_block(request: ChatRequest) -> str:
+def _recall_query(request: ChatRequest, history: list[dict[str, Any]]) -> str:
+    """检索查询：当前消息 + 最近两条历史 + @ 名字，截断 200 字。"""
+    parts = [str(request.text or "")]
+    parts.extend(str(message.get("content") or "") for message in history[-2:])
+    parts.extend(ref.name for ref in request.mentions if ref.name)
+    return " ".join(part for part in parts if part)[:200]
+
+
+async def _memory_block(request: ChatRequest, query: str = "") -> str:
     """读取长期记忆；失败时只降级记忆，不影响本轮对话。"""
     try:
         return await memory_context(
             request.session_id,
             request.user_id,
             extra_subject_ids=[ref.user_id for ref in request.mentions],
+            query=query,
         )
     except Exception:
         logger.opt(exception=True).debug("[Chat] 长期记忆读取失败，本轮不注入")
@@ -918,7 +927,6 @@ class ChatService:
         effective_persona = str(persona_name or bound_persona or chat_cfg["persona"] or DEFAULT_PERSONA)
         persona_text = get_persona_text(effective_persona)
         persona_text = f"{persona_text}{_scene_hint(request, effective_persona)}".strip()
-        memory_block = await _memory_block(request)
 
         # 描述与主对话并发执行，避免图片消息多等一次模型调用
         description_task = (
@@ -945,6 +953,7 @@ class ChatService:
                 await self._mark_turn_aborted(request, "生成前已被新触发取代")
                 return ChatResponse(text="", epoch=epoch)
 
+            memory_block = await _memory_block(request, _recall_query(request, history))
             messages: list[dict[str, Any]] = []
             if persona_text:
                 messages.append({"role": "system", "content": persona_text})

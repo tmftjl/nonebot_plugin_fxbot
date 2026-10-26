@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from .state import is_ready
 from .config import memory_config, tenant_learn_enabled
+from .retrieve import recall_facts, recall_episodes
 from .filtering import sanitize_line
 from .repository import chat_repository
 
@@ -39,6 +40,7 @@ async def memory_context(
     speaker_id: str,
     *,
     extra_subject_ids: list[str] | None = None,
+    query: str = "",
 ) -> str:
     """构造记忆块；关闭学习或 DB 不可用时返回空串。"""
     if not is_ready() or not tenant_learn_enabled(await chat_repository.get_session_state(tenant)):
@@ -58,8 +60,8 @@ async def memory_context(
             line = _profile_line(profile, aliases)
             if line:
                 profiles.append(line)
-        facts = await chat_repository.get_facts(tenant, speaker_id, limit=10)
-        episodes = await chat_repository.get_recent_episodes(tenant, limit=2)
+        facts = await recall_facts(tenant, speaker_id, subjects, query, limit=10)
+        episodes = await recall_episodes(tenant, subjects, query, limit=2)
     except Exception:
         return ""
     profile_text = "\n".join(profiles)[: int(cfg["inject_profile_chars"])]

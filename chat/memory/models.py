@@ -300,3 +300,26 @@ class ChatProfile(BaseIDModel, table=True):
     last_built_at: datetime | None = Field(default=None, nullable=True)
     created_at: datetime = Field(default_factory=utc_now_naive, nullable=False)
     updated_at: datetime = Field(default_factory=utc_now_naive, nullable=False)
+
+
+class ChatRelation(BaseIDModel, table=True):
+    """主体到用户/组织/地点/物品的类型化关系。"""
+
+    __tablename__ = "chat_relation"
+    __table_args__ = (
+        UniqueConstraint("tenant", "subject_id", "predicate", "object_kind", "object_key"),
+        Index("ix_chat_relation_tenant_object", "tenant", "object_key"),
+    )
+
+    tenant: str = Field(nullable=False)
+    subject_id: str = Field(nullable=False)
+    predicate: str = Field(nullable=False)
+    object_kind: str = Field(default="user", nullable=False)
+    object_key: str = Field(nullable=False)
+    object_name: str = Field(default="", nullable=False)
+    object_user_id: str = Field(default="", nullable=False)
+    confidence: float = Field(default=0.6, nullable=False)
+    source_memory_id: int | None = Field(default=None, nullable=True)
+    status: str = Field(default="active", nullable=False)
+    created_at: datetime = Field(default_factory=utc_now_naive, nullable=False)
+    updated_at: datetime = Field(default_factory=utc_now_naive, nullable=False)
