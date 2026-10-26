@@ -11,9 +11,9 @@ Source code is the sole source of truth for implementation details. Before editi
 
 ## Skill Scope
 
-This skill covers the framework, console, membership system, and repository-wide standards. When changing a built-in subplugin under `plugins/`, also read `../fxbot-subplugin/SKILL.md`; cross-cutting work must follow both skills.
+This skill covers the framework, console, membership system, and repository-wide standards. When changing a built-in subplugin under `plugins/`, also read `../fxbot-subplugin/SKILL.md`. When changing AI memory or group-chat behavior under `chat/`, also read `../fxbot-ai-chat/SKILL.md`; cross-cutting work must follow all applicable skills.
 
-Do not split standards into more skills based on source directories. Discover concrete interfaces, commands, configuration fields, and page structure from the source when doing the work.
+Do not split standards into more skills based on source directories. `fxbot-ai-chat` exists because AI chat has a staged implementation plan, not because `chat/` is a directory. Discover concrete interfaces, commands, configuration fields, and page structure from the source when doing the work.
 
 Explicit user instructions define the requested scope and outcome. Apply this skill to implementation choices unless the user explicitly asks to change one of these repository standards; never use the skill to expand authorization or scope.
 
@@ -108,7 +108,7 @@ Use a single-line Chinese commit subject without prefixes such as `feat:`. For n
 
 ## Skill Maintenance Boundary
 
-Keep only this core standard and the subplugin standard in `.agents/skills/`. `.claude/skills/` may only contain local junctions, never copies.
+Keep only the core standard, the subplugin standard, and the AI chat implementation workflow in `.agents/skills/`. `.claude/skills/` may only contain local junctions, never copies.
 
 Do not update skills for ordinary feature work, command or endpoint changes, dependency patch/minor upgrades, or source line changes. Update a skill only when:
 
