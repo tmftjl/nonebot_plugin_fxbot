@@ -91,6 +91,8 @@ async def init() -> None:
     _import_startup_module("system_control")
     _import_startup_module("chat.router")
     _import_startup_module("chat.commands")
+    _import_startup_module("chat.recall")
+    _import_startup_module("chat.memory.commands")
 
     try:
         from .membership.tasks import setup_membership_tasks
@@ -98,6 +100,13 @@ async def init() -> None:
         setup_membership_tasks()
     except Exception:
         logger.opt(exception=True).warning("[FxBot] 会员定时任务注册失败，核心功能继续启动")
+
+    try:
+        from .chat.memory.tasks import setup_memory_tasks
+
+        setup_memory_tasks()
+    except Exception:
+        logger.opt(exception=True).warning("[FxBot] 记忆定时任务注册失败，核心功能继续启动")
 
     try:
         from .console.server import mount_console

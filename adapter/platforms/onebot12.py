@@ -8,7 +8,7 @@ from typing import Any
 from nonebot.adapters import Bot
 from nonebot.adapters.onebot.v12 import Bot as OneBotV12Bot
 
-from ..core.bot import PlatformAdapter, _image_bytes
+from ..core.bot import RecallInfo, PlatformAdapter, _image_bytes
 
 
 class OneBotV12MessageAdapter(PlatformAdapter):
@@ -122,3 +122,23 @@ class OneBotV12MessageAdapter(PlatformAdapter):
 
     async def delete_message(self, bot: Bot, message_id: int | str, *, group_id=None, user_id=None) -> Any:
         return await self._api(bot, "delete_message", message_id=str(message_id))
+
+    def extract_recall(self, event: Any) -> RecallInfo | None:
+        """识别 OneBot V12 的群/私聊消息删除通知。"""
+        detail = str(getattr(event, "detail_type", "") or getattr(event, "notice_type", "") or "")
+        message_id = getattr(event, "message_id", None)
+        if not message_id:
+            return None
+        if detail == "group_message_delete":
+            return RecallInfo(
+                message_id=str(message_id),
+                group_id=str(getattr(event, "group_id", "") or "") or None,
+                user_id=str(getattr(event, "user_id", "") or "") or None,
+                operator_id=str(getattr(event, "operator_id", "") or ""),
+            )
+        if detail == "private_message_delete":
+            return RecallInfo(
+                message_id=str(message_id),
+                user_id=str(getattr(event, "user_id", "") or "") or None,
+            )
+        return None

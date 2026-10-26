@@ -8,9 +8,35 @@ from sqlalchemy.dialects import sqlite
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncConnection
 
 from ...db import base_models
-from .models import ChatTurn, ChatMessage, ChatTurnItem, ChatSessionState
+from .models import (
+    ChatTurn,
+    ChatAlias,
+    ChatMemory,
+    ChatEpisode,
+    ChatMessage,
+    ChatProfile,
+    ChatJobBatch,
+    ChatTurnItem,
+    ChatJobCursor,
+    ChatForgetMarker,
+    ChatSessionState,
+    ChatMemoryEvidence,
+)
 
-_MODELS = (ChatMessage, ChatTurn, ChatTurnItem, ChatSessionState)
+_MODELS = (
+    ChatMessage,
+    ChatTurn,
+    ChatTurnItem,
+    ChatSessionState,
+    ChatJobCursor,
+    ChatJobBatch,
+    ChatEpisode,
+    ChatMemory,
+    ChatMemoryEvidence,
+    ChatForgetMarker,
+    ChatAlias,
+    ChatProfile,
+)
 _DIALECT = sqlite.dialect()
 
 

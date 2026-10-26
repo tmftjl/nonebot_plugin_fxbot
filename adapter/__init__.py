@@ -27,6 +27,7 @@ from .uninfo import (
 )
 from .core.bot import (
     ReplyInfo,
+    RecallInfo,
     PlatformBot,
     PlatformError,
     PlatformAdapter,
@@ -75,6 +76,11 @@ def supports_reply(bot) -> bool:
 def build_reply_segment(bot, message_id):
     """构造引用段；平台不支持或构造失败时由调用方降级为纯文本。"""
     return get_platform_adapter(bot).build_reply_segment(bot, message_id)
+
+
+def extract_recall(bot, event):
+    """读取平台撤回信息；无法识别时返回 None。"""
+    return get_platform_adapter(bot).extract_recall(event)
 
 
 def extract_image_sources(message):
@@ -223,6 +229,7 @@ __all__ = [
     "extract_image_sources",
     "extract_raw_image_sources",
     "extract_message_target",
+    "extract_recall",
     "extract_reply_message_id",
     "fetch_image_bytes",
     "get_message_adapter",
@@ -237,6 +244,7 @@ __all__ = [
     "send_text_to_target",
     "PlatformAdapter",
     "ReplyInfo",
+    "RecallInfo",
     "PlatformError",
     "UnsupportedCapability",
     "get_platform_adapter",

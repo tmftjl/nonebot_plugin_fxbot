@@ -22,6 +22,7 @@ from .personas import DEFAULT_PERSONA, get_persona_text
 from ..utils.tz import to_naive_utc
 from .providers import LLMResponse, provider_manager
 from .behavior.send import part_delay, split_reply
+from .memory.inject import memory_context
 from .memory.models import ChatTurn, ChatMessage, ChatTurnItem, utc_now_naive
 from .behavior.quote import should_quote, normalize_quote_mode
 from .message_adapter import load_images
@@ -159,6 +160,19 @@ def _build_user_content(request: ChatRequest) -> str | list[dict[str, Any]]:
         content.append({"type": "text", "text": text})
     content.extend({"type": "image_url", "image_url": {"url": url}} for url in request.images)
     return content
+
+
+async def _memory_block(request: ChatRequest) -> str:
+    """读取长期记忆；失败时只降级记忆，不影响本轮对话。"""
+    try:
+        return await memory_context(
+            request.session_id,
+            request.user_id,
+            extra_subject_ids=[ref.user_id for ref in request.mentions],
+        )
+    except Exception:
+        logger.opt(exception=True).debug("[Chat] 长期记忆读取失败，本轮不注入")
+        return ""
 
 
 async def _allowed_tools(runtime: ToolRuntime) -> tuple[set[str], list[dict[str, Any]]]:
@@ -805,6 +819,7 @@ class ChatService:
         effective_persona = str(persona_name or bound_persona or chat_cfg["persona"] or DEFAULT_PERSONA)
         persona_text = get_persona_text(effective_persona)
         persona_text = f"{persona_text}{_scene_hint(request, effective_persona)}".strip()
+        memory_block = await _memory_block(request)
 
         # 描述与主对话并发执行，避免图片消息多等一次模型调用
         description_task = (
@@ -833,6 +848,8 @@ class ChatService:
             messages: list[dict[str, Any]] = []
             if persona_text:
                 messages.append({"role": "system", "content": persona_text})
+            if memory_block:
+                messages.append({"role": "system", "content": memory_block})
             if request.is_group:
                 split = len(history)
                 while split and history[split - 1].get("role") == "user":

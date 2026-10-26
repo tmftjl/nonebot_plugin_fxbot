@@ -32,6 +32,16 @@ class ReplyInfo:
     texts: list[str] = field(default_factory=list)
 
 
+@dataclass(slots=True)
+class RecallInfo:
+    """平台无关的撤回信息。"""
+
+    message_id: str
+    group_id: str | None = None
+    user_id: str | None = None
+    operator_id: str = ""
+
+
 _SCENE_TYPES = frozenset({"group", "private", "channel", "guild"})
 
 
@@ -72,6 +82,10 @@ class PlatformAdapter(ABC):
     def build_reply_segment(self, bot: Any, message_id: int | str) -> Any:
         """构造平台引用段；不支持时抛 UnsupportedCapability。"""
         raise UnsupportedCapability("引用回复")
+
+    def extract_recall(self, event: Any) -> RecallInfo | None:
+        """识别撤回事件；平台不提供或无法识别时返回 None。"""
+        return None
 
     def extract_group_member_add(self, event: Any) -> dict[str, str] | None:
         """识别成员入群事件并返回统一的群 ID、成员 ID。"""

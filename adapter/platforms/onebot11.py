@@ -9,7 +9,7 @@ from pathlib import Path
 from nonebot.adapters import Bot
 from nonebot.adapters.onebot.v11 import Bot as OneBotV11Bot
 
-from ..core.bot import PlatformAdapter, _image_bytes
+from ..core.bot import RecallInfo, PlatformAdapter, _image_bytes
 
 
 class OneBotV11MessageAdapter(PlatformAdapter):
@@ -113,6 +113,26 @@ class OneBotV11MessageAdapter(PlatformAdapter):
 
     async def get_message(self, bot, message_id):
         return await self._api(bot, "get_msg", message_id=message_id)
+
+    def extract_recall(self, event: Any) -> RecallInfo | None:
+        """识别 group_recall / friend_recall 通知。"""
+        notice = str(getattr(event, "notice_type", "") or "")
+        message_id = getattr(event, "message_id", None)
+        if not message_id:
+            return None
+        if notice == "group_recall":
+            return RecallInfo(
+                message_id=str(message_id),
+                group_id=str(getattr(event, "group_id", "") or "") or None,
+                user_id=str(getattr(event, "user_id", "") or "") or None,
+                operator_id=str(getattr(event, "operator_id", "") or ""),
+            )
+        if notice == "friend_recall":
+            return RecallInfo(
+                message_id=str(message_id),
+                user_id=str(getattr(event, "user_id", "") or "") or None,
+            )
+        return None
 
     def reply_sender_id(self, event: Any) -> str | None:
         """读取被引用消息的发送者 QQ 号。"""
