@@ -88,7 +88,7 @@ Do not reintroduce classical willing. MaiBot removed it in `1f91967d2`; P5 uses 
 6. If `console/web/src/` changed, run the frontend build and include `console/web/dist/`.
 7. Report changed files, tests run, failures, and any remaining limitation. Do not claim verification you did not run.
 
-Do not batch multiple phase items into one commit. Do not reformat untouched legacy files.
+Implement items one at a time, but commit a whole phase as a single commit once all its items pass verification. Do not commit sub-items separately. Do not reformat untouched legacy files.
 
 ## Verification Matrix
 
