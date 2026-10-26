@@ -5,7 +5,7 @@ from __future__ import annotations
 from nonebot import logger
 
 from .config import memory_config
-from .pipeline import memory_job_tick
+from .pipeline import memory_job_tick, backfill_job_tick
 
 
 def setup_memory_tasks() -> None:
@@ -25,4 +25,13 @@ def setup_memory_tasks() -> None:
         max_instances=1,
         coalesce=True,
     )
-    logger.info(f"[ChatMemory] 批量抽取任务已注册: 每 {interval} 秒")
+    scheduler.add_job(
+        backfill_job_tick,
+        trigger="interval",
+        seconds=10,
+        id="fxbot_chat_memory_backfill",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    logger.info(f"[ChatMemory] 批量抽取任务已注册: 每 {interval} 秒；回填每 10 秒")

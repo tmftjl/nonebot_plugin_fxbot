@@ -28,6 +28,7 @@ from .behavior.quote import should_quote, normalize_quote_mode
 from .message_adapter import load_images
 from .behavior.debounce import default_debounce_registry
 from .memory.repository import chat_repository
+from .behavior.anti_repeat import forget_replies, remember_reply, rewrite_reason, rewrite_instruction
 
 
 def _finalize_response(response: LLMResponse) -> LLMResponse:
@@ -54,6 +55,8 @@ _TOOL_BUDGET = 90.0
 _MAX_TOOL_RESULT_CHARS = 2000
 _MAX_BACKGROUND_CHARS = 2000
 _MAX_BACKGROUND_LINE_CHARS = 500
+_MAX_CURRENT_CHARS = 4000
+_DEFAULT_HISTORY_CHARS = 12000
 _CURRENT_MARK = "[需要你回应]"
 _BACKGROUND_HEADER = "[群聊背景，不要回复]"
 
@@ -117,6 +120,67 @@ def _mark_current(content: str | list[dict[str, Any]]) -> str | list[dict[str, A
     if isinstance(content, str):
         return f"{_CURRENT_MARK}\n{content}"
     return [{"type": "text", "text": _CURRENT_MARK}, *content]
+
+
+def _content_chars(content: Any) -> int:
+    """统计一条历史消息的文本长度，图片段不计字符。"""
+    if isinstance(content, str):
+        return len(content)
+    if isinstance(content, list):
+        return sum(
+            len(str(part.get("text") or ""))
+            for part in content
+            if isinstance(part, dict) and part.get("type") == "text"
+        )
+    return len(str(content or ""))
+
+
+def _trim_history(history: list[dict[str, Any]], budget: int) -> list[dict[str, Any]]:
+    """按总字符预算从最旧的一整轮开始丢，工具调用组不拆开。"""
+    if budget <= 0 or not history:
+        return history
+    groups: list[list[dict[str, Any]]] = []
+    for message in history:
+        if not groups or message.get("role") == "user":
+            groups.append([message])
+        else:
+            groups[-1].append(message)
+    total = sum(_content_chars(message.get("content")) for message in history)
+    while len(groups) > 1 and total > budget:
+        dropped = groups.pop(0)
+        total -= sum(_content_chars(message.get("content")) for message in dropped)
+    return [message for group in groups for message in group]
+
+
+def _truncate_content(content: Any, limit: int = _MAX_CURRENT_CHARS) -> Any:
+    """只截断发给模型的本轮正文，图片段保持不变。"""
+    if isinstance(content, str):
+        return content if len(content) <= limit else content[: limit - 1] + "…"
+    if not isinstance(content, list):
+        return content
+    remaining = limit
+    result: list[Any] = []
+    for part in content:
+        if not isinstance(part, dict) or part.get("type") != "text":
+            result.append(part)
+            continue
+        text = str(part.get("text") or "")
+        if len(text) <= remaining:
+            result.append(part)
+            remaining -= len(text)
+        elif remaining > 0:
+            result.append({**part, "text": text[: remaining - 1] + "…"})
+            remaining = 0
+    return result
+
+
+def _history_budget(chat_cfg: dict[str, Any]) -> int:
+    """读取历史字符预算；缺失或非法时用默认值，0 表示不裁剪。"""
+    memory = chat_cfg.get("memory")
+    value = memory.get("max_history_chars", _DEFAULT_HISTORY_CHARS) if isinstance(memory, dict) else None
+    if isinstance(value, bool) or not isinstance(value, int):
+        return _DEFAULT_HISTORY_CHARS
+    return max(0, value)
 
 
 def _scene_hint(request: ChatRequest, persona_name: str = "") -> str:
@@ -407,6 +471,8 @@ class ChatService:
                     break
                 await self.mark_sent(request, response, index, _receipt_id(receipt))
                 sent += 1
+        if sent:
+            remember_reply(request.session_id, "\n".join(parts[:sent]))
         return sent > 0
 
     async def ensure_hydrated(self, session_id: str) -> None:
@@ -420,6 +486,7 @@ class ChatService:
     async def clear_session(self, session_id: str) -> None:
         """清空会话历史；内存、数据库、待合并批次与在途轮次一起失效。"""
         default_debounce_registry.clear(session_id)
+        forget_replies(session_id)
         async with self.session_store.lock(session_id):
             self.session_store.clear(session_id)
         if not memory_state.is_ready():
@@ -801,6 +868,36 @@ class ChatService:
                     except Exception:
                         logger.opt(exception=True).warning("[Chat] 图片描述落库失败")
 
+    async def _avoid_repeat(
+        self,
+        request: ChatRequest,
+        response: LLMResponse,
+        messages: list[dict[str, Any]],
+        provider: Any,
+        epoch: int,
+    ) -> LLMResponse:
+        """命中复读时重写一次；仍复读或重写失败则保留原文。"""
+        reason = rewrite_reason(request.session_id, response.content)
+        if not reason or not self._alive(request, epoch):
+            return response
+        prompt = [
+            *messages,
+            response.to_message_dict(),
+            {"role": "user", "content": rewrite_instruction(reason)},
+        ]
+        try:
+            candidate = await provider.chat(messages=prompt, tools=None)
+        except Exception:
+            logger.opt(exception=True).debug("[Chat] 防复读重写失败，保留原文")
+            return response
+        text = str(candidate.content or "").strip()
+        if not text or rewrite_reason(request.session_id, text) == "repeat":
+            return response
+        candidate.content = text
+        candidate.tool_calls = []
+        candidate.tool_call_ids = []
+        return candidate
+
     async def _process(self, request: ChatRequest, runtime: ToolRuntime | None) -> ChatResponse:
         """完成一轮对话；全程持有轮次锁，仅在读写历史时持有状态锁。"""
         provider_name = _session_provider(request.session_id)
@@ -812,8 +909,10 @@ class ChatService:
     ) -> ChatResponse:
         chat_cfg = get_config_manager().get_system()["chat"]
         limit = int(chat_cfg["max_history"])
+        history_budget = _history_budget(chat_cfg)
         runtime = runtime or ToolRuntime()
         user_content = _build_user_content(request)
+        current_content = _truncate_content(user_content)
         persona_name = request.metadata.get("persona_name") if isinstance(request.metadata, dict) else None
         bound_persona = get_binding(PERSONA, request.session_id)
         effective_persona = str(persona_name or bound_persona or chat_cfg["persona"] or DEFAULT_PERSONA)
@@ -833,6 +932,7 @@ class ChatService:
                 history = [m for m in self.session_store.get(request.session_id) if m.get("role") != "system"]
                 while history and history[0].get("role") != "user":
                     history.pop(0)
+                history = _trim_history(history, history_budget)
                 epoch = (
                     request.accepted_epoch
                     if request.accepted_epoch is not None
@@ -857,10 +957,10 @@ class ChatService:
                 messages.extend(history[:split])
                 if block := _background_block(history[split:]):
                     messages.append({"role": "user", "content": block})
-                messages.append({"role": "user", "content": _mark_current(user_content)})
+                messages.append({"role": "user", "content": _mark_current(current_content)})
             else:
                 messages.extend(history)
-                messages.append({"role": "user", "content": user_content})
+                messages.append({"role": "user", "content": current_content})
 
             allowed_names, tools = await _allowed_tools(runtime)
             response = await provider.chat(messages=messages, tools=tools or None)
@@ -943,6 +1043,7 @@ class ChatService:
             if response.has_tool_calls and self._alive(request, epoch):
                 logger.warning(f"[Chat] 达到最大工具轮数，已丢弃残留工具调用: session={request.session_id}")
             response = _finalize_response(response)
+            response = await self._avoid_repeat(request, response, messages, provider, epoch)
             descriptions = await description_task if description_task is not None else []
             if descriptions:
                 stripped = _strip_images([{"role": "user", "content": user_content}], descriptions)[0]

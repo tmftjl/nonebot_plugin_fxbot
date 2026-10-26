@@ -58,8 +58,8 @@ def _visible_chars(text: str) -> int:
     return sum(1 for char in text if unicodedata.category(char)[0] not in {"P", "S", "Z", "C"})
 
 
-def should_learn(text: str, *, tenant: str = "", now: float | None = None) -> bool:
-    """判断一条人类消息是否值得进入长期抽取。"""
+def should_learn(text: str, *, tenant: str = "", now: float | None = None, check_duplicate: bool = True) -> bool:
+    """判断一条人类消息是否值得进入长期抽取；回填只看内容噪声。"""
     content = " ".join(str(text or "").split())
     if not content or _visible_chars(content) < 2:
         return False
@@ -69,6 +69,8 @@ def should_learn(text: str, *, tenant: str = "", now: float | None = None) -> bo
         return False
     if _AD.search(content):
         return False
+    if not check_duplicate:
+        return True
     return not _is_duplicate(tenant, content, time.monotonic() if now is None else now)
 
 

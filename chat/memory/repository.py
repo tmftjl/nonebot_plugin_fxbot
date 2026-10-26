@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta
+from dataclasses import dataclass
 
 from sqlmodel import select
-from sqlalchemy import delete, update
+from sqlalchemy import func, delete, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
@@ -26,6 +27,21 @@ from .models import (
     ChatMemoryEvidence,
     utc_now_naive,
 )
+from .filtering import should_learn
+
+
+@dataclass(frozen=True)
+class TenantJobState:
+    """调度所需的租户消息与游标快照。"""
+
+    tenant: str
+    last_message_id: int
+    message_count: int
+    learn_enabled: bool | None
+    memory: ChatJobCursor | None
+    backfill: ChatJobCursor | None
+    backfilled_at: datetime | None
+    backfill_done: int = 0
 
 
 class ChatRepository:
@@ -238,15 +254,179 @@ class ChatRepository:
         return rows[0] if rows else None
 
     @with_session
-    async def pending_tenants(self, session: AsyncSession, limit: int = 20) -> list[str]:
-        """列出还有未处理人类消息的租户。"""
-        statement = (
-            select(ChatMessage.tenant)
-            .where(ChatMessage.kind == "user", ChatMessage.deleted.is_(False))
-            .group_by(ChatMessage.tenant)
-            .limit(limit)
+    async def scheduling_snapshot(self, session: AsyncSession) -> list[TenantJobState]:
+        """一次读出所有有消息租户的游标、学习开关与回填状态。"""
+        last_rows = (
+            await session.execute(
+                select(ChatMessage.tenant, func.max(ChatMessage.id), func.count(ChatMessage.id))
+                .where(ChatMessage.kind == "user", ChatMessage.deleted.is_(False))
+                .group_by(ChatMessage.tenant)
+            )
+        ).all()
+        last_ids = {str(row[0]): (int(row[1] or 0), int(row[2] or 0)) for row in last_rows}
+        if not last_ids:
+            return []
+        tenants = list(last_ids)
+        states = {
+            str(row.tenant): row
+            for row in (await session.execute(select(ChatSessionState).where(ChatSessionState.tenant.in_(tenants))))
+            .scalars()
+            .all()
+        }
+        cursors: dict[tuple[str, str], ChatJobCursor] = {
+            (str(row.tenant), row.job): row
+            for row in (await session.execute(select(ChatJobCursor).where(ChatJobCursor.tenant.in_(tenants))))
+            .scalars()
+            .all()
+        }
+        done_rows = (
+            await session.execute(
+                select(ChatJobBatch.tenant, func.count())
+                .where(
+                    ChatJobBatch.tenant.in_(tenants),
+                    ChatJobBatch.job == "backfill",
+                    ChatJobBatch.status == "done",
+                )
+                .group_by(ChatJobBatch.tenant)
+            )
+        ).all()
+        done = {str(row[0]): int(row[1]) for row in done_rows}
+        return [
+            TenantJobState(
+                tenant=tenant,
+                last_message_id=last_id,
+                message_count=count,
+                learn_enabled=states[tenant].learn_enabled if tenant in states else None,
+                memory=cursors.get((tenant, "memory")),
+                backfill=cursors.get((tenant, "backfill")),
+                backfilled_at=states[tenant].backfilled_at if tenant in states else None,
+                backfill_done=done.get(tenant, 0),
+            )
+            for tenant, (last_id, count) in last_ids.items()
+        ]
+
+    @with_session
+    async def ensure_backfill(
+        self,
+        session: AsyncSession,
+        tenant: str,
+        *,
+        min_messages: int,
+        max_messages: int,
+    ) -> bool:
+        """首次学习时冻结回填窗口，并让实时游标跳过这段旧消息。"""
+        state = await self._state_row(session, tenant)
+        if state.backfilled_at is not None:
+            return False
+        rows = await ChatJobCursor.select_rows(tenant=tenant, job="backfill", session=session)
+        if rows:
+            return False
+        total = int(
+            (
+                await session.execute(
+                    select(func.count())
+                    .select_from(ChatMessage)
+                    .where(
+                        ChatMessage.tenant == tenant,
+                        ChatMessage.kind == "user",
+                        ChatMessage.deleted.is_(False),
+                    )
+                )
+            ).scalar_one()
         )
-        return [str(row) for row in (await session.execute(statement)).scalars().all()]
+        if total < max(1, int(min_messages)):
+            return False
+        boundary = int(
+            (
+                await session.execute(
+                    select(func.max(ChatMessage.id)).where(
+                        ChatMessage.tenant == tenant,
+                        ChatMessage.kind == "user",
+                        ChatMessage.deleted.is_(False),
+                    )
+                )
+            ).scalar_one()
+            or 0
+        )
+        if boundary <= 0:
+            return False
+        recent = list(
+            (
+                await session.execute(
+                    select(ChatMessage)
+                    .where(
+                        ChatMessage.tenant == tenant,
+                        ChatMessage.kind == "user",
+                        ChatMessage.deleted.is_(False),
+                        ChatMessage.id <= boundary,
+                    )
+                    .order_by(ChatMessage.id.desc())
+                    .limit(max(int(max_messages) * 4, int(min_messages)))
+                )
+            )
+            .scalars()
+            .all()
+        )
+        clean_ids: list[int] = []
+        for message in recent:
+            if message.id is None:
+                continue
+            content = " ".join(str(message.content or "").split())
+            if should_learn(content, tenant=tenant, check_duplicate=False):
+                clean_ids.append(int(message.id))
+                if len(clean_ids) >= int(max_messages):
+                    break
+        if not clean_ids:
+            state.backfilled_at = utc_now_naive()
+            state.updated_at = state.backfilled_at
+            return False
+        stop_seq = min(clean_ids) - 1
+        memory = await self.get_cursor(tenant, "memory", session=session)
+        if memory is None or int(memory.cursor_seq) < boundary:
+            await self._upsert_cursor(session, tenant, "memory", boundary, direction="forward")
+        timestamp = utc_now_naive()
+        await session.execute(
+            sqlite_insert(ChatJobCursor)
+            .values(
+                tenant=tenant,
+                job="backfill",
+                direction="backward",
+                cursor_seq=boundary + 1,
+                stop_seq=stop_seq,
+                fail_count=0,
+                updated_at=timestamp,
+            )
+            .on_conflict_do_nothing(index_elements=["tenant", "job"])
+        )
+        state.updated_at = timestamp
+        return True
+
+    @with_session
+    async def done_batch_count(self, session: AsyncSession, tenant: str, job: str, *, status: str = "done") -> int:
+        """统计某类任务已完成的批次数。"""
+        statement = (
+            select(func.count())
+            .select_from(ChatJobBatch)
+            .where(
+                ChatJobBatch.tenant == tenant,
+                ChatJobBatch.job == job,
+                ChatJobBatch.status == status,
+            )
+        )
+        return int((await session.execute(statement)).scalar_one())
+
+    @with_session
+    async def finish_backfill(self, session: AsyncSession, tenant: str) -> None:
+        """回填完成写 backfilled_at，之后不再重新扫描历史。"""
+        timestamp = utc_now_naive()
+        state = await self._state_row(session, tenant)
+        state.backfilled_at = timestamp
+        state.updated_at = timestamp
+        await session.execute(
+            update(ChatJobCursor)
+            .where(ChatJobCursor.tenant == tenant, ChatJobCursor.job == "backfill")
+            .values(fail_count=0, next_retry_at=None, last_error="", updated_at=timestamp)
+        )
 
     @with_session
     async def messages_after(
@@ -262,6 +442,30 @@ class ChatRepository:
                 ChatMessage.deleted.is_(False),
             )
             .order_by(ChatMessage.id.asc())
+            .limit(limit)
+        )
+        return list((await session.execute(statement)).scalars().all())
+
+    @with_session
+    async def messages_between(
+        self,
+        session: AsyncSession,
+        tenant: str,
+        after_id: int,
+        before_id: int,
+        limit: int = 200,
+    ) -> list[ChatMessage]:
+        """按主键倒序读取一段人类消息，用于从新到旧回填。"""
+        statement = (
+            select(ChatMessage)
+            .where(
+                ChatMessage.tenant == tenant,
+                ChatMessage.kind == "user",
+                ChatMessage.deleted.is_(False),
+                ChatMessage.id > after_id,
+                ChatMessage.id < before_id,
+            )
+            .order_by(ChatMessage.id.desc())
             .limit(limit)
         )
         return list((await session.execute(statement)).scalars().all())
@@ -310,6 +514,7 @@ class ChatRepository:
         job: str = "memory",
         algorithm_version: int = 1,
         error: str = "",
+        direction: str = "forward",
     ) -> datetime:
         """记录批次失败并按 1/2/5/10/30 分钟退避。"""
         now = utc_now_naive()
@@ -340,6 +545,7 @@ class ChatRepository:
             tenant,
             job,
             cursor.cursor_seq if cursor else 0,
+            direction=cursor.direction if cursor else direction,
             fail_count=fail_count,
             next_retry_at=next_retry,
             last_error=error[:500],
@@ -358,6 +564,9 @@ class ChatRepository:
         *,
         job: str = "memory",
         algorithm_version: int = 1,
+        direction: str = "forward",
+        next_cursor: int | None = None,
+        source: str = "extract",
     ) -> dict[str, int]:
         """在一个事务里写 Episode、事实、证据、画像并推进游标。"""
         from .extract import ExtractionResult
@@ -450,7 +659,7 @@ class ChatRepository:
                     category=fact.category,
                     confidence=fact.confidence,
                     importance=fact.importance,
-                    source="extract",
+                    source=source,
                     source_episode_id=episode_ids[0] if episode_ids else None,
                     source_batch_id=batch_id,
                     asserted_at=max(message.occurred_at for message in evidence_messages),
@@ -511,7 +720,14 @@ class ChatRepository:
                 set_={"status": "done", "completed_at": now, "error": ""},
             )
         )
-        await self._upsert_cursor(session, tenant, job, high_water, last_error="")
+        await self._upsert_cursor(
+            session,
+            tenant,
+            job,
+            high_water if next_cursor is None else int(next_cursor),
+            direction=direction,
+            last_error="",
+        )
         return {"facts": written, "episodes": len(episode_ids)}
 
     @with_session
@@ -719,34 +935,38 @@ class ChatRepository:
         job: str,
         cursor_seq: int,
         *,
+        direction: str = "forward",
+        stop_seq: int | None = None,
         fail_count: int = 0,
         next_retry_at: datetime | None = None,
         last_error: str = "",
     ) -> None:
         """写入游标；成功时清空退避状态。"""
         now = utc_now_naive()
+        updates: dict[str, object] = {
+            "direction": direction,
+            "cursor_seq": int(cursor_seq),
+            "fail_count": fail_count,
+            "next_retry_at": next_retry_at,
+            "last_error": last_error,
+            "updated_at": now,
+        }
+        if stop_seq is not None:
+            updates["stop_seq"] = int(stop_seq)
         statement = (
             sqlite_insert(ChatJobCursor)
             .values(
                 tenant=tenant,
                 job=job,
-                direction="forward",
+                direction=direction,
                 cursor_seq=int(cursor_seq),
+                stop_seq=int(stop_seq or 0),
                 fail_count=fail_count,
                 next_retry_at=next_retry_at,
                 last_error=last_error,
                 updated_at=now,
             )
-            .on_conflict_do_update(
-                index_elements=["tenant", "job"],
-                set_={
-                    "cursor_seq": int(cursor_seq),
-                    "fail_count": fail_count,
-                    "next_retry_at": next_retry_at,
-                    "last_error": last_error,
-                    "updated_at": now,
-                },
-            )
+            .on_conflict_do_update(index_elements=["tenant", "job"], set_=updates)
         )
         await session.execute(statement)
 

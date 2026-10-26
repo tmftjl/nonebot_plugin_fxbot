@@ -71,6 +71,10 @@ SYSTEM_DEFAULTS = {
             "expression_learn": False,
             "group_opt_out_command": True,
         },
+        "behavior": {
+            "anti_repeat": True,
+            "anti_repeat_threshold": 85,
+        },
         "model_routing": {
             "reply": "",
             "extract": "",
@@ -123,6 +127,15 @@ def validate_system_config(data: dict[str, Any]) -> None:
     for key, default in SYSTEM_DEFAULTS["chat"]["privacy"].items():
         if isinstance(default, bool) and key in privacy and not isinstance(privacy[key], bool):
             raise ValueError(f"chat.privacy.{key} 必须是布尔值")
+
+    behavior = chat.get("behavior", {})
+    if not isinstance(behavior, dict):
+        raise ValueError("chat.behavior 必须是对象")
+    if "anti_repeat" in behavior and not isinstance(behavior["anti_repeat"], bool):
+        raise ValueError("chat.behavior.anti_repeat 必须是布尔值")
+    threshold = behavior.get("anti_repeat_threshold", 85)
+    if isinstance(threshold, bool) or not isinstance(threshold, int) or not 0 <= threshold <= 100:
+        raise ValueError("chat.behavior.anti_repeat_threshold 必须是 0 到 100 的整数")
 
     routing = chat.get("model_routing", {})
     if not isinstance(routing, dict):
