@@ -2,8 +2,18 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
+from datetime import datetime
 from dataclasses import field, dataclass
+
+from ..utils.tz import now, to_naive_utc
+
+TriggerKind = Literal["mention", "persona", "private", "proactive"]
+
+
+def _utc_now_naive() -> datetime:
+    """返回 naive UTC，供请求默认发生时间使用。"""
+    return to_naive_utc(now())
 
 
 @dataclass
@@ -34,6 +44,13 @@ class ChatRequest:
     user_id: str
     group_id: str | None
     text: str
+    turn_id: str
+    dedupe_key: str
+    trigger_kind: TriggerKind
+    event_id: str | None = None
+    message_id: str | None = None
+    reply_to_message_id: str | None = None
+    occurred_at: datetime = field(default_factory=_utc_now_naive)
     user_name: str = ""
     segments: list[InboundSegment] = field(default_factory=list)
     images: list[str] = field(default_factory=list)

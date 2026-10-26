@@ -9,6 +9,7 @@ from nonebot.rule import Rule
 from nonebot.matcher import Matcher
 from nonebot.adapters import Bot, Event
 
+from .types import TriggerKind
 from ..config import get_manager as get_config_manager
 from .service import chat_service
 from ..adapter import (
@@ -24,6 +25,7 @@ from ..adapter import (
 from .personas import effective_persona_name
 from .tool_runtime import default_runtime_factory
 from .message_adapter import (
+    event_identity,
     collect_mentions,
     adapt_message_event,
     session_id_for_event,
@@ -131,26 +133,39 @@ ai_router = on_message(rule=Rule(_ai_fallback_rule), priority=99, block=True)
 @context_router.handle()
 async def _handle_context(bot: Bot, event: Event) -> None:
     """把普通群消息写入 AI 会话历史。"""
+    identity = event_identity(bot, event)
+    if not chat_service.session_store.mark_seen(identity.session_id, identity.dedupe_key):
+        return
     user_id = normalize_id(event_user_id(event)) or ""
     has_image = _has_image(event)
     images = image_sources_for_event(event) if has_image else []
     # 上下文消息只做廉价提取：昵称取消息段里现成的，不额外查成员接口
     mentions = await collect_mentions(bot, event, event_group_id(event), resolve_names=False)
     await chat_service.record_group_message(
-        session_id_for_event(bot, event),
+        identity.session_id,
         user_id,
         event_user_name(event, user_id),
         event_plain_text(event),
         images=images,
         has_image=has_image,
         mentions=mentions,
+        dedupe_key=identity.dedupe_key,
+        platform=identity.platform,
+        event_id=identity.event_id,
+        message_id=identity.message_id,
+        reply_to_message_id=identity.reply_to_message_id,
     )
 
 
 @ai_router.handle()
 async def _handle_ai_fallback(bot: Bot, event: Event, matcher: Matcher) -> None:
     """处理 AI 兜底消息。"""
-    request = await adapt_message_event(bot, event)
+    identity = event_identity(bot, event)
+    if not chat_service.session_store.mark_seen(identity.session_id, identity.dedupe_key):
+        logger.debug("[Chat] 忽略重复投递的 AI 消息")
+        return
+    trigger_kind: TriggerKind = "private" if not event_group_id(event) else "mention" if _is_to_me(event) else "persona"
+    request = await adapt_message_event(bot, event, trigger_kind=trigger_kind)
     runtime = default_runtime_factory.create(bot=bot, event=event, matcher=matcher)
     try:
         response = await chat_service.process(request, runtime)
@@ -159,5 +174,14 @@ async def _handle_ai_fallback(bot: Bot, event: Event, matcher: Matcher) -> None:
         await matcher.finish("AI 服务暂时不可用")
     if not chat_service.is_current(request.session_id, response.epoch):
         return
-    if response.text:
-        await matcher.finish(response.text)
+    if not response.text:
+        return
+    await chat_service.mark_sending(request, response)
+    try:
+        await matcher.send(response.text)
+    except Exception as exc:
+        logger.opt(exception=True).warning(f"[Chat] 回复发送失败: {exc}")
+        await chat_service.mark_send_failed(request, response, exc)
+        return
+    await chat_service.mark_sent(request, response)
+    await matcher.finish()

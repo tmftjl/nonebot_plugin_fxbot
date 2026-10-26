@@ -48,6 +48,16 @@ QQBot.send_to_group = _send_to_group_and_remember
 class QQOfficialMessageAdapter(PlatformAdapter):
     """QQ 官方消息适配器。"""
 
+    def event_id(self, event: Any) -> str | None:
+        """读取 QQ 官方事件 ID。"""
+        value = getattr(event, "event_id", None)
+        return str(value) if value is not None else None
+
+    def event_message_id(self, event: Any) -> str | None:
+        """读取 QQ 官方消息 ID，与事件 ID 分开。"""
+        value = getattr(event, "id", None)
+        return str(value) if value is not None else None
+
     def extract_group_member_add(self, event: Any) -> dict[str, str] | None:
         """识别 QQ 官方新成员入群通知。"""
         if not isinstance(event, GroupMemberAddEvent):

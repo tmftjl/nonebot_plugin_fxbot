@@ -12,6 +12,16 @@ from ..core.bot import PlatformAdapter, _image_bytes
 
 
 class OneBotV12MessageAdapter(PlatformAdapter):
+    def event_id(self, event: Any) -> str | None:
+        """读取 OneBot V12 事件 ID。"""
+        value = getattr(event, "id", None)
+        return str(value) if value is not None else None
+
+    def event_message_id(self, event: Any) -> str | None:
+        """读取 OneBot V12 消息 ID，与事件 ID 分开。"""
+        value = getattr(event, "message_id", None)
+        return str(value) if value is not None else None
+
     @staticmethod
     def _file_id(data: Any) -> str:
         if isinstance(data, str) and data.startswith(("http://", "https://", "base64://")):
@@ -25,8 +35,7 @@ class OneBotV12MessageAdapter(PlatformAdapter):
 
     def match(self, bot: Bot) -> bool:
         return isinstance(bot, OneBotV12Bot) or (
-            getattr(bot, "platform", "") == "wechat"
-            and getattr(bot, "impl", "") == "wxauto"
+            getattr(bot, "platform", "") == "wechat" and getattr(bot, "impl", "") == "wxauto"
         )
 
     def is_mention_segment(self, segment: Any) -> bool:

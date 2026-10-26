@@ -6,9 +6,9 @@ from typing import Any
 
 from nonebot import logger
 
-from .proxy import ConfigProxy
+from .proxy import Validator, ConfigProxy
 from ..utils.paths import config_dir
-from .system_defaults import SYSTEM_DEFAULTS
+from .system_defaults import SYSTEM_DEFAULTS, validate_system_config
 
 
 class ConfigManager:
@@ -23,6 +23,7 @@ class ConfigManager:
         *,
         filename: str = "config.json",
         clean_extra: bool = True,
+        validator: Validator | None = None,
     ) -> ConfigProxy:
         key = (namespace, filename)
         proxy = self._proxies.get(key)
@@ -32,22 +33,25 @@ class ConfigManager:
                 filename=filename,
                 defaults=defaults or {},
                 clean_extra=clean_extra,
+                validator=validator,
             )
             self._proxies[key] = proxy
+        elif validator is not None:
+            proxy.validator = validator
         return proxy
 
     def bootstrap(self) -> None:
         if self._bootstrapped:
             return
         config_dir()
-        self.register("system", SYSTEM_DEFAULTS, clean_extra=True)
+        self.register("system", SYSTEM_DEFAULTS, clean_extra=True, validator=validate_system_config)
         for proxy in list(self._proxies.values()):
             proxy.merge_and_save()
         self._bootstrapped = True
         logger.info("[FxBot] Config initialized")
 
     def get_system(self) -> dict[str, Any]:
-        return self.register("system", SYSTEM_DEFAULTS).load()
+        return self.register("system", SYSTEM_DEFAULTS, validator=validate_system_config).load()
 
     def get_all(self) -> dict[str, Any]:
         return {f"{namespace}/{filename}": proxy.load() for (namespace, filename), proxy in self._proxies.items()}
@@ -65,7 +69,7 @@ class ConfigManager:
         """保存控制台提交的配置数据。"""
         system_data = payload.get("system")
         if isinstance(system_data, dict):
-            self.register("system", SYSTEM_DEFAULTS).save(system_data)
+            self.register("system", SYSTEM_DEFAULTS, validator=validate_system_config).save(system_data)
 
         for (namespace, filename), proxy in list(self._proxies.items()):
             if namespace == "system" or filename != "config.json":

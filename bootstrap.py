@@ -69,6 +69,7 @@ async def init() -> None:
     _import_startup_module("plugin.builder")
     _import_startup_module("permission.message_policy")
     _import_startup_module("membership.models")
+    _import_startup_module("chat.memory.models")
     _import_startup_module("adapter.uninfo")
     _import_startup_module("adapter")
     _import_startup_module("adapter.core.context")
@@ -80,6 +81,10 @@ async def init() -> None:
     except Exception:
         _database_ready = False
         logger.opt(exception=True).error("[FxBot] 数据库初始化失败，会员门禁后续必须按 fail-closed 处理")
+
+    from .chat.memory.state import prepare_memory
+
+    await prepare_memory()
 
     _import_startup_module("membership.gate")
     _import_startup_module("membership.commands")

@@ -15,6 +15,15 @@ from ..core.bot import PlatformAdapter, _image_bytes
 class OneBotV11MessageAdapter(PlatformAdapter):
     """OneBot V11 消息适配器。"""
 
+    def event_id(self, event: Any) -> str | None:
+        """OneBot V11 不提供事件 ID。"""
+        return None
+
+    def event_message_id(self, event: Any) -> str | None:
+        """读取 OneBot V11 消息 ID。"""
+        value = getattr(event, "message_id", None)
+        return str(value) if value is not None else None
+
     def extract_group_member_add(self, event: Any) -> dict[str, str] | None:
         """识别 OneBot V11 新成员入群通知。"""
         if str(getattr(event, "notice_type", "") or "") != "group_increase":

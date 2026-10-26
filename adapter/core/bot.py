@@ -53,6 +53,14 @@ class PlatformAdapter(ABC):
     def message_segment_class(self) -> type | None:
         return None
 
+    def event_id(self, event: Any) -> str | None:
+        """读取平台事件 ID；平台不提供时返回 None。"""
+        return None
+
+    def event_message_id(self, event: Any) -> str | None:
+        """读取当前消息 ID；平台不提供时返回 None。"""
+        return None
+
     def supports_media_url(self) -> bool:
         """图片段能否只携带 URL 交给平台自行下载。"""
         return True

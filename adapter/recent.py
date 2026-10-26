@@ -91,8 +91,10 @@ def _sender_name(event: Any) -> str:
 
 def remember_event(bot: Any, event: Any, message: Any) -> None:
     """记录消息 ID、图片 URL和少量元数据。"""
+    from .core.registry import get_platform_adapter
+
     key = _key(bot, event)
-    message_id = _value(event, "id", "message_id")
+    message_id = get_platform_adapter(bot).event_message_id(event)
     msg_indices = _message_indices(event)
     if not key or not message_id or not msg_indices:
         return

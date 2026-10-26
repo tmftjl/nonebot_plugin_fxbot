@@ -21,6 +21,8 @@ class ChatSessionStore:
         self._locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._turn_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._epochs: dict[str, int] = {}
+        self._seen: dict[str, OrderedDict[str, None]] = {}
+        self._hydrated: set[str] = set()
         self._accessed: OrderedDict[str, float] = OrderedDict()
         self._access_count = 0
 
@@ -42,8 +44,20 @@ class ChatSessionStore:
                 for lock in locks
             ):
                 continue
-            for mapping in (self._store, self._locks, self._turn_locks, self._epochs, self._accessed):
+            for mapping in (self._store, self._locks, self._turn_locks, self._epochs, self._seen, self._accessed):
                 mapping.pop(candidate, None)
+            self._hydrated.discard(candidate)
+
+    def mark_seen(self, session_id: str, dedupe_key: str) -> bool:
+        """首次记录消息时返回 True，每会话按先进先出保留最多 256 个键。"""
+        self._touch(session_id)
+        seen = self._seen.setdefault(session_id, OrderedDict())
+        if dedupe_key in seen:
+            return False
+        seen[dedupe_key] = None
+        if len(seen) > 256:
+            seen.popitem(last=False)
+        return True
 
     def lock(self, session_id: str) -> asyncio.Lock:
         """返回会话级互斥锁，避免并发消息互相覆盖历史。"""
@@ -59,6 +73,21 @@ class ChatSessionStore:
         """返回会话代次；清空后递增，用于丢弃清空前发出的回复。"""
         self._touch(session_id)
         return self._epochs.get(session_id, 0)
+
+    def set_epoch(self, session_id: str, epoch: int) -> None:
+        """与持久化代次对齐，避免重启后旧代次被当成当前轮次。"""
+        self._touch(session_id)
+        self._epochs[session_id] = int(epoch)
+
+    def is_hydrated(self, session_id: str) -> bool:
+        """是否已从数据库恢复过该会话。"""
+        self._touch(session_id)
+        return session_id in self._hydrated
+
+    def mark_hydrated(self, session_id: str) -> None:
+        """标记该会话已尝试从数据库恢复。"""
+        self._touch(session_id)
+        self._hydrated.add(session_id)
 
     def _deque(self, session_id: str, limit: int | None) -> deque[dict[str, Any]]:
         """按当前上限获取队列，上限变化时重建以立即生效。"""
@@ -98,6 +127,7 @@ class ChatSessionStore:
     def clear(self, session_id: str) -> None:
         """清空会话历史。"""
         self._store.pop(session_id, None)
+        self._seen.pop(session_id, None)
         self._epochs[session_id] = self.epoch(session_id) + 1
 
 

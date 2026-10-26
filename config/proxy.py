@@ -6,6 +6,8 @@ from copy import deepcopy
 from typing import Any, Callable
 from dataclasses import field, dataclass
 
+from nonebot import logger
+
 from .storage import ConfigStorage
 from ..utils.cache import cache
 
@@ -72,11 +74,20 @@ class ConfigProxy:
         if self.storage.read() == {} and self.defaults:
             self.save(deepcopy(self.defaults))
 
+    def _validated(self, raw: dict[str, Any]) -> dict[str, Any]:
+        """校验磁盘配置；非法时回退默认值，避免启动崩溃。"""
+        if self.validator is None:
+            return raw
+        try:
+            self.validator(raw)
+        except Exception as exc:
+            logger.warning(f"[Config] {self.namespace}/{self.filename} 配置非法，使用默认值: {exc}")
+            return deepcopy(self.defaults)
+        return raw
+
     def reload(self) -> dict[str, Any]:
         self.ensure()
-        raw = self.storage.read()
-        if self.validator is not None:
-            self.validator(raw)
+        raw = self._validated(self.storage.read())
         merged = deep_merge(self.defaults, raw, clean_extra=self.clean_extra)
         mtime = self.storage.mtime()
         cache.set(self._cache_key, (mtime, deepcopy(raw), merged))
@@ -84,9 +95,7 @@ class ConfigProxy:
 
     def _read(self, mtime: float) -> tuple[float, dict[str, Any], dict[str, Any]]:
         self.ensure()
-        raw = self.storage.read()
-        if self.validator is not None:
-            self.validator(raw)
+        raw = self._validated(self.storage.read())
         merged = deep_merge(self.defaults, raw, clean_extra=self.clean_extra)
         entry = (mtime, deepcopy(raw), merged)
         cache.set(self._cache_key, entry)
@@ -100,10 +109,16 @@ class ConfigProxy:
         return deepcopy(entry[2])
 
     def merge_and_save(self) -> dict[str, Any]:
+        """补齐默认值后回写；已损坏的用户配置不覆盖文件，运行时按默认值处理。"""
         raw = self.storage.read()
         merged = deep_merge(self.defaults, raw, clean_extra=self.clean_extra)
-        if merged != raw:
+        if merged == raw:
+            return merged
+        try:
             self.save(merged)
+        except Exception as exc:
+            logger.warning(f"[Config] {self.namespace}/{self.filename} 配置非法，跳过回写: {exc}")
+            return deepcopy(self.defaults)
         return merged
 
     def save(self, data: dict[str, Any]) -> None:

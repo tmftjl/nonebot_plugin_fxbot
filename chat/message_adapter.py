@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import io
+import json
 import base64
 import asyncio
+import hashlib
+from uuid import uuid4
 from typing import Any
+from dataclasses import dataclass
 
 from PIL import Image, ImageOps
 from nonebot import logger
 
-from .types import MentionRef, ChatRequest, InboundSegment
+from .types import MentionRef, ChatRequest, TriggerKind, InboundSegment
 from ..adapter import (
     ReplyInfo,
     normalize_id,
@@ -249,11 +253,65 @@ def session_id_for_event(bot: Any, event: Any) -> str:
     return f"{namespace}:group:{group_id}" if group_id else f"{namespace}:private:{user_id}"
 
 
-async def adapt_message_event(bot: Any, event: Any) -> ChatRequest:
+@dataclass(frozen=True)
+class MessageIdentity:
+    """平台无关的入站消息身份。"""
+
+    session_id: str
+    event_id: str | None
+    message_id: str | None
+    reply_to_message_id: str | None
+    dedupe_key: str
+    platform: str = ""
+
+
+def event_identity(bot: Any, event: Any) -> MessageIdentity:
+    """读取消息身份；无 ID 且无内容时的 UUID 不保证幂等。"""
+    adapter = get_platform_adapter(bot)
+    platform = platform_for_bot(bot)
+    session_id = session_id_for_event(bot, event)
+    event_id = adapter.event_id(event)
+    message_id = adapter.event_message_id(event)
+    _, reply_id = adapter.reply_target(event)
+    if message_id:
+        dedupe_key = f"msg:{message_id}"
+    elif event_id:
+        dedupe_key = f"event:{event_id}"
+    else:
+        text = event_plain_text(event)
+        sources = extract_raw_image_sources(event_message(event))
+        if text or sources:
+            content = {
+                "platform": platform,
+                "session_id": session_id,
+                "user_id": event_user_id(event),
+                "text": text,
+                "images": [
+                    {"bytes": base64.b64encode(source).decode("ascii")}
+                    if isinstance(source, bytes)
+                    else {"source": source}
+                    for source in sources
+                ],
+            }
+            payload = json.dumps(content, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            dedupe_key = f"content:{hashlib.sha256(payload.encode('utf-8')).hexdigest()}"
+        else:
+            dedupe_key = f"uuid:{uuid4().hex}"
+    return MessageIdentity(
+        session_id,
+        event_id,
+        message_id,
+        str(reply_id) if reply_id is not None else None,
+        dedupe_key,
+        platform,
+    )
+
+
+async def adapt_message_event(bot: Any, event: Any, *, trigger_kind: TriggerKind) -> ChatRequest:
     """适配 NoneBot 消息事件。"""
     user_id = normalize_id(event_user_id(event)) or ""
     group_id = normalize_id(event_group_id(event))
-    session_id = session_id_for_event(bot, event)
+    identity = event_identity(bot, event)
     segments: list[InboundSegment] = []
     try:
         for seg in event.get_message():
@@ -265,7 +323,13 @@ async def adapt_message_event(bot: Any, event: Any) -> ChatRequest:
         collect_mentions(bot, event, group_id),
     )
     return ChatRequest(
-        session_id=session_id,
+        session_id=identity.session_id,
+        turn_id=uuid4().hex,
+        dedupe_key=identity.dedupe_key,
+        trigger_kind=trigger_kind,
+        event_id=identity.event_id,
+        message_id=identity.message_id,
+        reply_to_message_id=identity.reply_to_message_id,
         user_id=user_id,
         user_name=event_user_name(event, user_id),
         group_id=group_id,

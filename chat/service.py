@@ -4,18 +4,25 @@ from __future__ import annotations
 
 import json
 import asyncio
+import hashlib
+from uuid import uuid4
 from typing import Any
+from datetime import datetime
 
 from nonebot import logger
 
 from .tools import ToolContext, ToolRuntime, execute_tool, tool_allowed, default_registry
 from .types import MentionRef, ChatRequest, ChatResponse
+from .memory import state as memory_state
 from ..config import get_manager as get_config_manager
 from .session import ChatSessionStore, default_session_store
 from .bindings import PERSONA, PROVIDER, get_binding
 from .personas import DEFAULT_PERSONA, get_persona_text
+from ..utils.tz import to_naive_utc
 from .providers import LLMResponse, provider_manager
+from .memory.models import ChatTurn, ChatMessage, ChatTurnItem, utc_now_naive
 from .message_adapter import load_images
+from .memory.repository import chat_repository
 
 
 def _finalize_response(response: LLMResponse) -> LLMResponse:
@@ -185,7 +192,7 @@ def _clean_description(text: str) -> str:
 
 def _history_trace(trace: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """只把本轮实际处理的前几个调用写入历史，避免超大调用列表撑爆历史。"""
-    kept = trace[:_MAX_TOOL_CALLS_PER_ROUND + 1]
+    kept = trace[: _MAX_TOOL_CALLS_PER_ROUND + 1]
     if len(kept) <= 1:
         return kept
     return [{**kept[0], "tool_calls": (kept[0].get("tool_calls") or [])[: len(kept) - 1]}, *kept[1:]]
@@ -282,12 +289,240 @@ class ChatService:
     async def process(self, request: ChatRequest, runtime: ToolRuntime | None = None) -> ChatResponse:
         """处理一次对话请求。"""
         async with self.session_store.turn_lock(request.session_id):
-            return await self._process(request, runtime)
+            limit = int(get_config_manager().get_system()["chat"]["max_history"])
+            await self._hydrate(request.session_id, limit)
+            try:
+                return await self._process(request, runtime)
+            except Exception as exc:
+                await self._mark_turn_failed(request, exc)
+                raise
 
     async def clear_session(self, session_id: str) -> None:
-        """清空会话历史。"""
+        """清空会话历史；内存、数据库与在途轮次一起失效。"""
         async with self.session_store.lock(session_id):
             self.session_store.clear(session_id)
+        if not memory_state.is_ready():
+            return
+        try:
+            generation = await chat_repository.clear_tenant(session_id)
+        except Exception:
+            logger.opt(exception=True).warning("[Chat] 清空数据库历史失败，重启后可能恢复")
+            return
+        self.session_store.set_epoch(session_id, generation)
+
+    @staticmethod
+    def _history_enabled() -> bool:
+        """是否持久化原始消息与轮次；配置缺失时按开启处理。"""
+        memory = get_config_manager().get_system()["chat"].get("memory")
+        return not isinstance(memory, dict) or bool(memory.get("history_enabled", True))
+
+    async def _hydrate(self, session_id: str, limit: int) -> None:
+        """首次访问会话时从数据库恢复最近历史，不覆盖已到的新消息。"""
+        if limit <= 0 or not self._history_enabled() or self.session_store.is_hydrated(session_id):
+            return
+        if not memory_state.is_ready():
+            self.session_store.mark_hydrated(session_id)
+            return
+        async with self.session_store.lock(session_id):
+            if self.session_store.is_hydrated(session_id):
+                return
+            if self.session_store.get(session_id):
+                self.session_store.mark_hydrated(session_id)
+                return
+            try:
+                state = await chat_repository.get_session_state(session_id)
+                if state is not None:
+                    self.session_store.set_epoch(session_id, state.generation)
+                history = await chat_repository.get_recent_messages(session_id, limit)
+            except Exception:
+                logger.opt(exception=True).warning("[Chat] 历史恢复失败，本轮从内存开始")
+                return
+            self.session_store.append_many(session_id, history, limit=limit)
+            self.session_store.mark_hydrated(session_id)
+
+    async def _persist_turn_start(self, request: ChatRequest, content: str, epoch: int) -> tuple[int, int] | None:
+        """写入用户消息、轮次和用户条目；失败只降级本轮持久化。"""
+        if not memory_state.is_ready() or not self._history_enabled():
+            return None
+        payload = json.dumps({"has_image": True}) if request.images else "{}"
+        turn = ChatTurn(
+            tenant=request.session_id,
+            turn_key=request.turn_id,
+            generation=epoch,
+            trigger_message_ids=json.dumps([request.message_id or request.dedupe_key], ensure_ascii=False),
+            author_ids=json.dumps([request.user_id], ensure_ascii=False),
+            trigger_kind=request.trigger_kind,
+            request_digest=hashlib.sha1(content.encode("utf-8")).hexdigest(),
+            status="generating",
+            started_at=utc_now_naive(),
+        )
+        message = ChatMessage(
+            tenant=request.session_id,
+            kind="user",
+            platform=request.platform,
+            platform_event_id=request.event_id,
+            platform_message_id=request.message_id,
+            reply_to_message_id=request.reply_to_message_id,
+            sender_id=request.user_id,
+            sender_name=request.user_name,
+            content=content,
+            payload=payload,
+            source="live",
+            dedupe_key=request.dedupe_key,
+            occurred_at=to_naive_utc(request.occurred_at),
+        )
+        try:
+            turn_id = await chat_repository.upsert_turn(turn)
+            message_id = await chat_repository.append_message(message)
+            await chat_repository.append_turn_item(
+                ChatTurnItem(
+                    tenant=request.session_id,
+                    turn_id=turn_id,
+                    item_seq=0,
+                    role="user",
+                    content=content,
+                    payload=payload,
+                    source_message_id=message_id,
+                    visible=True,
+                    send_status="sent",
+                )
+            )
+        except Exception:
+            logger.opt(exception=True).warning("[Chat] 轮次落库失败，本轮仅用内存历史")
+            return None
+        return turn_id, message_id
+
+    async def _persist_turn_end(
+        self,
+        request: ChatRequest,
+        persisted: tuple[int, int] | None,
+        response: LLMResponse,
+        provider_name: str,
+        content: str,
+        descriptions: list[str],
+    ) -> int | None:
+        """生成完成后写 generated_text 与待发送的助手条目。"""
+        if persisted is None or not memory_state.is_ready() or not self._history_enabled():
+            return None
+        turn_id, message_id = persisted
+        text = response.content or ""
+        try:
+            if not text.strip():
+                await chat_repository.update_turn(
+                    request.session_id,
+                    request.turn_id,
+                    status="failed",
+                    provider=provider_name,
+                    error="空响应",
+                    finished_at=utc_now_naive(),
+                )
+                return None
+            await chat_repository.update_turn(
+                request.session_id,
+                request.turn_id,
+                status="generated",
+                generated_text=text,
+                provider=provider_name,
+                finished_at=utc_now_naive(),
+            )
+            if descriptions:
+                await chat_repository.update_message_content(request.session_id, message_id, content)
+            return await chat_repository.append_turn_item(
+                ChatTurnItem(
+                    tenant=request.session_id,
+                    turn_id=turn_id,
+                    item_seq=1,
+                    role="assistant",
+                    content=text,
+                    visible=False,
+                    send_status="pending",
+                )
+            )
+        except Exception:
+            logger.opt(exception=True).warning("[Chat] 助手回复落库失败")
+            return None
+
+    async def mark_sending(self, request: ChatRequest, response: ChatResponse) -> None:
+        """发送前把轮次与条目标为发送中。"""
+        item_id = response.metadata.get("turn_item_id")
+        if not item_id or not memory_state.is_ready():
+            return
+        try:
+            await chat_repository.update_turn_item(request.session_id, int(item_id), send_status="sending")
+            await chat_repository.update_turn(request.session_id, request.turn_id, status="sending")
+        except Exception:
+            logger.opt(exception=True).warning("[Chat] 记录发送中状态失败")
+
+    async def mark_sent(
+        self, request: ChatRequest, response: ChatResponse, platform_message_id: str | None = None
+    ) -> None:
+        """发送成功后把助手条目写入可见历史；重复调用不重复追加。"""
+        repeat = False
+        item_id = response.metadata.get("turn_item_id")
+        if item_id and memory_state.is_ready():
+            try:
+                repeat = not await chat_repository.mark_turn_item_sent(
+                    request.session_id, int(item_id), platform_message_id
+                )
+            except Exception:
+                logger.opt(exception=True).warning("[Chat] 记录发送结果失败")
+        if repeat or not response.text or not self.is_current(request.session_id, response.epoch):
+            return
+        limit = int(get_config_manager().get_system()["chat"]["max_history"])
+        async with self.session_store.lock(request.session_id):
+            if self.is_current(request.session_id, response.epoch):
+                entry = {"role": "assistant", "content": response.text}
+                self.session_store.append(request.session_id, entry, limit=limit)
+
+    async def mark_send_failed(self, request: ChatRequest, response: ChatResponse, exc: Exception) -> None:
+        """发送失败时保留生成文本，但条目不可见、轮次标为失败。"""
+        if not memory_state.is_ready():
+            return
+        item_id = response.metadata.get("turn_item_id")
+        try:
+            if item_id:
+                await chat_repository.update_turn_item(
+                    request.session_id, int(item_id), send_status="failed", visible=False
+                )
+            await chat_repository.update_turn(
+                request.session_id,
+                request.turn_id,
+                status="failed",
+                error=f"发送失败: {type(exc).__name__}: {exc}"[:500],
+                finished_at=utc_now_naive(),
+            )
+        except Exception:
+            logger.opt(exception=True).warning("[Chat] 记录发送失败状态时出错")
+
+    async def _mark_turn_aborted(self, request: ChatRequest, error: str = "") -> None:
+        """清空或打断后作废在途轮次。"""
+        if not memory_state.is_ready():
+            return
+        try:
+            await chat_repository.update_turn(
+                request.session_id,
+                request.turn_id,
+                status="aborted",
+                error=error[:500],
+                finished_at=utc_now_naive(),
+            )
+        except Exception:
+            logger.opt(exception=True).warning("[Chat] 记录轮次作废状态时出错")
+
+    async def _mark_turn_failed(self, request: ChatRequest, exc: Exception) -> None:
+        """记录本轮失败；轮次行不存在时什么也不做。"""
+        if not memory_state.is_ready():
+            return
+        try:
+            await chat_repository.update_turn(
+                request.session_id,
+                request.turn_id,
+                status="failed",
+                error=f"{type(exc).__name__}: {exc}"[:500],
+                finished_at=utc_now_naive(),
+            )
+        except Exception:
+            logger.opt(exception=True).warning("[Chat] 记录轮次失败状态时出错")
 
     def is_current(self, session_id: str, epoch: int) -> bool:
         """判断轮次是否仍属于当前会话，清空后的旧轮次不可继续生效。"""
@@ -303,6 +538,12 @@ class ChatService:
         images: list[str | bytes] | None = None,
         has_image: bool = False,
         mentions: list[MentionRef] | None = None,
+        dedupe_key: str = "",
+        platform: str = "",
+        event_id: str | None = None,
+        message_id: str | None = None,
+        reply_to_message_id: str | None = None,
+        occurred_at: datetime | None = None,
     ) -> None:
         """记录群里的普通消息（未 @ Bot），图片同样转成文字描述写入历史。"""
         images = list(images or [])
@@ -312,6 +553,7 @@ class ChatService:
         limit = int(chat_cfg["max_history"])
         if limit <= 0:
             return
+        await self._hydrate(session_id, limit)
         placeholders = ["[图片]"] * len(images)
         if not placeholders and has_image:
             placeholders = ["[图片]"]
@@ -323,6 +565,29 @@ class ChatService:
         entry = {"role": "user", "content": "\n".join(lines)}
         async with self.session_store.lock(session_id):
             self.session_store.append(session_id, entry, limit=limit)
+        row_id: int | None = None
+        if memory_state.is_ready() and self._history_enabled():
+            payload = json.dumps({"has_image": True}) if has_image or images else "{}"
+            try:
+                row_id = await chat_repository.append_message(
+                    ChatMessage(
+                        tenant=session_id,
+                        kind="user",
+                        platform=platform,
+                        platform_event_id=event_id,
+                        platform_message_id=message_id,
+                        reply_to_message_id=reply_to_message_id,
+                        sender_id=user_id,
+                        sender_name=user_name,
+                        content=entry["content"],
+                        payload=payload,
+                        source="live",
+                        dedupe_key=dedupe_key or f"uuid:{uuid4().hex}",
+                        occurred_at=to_naive_utc(occurred_at or utc_now_naive()),
+                    )
+                )
+            except Exception:
+                logger.opt(exception=True).warning("[Chat] 群聊消息落库失败，本轮仅用内存历史")
         if images and bool(chat_cfg["image_description"]):
             try:
                 async with provider_manager.lease(_session_provider(session_id)) as provider:
@@ -334,14 +599,20 @@ class ChatService:
                 entry["content"] = "\n".join(
                     lines[: -len(images)] + [f"[图片: {desc}]" if desc else "[图片]" for desc in descriptions]
                 )
+                if row_id is not None:
+                    try:
+                        await chat_repository.update_message_content(session_id, row_id, entry["content"])
+                    except Exception:
+                        logger.opt(exception=True).warning("[Chat] 图片描述落库失败")
 
     async def _process(self, request: ChatRequest, runtime: ToolRuntime | None) -> ChatResponse:
         """完成一轮对话；全程持有轮次锁，仅在读写历史时持有状态锁。"""
-        async with provider_manager.lease(_session_provider(request.session_id)) as provider:
-            return await self._process_with_provider(request, runtime, provider)
+        provider_name = _session_provider(request.session_id)
+        async with provider_manager.lease(provider_name) as provider:
+            return await self._process_with_provider(request, runtime, provider, provider_name)
 
     async def _process_with_provider(
-        self, request: ChatRequest, runtime: ToolRuntime | None, provider: Any
+        self, request: ChatRequest, runtime: ToolRuntime | None, provider: Any, provider_name: str = ""
     ) -> ChatResponse:
         chat_cfg = get_config_manager().get_system()["chat"]
         limit = int(chat_cfg["max_history"])
@@ -368,6 +639,7 @@ class ChatService:
                 epoch = self.session_store.epoch(request.session_id)
                 entry = _strip_images([{"role": "user", "content": user_content}])[0]
                 self.session_store.append(request.session_id, entry, limit=limit)
+            persisted = await self._persist_turn_start(request, str(entry["content"]), epoch)
 
             messages: list[dict[str, Any]] = []
             if persona_text:
@@ -469,10 +741,16 @@ class ChatService:
             if descriptions:
                 stripped = _strip_images([{"role": "user", "content": user_content}], descriptions)[0]
                 entry["content"] = stripped["content"]
-            async with self.session_store.lock(request.session_id):
-                if self.is_current(request.session_id, epoch):
-                    self.session_store.append(request.session_id, response.to_message_dict(), limit=limit)
-            return ChatResponse(text=response.content, raw=response, epoch=epoch)
+            if not self.is_current(request.session_id, epoch):
+                await self._mark_turn_aborted(request, "会话已清空")
+                return ChatResponse(text=response.content, raw=response, epoch=epoch)
+            item_id = await self._persist_turn_end(
+                request, persisted, response, provider_name, str(entry["content"]), descriptions
+            )
+            result = ChatResponse(text=response.content, raw=response, epoch=epoch)
+            if item_id is not None:
+                result.metadata["turn_item_id"] = item_id
+            return result
         finally:
             if description_task is not None:
                 if not description_task.done():

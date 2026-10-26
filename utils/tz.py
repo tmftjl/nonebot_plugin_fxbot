@@ -50,3 +50,10 @@ def to_naive_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value
     return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def as_utc_aware(value: datetime) -> datetime:
+    """归一到 UTC：naive 视为 UTC，aware 则转换。"""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)

@@ -232,6 +232,26 @@ def _system_config_tab() -> dict[str, Any]:
                 ],
             },
             {
+                "key": "chat.memory",
+                "title": "对话记忆",
+                "schemas": [
+                    {
+                        "field": "history_enabled",
+                        "label": "持久化对话历史",
+                        "component": "Switch",
+                        "default": SYSTEM_DEFAULTS["chat"]["memory"]["history_enabled"],
+                        "helpMessage": "关闭后只保留进程内上下文，重启或清空后不恢复历史。",
+                    },
+                    {
+                        "field": "learn_enabled",
+                        "label": "长期记忆学习",
+                        "component": "Switch",
+                        "default": SYSTEM_DEFAULTS["chat"]["memory"]["learn_enabled"],
+                        "helpMessage": "开启后从对话中抽取事实与画像；当前阶段仅保存开关。",
+                    },
+                ],
+            },
+            {
                 "key": "chat.web_search",
                 "title": "联网搜索",
                 "schemas": [
