@@ -14,6 +14,9 @@ import type {
   ChatStyle,
   ChatJargon,
   ChatExpression,
+  ChatPlannerSample,
+  ChatReplyGate,
+  ChatBehaviorResponse,
 } from '@/types/api'
 
 export function getToken(): string {
@@ -138,6 +141,18 @@ export const chatApi = {
     ),
   deleteExpression: (tenant: string, id: number) =>
     api.delete<{ deleted: boolean }>(`/chat/expression/${id}?tenant=${encodeURIComponent(tenant)}`),
+  listPlannerSamples: (tenant: string, limit = 100) =>
+    api.get<{ items: ChatPlannerSample[] }>(
+      `/chat/planner?tenant=${encodeURIComponent(tenant)}&limit=${limit}`,
+    ),
+  getReplyGate: (tenant: string, limit = 100) =>
+    api.get<ChatReplyGate>(`/chat/gate?tenant=${encodeURIComponent(tenant)}&limit=${limit}`),
+  getBehavior: (tenant: string, limit = 100) =>
+    api.get<ChatBehaviorResponse>(
+      `/chat/behavior?tenant=${encodeURIComponent(tenant)}&limit=${limit}`,
+    ),
+  clearBehavior: (tenant: string) =>
+    api.delete<{ deleted: boolean }>(`/chat/behavior?tenant=${encodeURIComponent(tenant)}`),
 }
 
 // 会员续费 API

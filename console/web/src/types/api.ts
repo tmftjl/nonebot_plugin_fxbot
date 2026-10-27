@@ -233,3 +233,78 @@ export interface ChatExpression {
   last_used_at: string | null
   updated_at: string | null
 }
+
+export interface ChatPlannerSample {
+  id: number
+  turn_id: string
+  trigger_kind: string
+  action: string
+  label: number
+  features: Record<string, unknown>
+  provider: string
+  model: string
+  created_at: string | null
+}
+
+export interface ChatReplyGateWindow {
+  window_seconds: number
+  scored_rounds: number
+  expected_proactive: number
+  expected_forced: number
+  expected_replies: number
+  actual_replies: number
+}
+
+export interface ChatReplyGateObservation {
+  occurred_at: string
+  probability: number
+  threshold: number
+  would_trigger: boolean
+  expected_replies: number
+  target_replies: number
+  actual_replies: number
+  keep_ratio: number
+  features: Record<string, unknown>
+}
+
+export interface ChatReplyGateBucket {
+  bucket: string
+  count: number
+}
+
+export interface ChatReplyGateBackoff {
+  pending: number
+  delay_seconds: number
+}
+
+export interface ChatReplyGateProactive {
+  enabled: boolean
+  gate_mode: string
+  talk_value: number
+  switch: boolean | null
+  group_allowed: boolean
+}
+
+export interface ChatReplyGate {
+  calibrated: boolean
+  window: ChatReplyGateWindow
+  backoff: ChatReplyGateBackoff
+  observations: ChatReplyGateObservation[]
+  distribution: ChatReplyGateBucket[]
+  proactive: ChatReplyGateProactive
+}
+
+export interface ChatBehavior {
+  scene_tags: string[]
+  action: string
+  outcome: string
+  confidence: number
+  count: number
+  last_seen: string | null
+}
+
+export interface ChatBehaviorResponse {
+  items: ChatBehavior[]
+  attributed: number
+  minimum: number
+}

@@ -115,6 +115,7 @@ class ChatSessionState(BaseIDModel, table=True):
     last_active_at: datetime | None = Field(default=None, nullable=True)
     backfilled_at: datetime | None = Field(default=None, nullable=True)
     learn_enabled: bool | None = Field(default=None, nullable=True)
+    proactive_enabled: bool | None = Field(default=None, nullable=True)
     facts_version: int = Field(default=0, nullable=False)
     episodes_version: int = Field(default=0, nullable=False)
     profile_version: int = Field(default=0, nullable=False)
@@ -396,3 +397,76 @@ class ChatExpression(BaseIDModel, table=True):
     last_used_at: datetime | None = Field(default=None, nullable=True)
     created_at: datetime = Field(default_factory=utc_now_naive, nullable=False)
     updated_at: datetime = Field(default_factory=utc_now_naive, nullable=False)
+
+
+class ChatPlannerSample(BaseIDModel, table=True):
+    """一轮规划的首轮动作与特征，用于门控校准和追溯。"""
+
+    __tablename__ = "chat_planner_sample"
+    __table_args__ = (
+        UniqueConstraint("tenant", "turn_id"),
+        Index("ix_chat_planner_sample_tenant_created", "tenant", "created_at"),
+    )
+
+    tenant: str = Field(nullable=False)
+    turn_id: str = Field(nullable=False)
+    trigger_kind: str = Field(default="", nullable=False)
+    action: str = Field(default="", nullable=False)
+    label: int = Field(default=0, nullable=False)
+    features: str = Field(default="{}", nullable=False)
+    provider: str = Field(default="", nullable=False)
+    model: str = Field(default="", nullable=False)
+    created_at: datetime = Field(default_factory=utc_now_naive, nullable=False)
+
+
+class ChatState(BaseIDModel, table=True):
+    """租户情绪与单个用户的熟悉度；subject_id 为空表示租户情绪行。"""
+
+    __tablename__ = "chat_state"
+    __table_args__ = (UniqueConstraint("tenant", "subject_id"),)
+
+    tenant: str = Field(nullable=False)
+    subject_id: str = Field(default="", nullable=False)
+    valence: float = Field(default=0.0, nullable=False)
+    arousal: float = Field(default=0.0, nullable=False)
+    familiarity: float = Field(default=0.0, nullable=False)
+    affinity: float = Field(default=0.0, nullable=False)
+    last_interaction_at: datetime | None = Field(default=None, nullable=True)
+    last_decay_at: datetime | None = Field(default=None, nullable=True)
+    updated_at: datetime = Field(default_factory=utc_now_naive, nullable=False)
+
+
+class ChatBehaviorSample(BaseIDModel, table=True):
+    """一次动作及其十分钟后的归因结果。"""
+
+    __tablename__ = "chat_behavior_sample"
+    __table_args__ = (
+        UniqueConstraint("tenant", "turn_id", "action"),
+        Index("ix_chat_behavior_sample_tenant_outcome", "tenant", "outcome", "observed_until"),
+    )
+
+    tenant: str = Field(nullable=False)
+    turn_id: str = Field(nullable=False)
+    trigger_kind: str = Field(default="", nullable=False)
+    scene_tags: str = Field(default="[]", nullable=False)
+    action: str = Field(default="", nullable=False)
+    acted_at: datetime = Field(default_factory=utc_now_naive, nullable=False)
+    observed_until: datetime = Field(default_factory=utc_now_naive, nullable=False)
+    outcome: str = Field(default="pending", nullable=False)
+    attributed_at: datetime | None = Field(default=None, nullable=True)
+
+
+class ChatBehavior(BaseIDModel, table=True):
+    """场景到动作的周聚合，供 Planner 提示参考。"""
+
+    __tablename__ = "chat_behavior"
+    __table_args__ = (UniqueConstraint("tenant", "scene_hash", "action"),)
+
+    tenant: str = Field(nullable=False)
+    scene_hash: str = Field(nullable=False)
+    scene_tags: str = Field(default="[]", nullable=False)
+    action: str = Field(default="", nullable=False)
+    outcome: str = Field(default="continued", nullable=False)
+    confidence: float = Field(default=0.0, nullable=False)
+    count: int = Field(default=0, nullable=False)
+    last_seen: datetime = Field(default_factory=utc_now_naive, nullable=False)

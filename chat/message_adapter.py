@@ -327,6 +327,7 @@ async def adapt_message_event(bot: Any, event: Any, *, trigger_kind: TriggerKind
         turn_id=uuid4().hex,
         dedupe_key=identity.dedupe_key,
         trigger_kind=trigger_kind,
+        proactive=trigger_kind == "proactive",
         event_id=identity.event_id,
         message_id=identity.message_id,
         reply_to_message_id=identity.reply_to_message_id,

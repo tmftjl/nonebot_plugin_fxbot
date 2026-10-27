@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from nonebot import logger
 
+from ..mood import behavior_aggregate_tick, behavior_attribute_tick
 from .style import style_job_tick
 from .config import memory_config
 from .pipeline import memory_job_tick, backfill_job_tick
@@ -55,6 +56,27 @@ def setup_memory_tasks() -> None:
         max_instances=1,
         coalesce=True,
     )
+    scheduler.add_job(
+        behavior_attribute_tick,
+        trigger="interval",
+        seconds=60,
+        id="fxbot_chat_behavior_attribute",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        behavior_aggregate_tick,
+        trigger="cron",
+        day_of_week="mon",
+        hour=4,
+        minute=0,
+        id="fxbot_chat_behavior_aggregate",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
     logger.info(
-        f"[ChatMemory] 批量抽取任务已注册: 每 {interval} 秒；回填每 10 秒；风格每小时；表达每 {expression_interval} 秒"
+        f"[ChatMemory] 批量抽取任务已注册: 每 {interval} 秒；回填每 10 秒；风格每小时；"
+        f"表达每 {expression_interval} 秒；行为归因每 60 秒、聚合每周一 04:00"
     )

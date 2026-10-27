@@ -17,6 +17,13 @@ from .bindings import PERSONA, PROVIDER, get_binding, set_binding
 from .personas import DEFAULT_PERSONA, load_personas
 from .providers import provider_manager
 from .message_adapter import session_id_for_event
+from .behavior.reply_gate import (
+    talk_value_for,
+    proactive_config,
+    proactive_switch,
+    set_proactive_switch,
+    default_reply_gate_registry,
+)
 
 
 def _chat_cfg() -> dict[str, Any]:
@@ -64,6 +71,17 @@ def _event_group_role(event: Any) -> str:
         if value:
             return str(value)
     return ""
+
+
+def _proactive_argument(text: str) -> str | None:
+    """解析「主动」命令，返回空表示查询，None 表示不是该命令。"""
+    stripped = _strip_prefix(text.strip())
+    if stripped is None:
+        return None
+    parts = stripped.split(maxsplit=1)
+    if not parts or parts[0] != "主动":
+        return None
+    return parts[1].strip() if len(parts) > 1 else ""
 
 
 def _is_privileged(user_id: str) -> bool:
@@ -115,6 +133,11 @@ async def _clear_rule(bot: Bot, event: Event) -> bool:
     return _strip_prefix(event_plain_text(event).strip()) == "清空对话"
 
 
+def _proactive_rule(bot: Bot, event: Event) -> bool:
+    """主动接话命令匹配规则。"""
+    return _proactive_argument(event_plain_text(event)) is not None
+
+
 manage_permission = Permission(_can_manage)
 
 persona_cmd = on_message(
@@ -132,6 +155,11 @@ provider_cmd = on_message(
 clear_cmd = on_message(
     rule=Rule(_clear_rule),
     permission=manage_permission,
+    priority=5,
+    block=True,
+)
+proactive_cmd = on_message(
+    rule=Rule(_proactive_rule),
     priority=5,
     block=True,
 )
@@ -215,3 +243,61 @@ async def _handle_clear(bot: Bot, event: Event, matcher: Matcher) -> None:
     """清空当前会话的 AI 历史。"""
     await chat_service.clear_session(session_id_for_event(bot, event))
     await matcher.finish("已清空当前对话历史")
+
+
+def _switch_state(override: bool | None) -> str:
+    return "跟随全局" if override is None else "开启" if override else "关闭"
+
+
+@proactive_cmd.handle()
+async def _handle_proactive(bot: Bot, event: Event, matcher: Matcher) -> None:
+    """查看或调整本群主动接话。"""
+    group_id = normalize_id(event_group_id(event)) or ""
+    tenant = session_id_for_event(bot, event)
+    argument = _proactive_argument(event_plain_text(event)) or ""
+    cfg = proactive_config()
+    allowlist = {
+        str(item).strip() for item in cfg.get("group_allowlist") or [] if item is not None and str(item).strip()
+    }
+    if argument in {"开", "开启", "打开", "关", "关闭"}:
+        if not group_id:
+            await matcher.finish("主动接话只用于群聊")
+        if not await _can_manage(event):
+            await matcher.finish("只有群主或管理员可以调整主动接话")
+        enabled = argument in {"开", "开启", "打开"}
+        try:
+            await set_proactive_switch(tenant, enabled)
+        except Exception:
+            logger.opt(exception=True).warning("[Chat] 写入主动接话开关失败")
+            await matcher.finish("设置失败，请稍后再试")
+        if not enabled:
+            await matcher.finish("本群主动接话已关闭")
+        if not bool(cfg.get("enabled")):
+            await matcher.finish("本群已开启，但全局 chat.proactive.enabled 仍关闭")
+        if group_id not in allowlist:
+            await matcher.finish("本群已开启，但不在 chat.proactive.group_allowlist 白名单内")
+        await matcher.finish("本群主动接话已开启")
+    if argument:
+        await matcher.finish("用法：#主动 / #主动 开 / #主动 关")
+
+    override = await proactive_switch(tenant) if group_id else None
+    allowed = bool(group_id and group_id in allowlist)
+    effective = bool(cfg.get("enabled")) and allowed and override is not False and bool(group_id)
+    mode = "拦截" if cfg.get("gate_mode") == "enforce" else "观察"
+    snapshot = default_reply_gate_registry.peek(tenant)
+    window = snapshot.snapshot(5)["window"] if snapshot is not None else {}
+    lines = [
+        f"全局主动接话：{'开启' if cfg.get('enabled') else '关闭'}（{mode}）",
+        f"本群：{'开启' if effective else '关闭'}，群级开关{_switch_state(override)}，"
+        f"白名单{'命中' if allowed else '未命中'}",
+        f"talk_value：{talk_value_for(tenant):.2f}",
+    ]
+    if group_id:
+        lines.append(
+            "窗口：预计 {:.2f}，实际 {}（{} 轮）".format(
+                float(window.get("expected_replies", 0.0)),
+                int(window.get("actual_replies", 0)),
+                int(window.get("scored_rounds", 0)),
+            )
+        )
+    await matcher.finish("\n".join(lines))

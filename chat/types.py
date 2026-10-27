@@ -57,6 +57,7 @@ class ChatRequest:
     turn_id: str
     dedupe_key: str
     trigger_kind: TriggerKind
+    proactive: bool = False
     event_id: str | None = None
     message_id: str | None = None
     reply_to_message_id: str | None = None

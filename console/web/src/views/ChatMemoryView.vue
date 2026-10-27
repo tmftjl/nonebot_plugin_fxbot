@@ -1,10 +1,41 @@
 <!-- -*- coding: utf-8 -*- -->
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, Delete } from '@element-plus/icons-vue'
 import { chatApi } from '@/api'
-import type { ChatTenant, ChatStyle, ChatJargon, ChatExpression } from '@/types/api'
+import type {
+  ChatTenant,
+  ChatStyle,
+  ChatJargon,
+  ChatExpression,
+  ChatBehavior,
+  ChatPlannerSample,
+  ChatReplyGate,
+  ChatReplyGateObservation,
+} from '@/types/api'
+
+const emptyReplyGate = (): ChatReplyGate => ({
+  calibrated: false,
+  window: {
+    window_seconds: 3600,
+    scored_rounds: 0,
+    expected_proactive: 0,
+    expected_forced: 0,
+    expected_replies: 0,
+    actual_replies: 0,
+  },
+  backoff: { pending: 0, delay_seconds: 0 },
+  observations: [],
+  distribution: [],
+  proactive: {
+    enabled: false,
+    gate_mode: 'observe',
+    talk_value: 0,
+    switch: null,
+    group_allowed: false,
+  },
+})
 
 const tenants = ref<ChatTenant[]>([])
 const tenant = ref('')
@@ -13,11 +44,32 @@ const jargon = ref<ChatJargon[]>([])
 const jargonStatus = ref('all')
 const expressions = ref<ChatExpression[]>([])
 const expressionStatus = ref('all')
+const plannerSamples = ref<ChatPlannerSample[]>([])
+const behaviors = ref<ChatBehavior[]>([])
+const behaviorAttributed = ref(0)
+const behaviorMinimum = ref(50)
+const replyGate = ref<ChatReplyGate>(emptyReplyGate())
 const loading = ref(false)
 const jargonLoading = ref(false)
 const expressionLoading = ref(false)
+const plannerLoading = ref(false)
+const behaviorLoading = ref(false)
+const gateLoading = ref(false)
 const acting = ref(false)
 const loaded = ref(false)
+
+const plannerLabelCounts = computed(() => {
+  const replies = plannerSamples.value.filter((row) => row.label === 1).length
+  return { replies, silent: plannerSamples.value.length - replies }
+})
+
+const proactiveState = computed(() => {
+  const cfg = replyGate.value.proactive
+  return {
+    effective: cfg.enabled && cfg.group_allowed && cfg.switch !== false,
+    switchText: cfg.switch === null ? '跟随全局' : cfg.switch ? '开启' : '关闭',
+  }
+})
 
 const formatTime = (value: string | null | undefined) => {
   if (!value) return '—'
@@ -79,6 +131,94 @@ const loadExpressions = async () => {
   }
 }
 
+const loadPlannerSamples = async () => {
+  if (!tenant.value) {
+    plannerSamples.value = []
+    return
+  }
+  plannerLoading.value = true
+  try {
+    const result = await chatApi.listPlannerSamples(tenant.value)
+    plannerSamples.value = result.items || []
+  } catch (error) {
+    console.error('加载规划样本失败', error)
+    ElMessage.error('加载规划样本失败，请重试')
+  } finally {
+    plannerLoading.value = false
+  }
+}
+
+const plannerFeature = (row: ChatPlannerSample, key: string) => {
+  const value = row.features?.[key]
+  return value === undefined || value === null ? '—' : String(value)
+}
+
+const loadBehavior = async () => {
+  if (!tenant.value) {
+    behaviors.value = []
+    behaviorAttributed.value = 0
+    return
+  }
+  behaviorLoading.value = true
+  try {
+    const result = await chatApi.getBehavior(tenant.value)
+    behaviors.value = result.items || []
+    behaviorAttributed.value = result.attributed || 0
+    behaviorMinimum.value = result.minimum || 50
+  } catch (error) {
+    console.error('加载行为样本失败', error)
+    ElMessage.error('加载行为样本失败，请重试')
+  } finally {
+    behaviorLoading.value = false
+  }
+}
+
+const clearBehavior = async () => {
+  if (acting.value) return
+  try {
+    await ElMessageBox.confirm(
+      `确定清空租户「${tenant.value}」的行为样本与聚合？清空后 Planner 不再收到行为参考。`,
+      '清空行为样本',
+      { confirmButtonText: '确定清空', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch (action) {
+    if (action === 'cancel' || action === 'close') return
+    throw action
+  }
+  acting.value = true
+  try {
+    await chatApi.clearBehavior(tenant.value)
+    ElMessage.success('行为样本已清空')
+    await loadBehavior()
+  } catch (error) {
+    console.error('清空行为样本失败', error)
+    ElMessage.error('清空行为样本失败，请重试')
+  } finally {
+    acting.value = false
+  }
+}
+
+const loadReplyGate = async () => {
+  if (!tenant.value) {
+    replyGate.value = emptyReplyGate()
+    return
+  }
+  gateLoading.value = true
+  try {
+    replyGate.value = await chatApi.getReplyGate(tenant.value)
+  } catch (error) {
+    console.error('加载门控观察失败', error)
+    ElMessage.error('加载门控观察失败，请重试')
+  } finally {
+    gateLoading.value = false
+  }
+}
+
+const gateFeature = (row: ChatReplyGateObservation, key: string) => {
+  const value = row.features?.[key]
+  return value === undefined || value === null ? '—' : String(value)
+}
+
 const load = async () => {
   if (!tenant.value.trim()) {
     ElMessage.warning('请先选择或填写租户')
@@ -91,6 +231,9 @@ const load = async () => {
       chatApi.getStyle(tenant.value),
       loadJargon(),
       loadExpressions(),
+      loadPlannerSamples(),
+      loadBehavior(),
+      loadReplyGate(),
     ])
     style.value = styleResult.style
     loaded.value = true
@@ -374,6 +517,163 @@ onMounted(() => {
         </el-table-column>
       </el-table>
     </div>
+
+    <div v-if="loaded" class="panel">
+      <div class="panel-header">
+        <h3 class="panel-title">规划样本</h3>
+        <div class="panel-actions">
+          <el-button :icon="Refresh" :loading="plannerLoading" @click="loadPlannerSamples">刷新</el-button>
+        </div>
+      </div>
+      <div class="tenant-help">
+        Planner 每次调用记录首轮动作；label 为 1 表示决定回复，0 表示保持安静或等待。当前样本：回复
+        {{ plannerLabelCounts.replies }} 条，不回复 {{ plannerLabelCounts.silent }} 条。
+      </div>
+      <el-table v-loading="plannerLoading" :data="plannerSamples" row-key="id" empty-text="暂无规划样本">
+        <el-table-column label="时间" min-width="170">
+          <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
+        </el-table-column>
+        <el-table-column prop="trigger_kind" label="触发" width="100" />
+        <el-table-column prop="action" label="动作" width="130" />
+        <el-table-column label="标签" width="90">
+          <template #default="{ row }">
+            <el-tag :type="row.label ? 'success' : 'info'" size="small">
+              {{ row.label ? '回复' : '不回复' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="消息数" width="90">
+          <template #default="{ row }">{{ plannerFeature(row, 'message_count') }}</template>
+        </el-table-column>
+        <el-table-column label="历史条数" width="100">
+          <template #default="{ row }">{{ plannerFeature(row, 'history_len') }}</template>
+        </el-table-column>
+        <el-table-column label="问句" width="80">
+          <template #default="{ row }">{{ plannerFeature(row, 'has_question') }}</template>
+        </el-table-column>
+        <el-table-column prop="model" label="模型" min-width="160" show-overflow-tooltip />
+      </el-table>
+    </div>
+
+    <div v-if="loaded" class="panel">
+      <div class="panel-header">
+        <h3 class="panel-title">行为样本</h3>
+        <div class="panel-actions">
+          <el-tag :type="behaviorAttributed >= behaviorMinimum ? 'success' : 'info'" size="small">
+            已归因 {{ behaviorAttributed }} / {{ behaviorMinimum }}
+          </el-tag>
+          <el-button :icon="Refresh" :loading="behaviorLoading" @click="loadBehavior">刷新</el-button>
+          <el-button type="danger" plain :icon="Delete" :disabled="!behaviors.length" @click="clearBehavior">
+            清空
+          </el-button>
+        </div>
+      </div>
+      <div class="tenant-help">
+        动作发生后观察 10 分钟，期间有人继续发言记为“续聊”。已归因样本满
+        {{ behaviorMinimum }} 条后才把场景→动作注入 Planner；这里只记录，不驱动回复。聚合每周一 04:00 更新。
+      </div>
+      <el-table v-loading="behaviorLoading" :data="behaviors" empty-text="暂无行为聚合">
+        <el-table-column label="场景" min-width="220">
+          <template #default="{ row }">{{ row.scene_tags.join(' + ') || '一般' }}</template>
+        </el-table-column>
+        <el-table-column prop="action" label="动作" width="140" />
+        <el-table-column label="续聊率" width="100">
+          <template #default="{ row }">{{ Math.round(row.confidence * 100) }}%</template>
+        </el-table-column>
+        <el-table-column prop="count" label="样本" width="80" />
+        <el-table-column label="最近" min-width="170">
+          <template #default="{ row }">{{ formatTime(row.last_seen) }}</template>
+        </el-table-column>
+      </el-table>
+    </div>
+
+    <div v-if="loaded" class="panel">
+      <div class="panel-header">
+        <h3 class="panel-title">主动接话门控</h3>
+        <div class="panel-actions">
+          <el-tag :type="replyGate.calibrated ? 'success' : 'warning'" size="small">
+            {{ replyGate.calibrated ? '已校准' : '未校准' }}
+          </el-tag>
+          <el-tag :type="replyGate.proactive.gate_mode === 'enforce' ? 'danger' : 'info'" size="small">
+            {{ replyGate.proactive.gate_mode === 'enforce' ? '拦截模式' : '观察模式' }}
+          </el-tag>
+          <el-tag :type="proactiveState.effective ? 'success' : 'info'" size="small">
+            本群{{ proactiveState.effective ? '启用' : '未启用' }}
+          </el-tag>
+          <el-button :icon="Refresh" :loading="gateLoading" @click="loadReplyGate">刷新</el-button>
+        </div>
+      </div>
+      <div class="tenant-help">
+        普通群消息按发布先验计算 reply 概率；1 小时窗口累计预计回复与实际回复。状态只在内存，重启后清空。
+      </div>
+      <div class="meta-grid gate-window">
+        <span>全局：{{ replyGate.proactive.enabled ? '开启' : '关闭' }}</span>
+        <span>群级开关：{{ proactiveState.switchText }}</span>
+        <span>白名单：{{ replyGate.proactive.group_allowed ? '命中' : '未命中' }}</span>
+        <span>talk_value：{{ replyGate.proactive.talk_value.toFixed(2) }}</span>
+        <span>待处理：{{ replyGate.backoff.pending }}</span>
+        <span>退避：{{ Math.round(replyGate.backoff.delay_seconds) }} 秒</span>
+        <span>评分轮次 {{ replyGate.window.scored_rounds }}</span>
+        <span>
+          预计回复 {{ formatCount(replyGate.window.expected_replies) }}（主动
+          {{ formatCount(replyGate.window.expected_proactive) }} / 强制
+          {{ formatCount(replyGate.window.expected_forced) }}）
+        </span>
+        <span>窗口内实际回复 {{ replyGate.window.actual_replies }}</span>
+        <span>窗口 {{ Math.round(replyGate.window.window_seconds / 60) }} 分钟</span>
+      </div>
+      <div class="gate-distribution">
+        <span class="block-label">概率分布</span>
+        <el-tag v-for="bucket in replyGate.distribution" :key="bucket.bucket" type="info" class="rule-tag">
+          {{ bucket.bucket }}：{{ bucket.count }}
+        </el-tag>
+      </div>
+      <el-table
+        v-loading="gateLoading"
+        :data="replyGate.observations"
+        empty-text="暂无门控观察；收到普通群消息后生成"
+      >
+        <el-table-column label="时间" min-width="170">
+          <template #default="{ row }">{{ formatTime(row.occurred_at) }}</template>
+        </el-table-column>
+        <el-table-column label="概率" width="90">
+          <template #default="{ row }">{{ formatCount(row.probability) }}</template>
+        </el-table-column>
+        <el-table-column label="阈值" width="90">
+          <template #default="{ row }">{{ formatCount(row.threshold) }}</template>
+        </el-table-column>
+        <el-table-column label="判定" width="100">
+          <template #default="{ row }">
+            <el-tag :type="row.would_trigger ? 'success' : 'info'" size="small">
+              {{ row.would_trigger ? '放行' : '等待' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="预计/目标" width="130">
+          <template #default="{ row }">
+            {{ formatCount(row.expected_replies) }} / {{ formatCount(row.target_replies) }}
+          </template>
+        </el-table-column>
+        <el-table-column label="保留比例" width="100">
+          <template #default="{ row }">{{ formatCount(row.keep_ratio) }}</template>
+        </el-table-column>
+        <el-table-column label="待处理" width="80">
+          <template #default="{ row }">{{ gateFeature(row, 'pending_count') }}</template>
+        </el-table-column>
+        <el-table-column label="近5分钟" width="90">
+          <template #default="{ row }">{{ gateFeature(row, 'recent_message_count') }}</template>
+        </el-table-column>
+        <el-table-column label="自己占比" width="100">
+          <template #default="{ row }">{{ formatCount(Number(gateFeature(row, 'recent_self_ratio'))) }}</template>
+        </el-table-column>
+        <el-table-column label="距上次发言" width="110">
+          <template #default="{ row }">{{ gateFeature(row, 'seconds_since_bot_message') }}</template>
+        </el-table-column>
+        <el-table-column label="问句" width="80">
+          <template #default="{ row }">{{ gateFeature(row, 'has_question_mark') }}</template>
+        </el-table-column>
+      </el-table>
+    </div>
   </div>
 </template>
 
@@ -491,5 +791,21 @@ onMounted(() => {
 
 .status-select {
   width: 120px;
+}
+
+.gate-window {
+  margin: 16px 0;
+}
+
+.gate-distribution {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.gate-distribution .block-label {
+  margin-bottom: 0;
 }
 </style>

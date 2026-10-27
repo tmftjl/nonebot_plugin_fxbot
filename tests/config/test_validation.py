@@ -38,6 +38,11 @@ class SystemConfigValidationTests(unittest.TestCase):
             {"chat": {"expression": {"enabled": "yes"}}},
             {"chat": {"expression": {"sample_size": 0}}},
             {"chat": {"expression": {"inject_top_k": 21}}},
+            {"chat": {"planner": None}},
+            {"chat": {"planner": {"enabled": "yes"}}},
+            {"chat": {"planner": {"mode": "smart"}}},
+            {"chat": {"planner": {"max_rounds": 2}}},
+            {"chat": {"planner": {"wait_seconds": 29}}},
         )
         for payload in payloads:
             with self.subTest(payload=payload), self.assertRaises(ValueError):
@@ -69,6 +74,7 @@ class SystemConfigValidationTests(unittest.TestCase):
                     "memory": {"learn_enabled": True},
                     "jargon": {"inject_max": 3},
                     "expression": {"inject_top_k": 3},
+                    "planner": {"mode": "complex"},
                 }
             }
         )
@@ -82,4 +88,8 @@ class SystemConfigValidationTests(unittest.TestCase):
         self.assertEqual(
             data["chat"]["expression"],
             {"enabled": True, "learn": True, "llm_select": False, "sample_size": 50, "inject_top_k": 3},
+        )
+        self.assertEqual(
+            data["chat"]["planner"],
+            {"enabled": False, "mode": "complex", "max_rounds": 1, "wait_seconds": 60},
         )

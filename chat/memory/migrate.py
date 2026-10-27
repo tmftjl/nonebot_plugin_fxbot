@@ -11,12 +11,14 @@ from ...db import base_models
 from .models import (
     ChatTurn,
     ChatAlias,
+    ChatState,
     ChatStyle,
     ChatJargon,
     ChatMemory,
     ChatEpisode,
     ChatMessage,
     ChatProfile,
+    ChatBehavior,
     ChatJobBatch,
     ChatRelation,
     ChatTurnItem,
@@ -24,6 +26,8 @@ from .models import (
     ChatExpression,
     ChatForgetMarker,
     ChatSessionState,
+    ChatPlannerSample,
+    ChatBehaviorSample,
     ChatMemoryEvidence,
 )
 
@@ -44,6 +48,10 @@ _MODELS = (
     ChatStyle,
     ChatJargon,
     ChatExpression,
+    ChatPlannerSample,
+    ChatState,
+    ChatBehavior,
+    ChatBehaviorSample,
 )
 _DIALECT = sqlite.dialect()
 

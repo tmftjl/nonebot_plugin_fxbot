@@ -15,6 +15,7 @@ from ..types import ChatRequest, speaker_label
 
 GROUP_WINDOW = 2.0
 PRIVATE_WINDOW = 0.8
+FORCED_FLUSH_SECONDS = 0.5
 BATCH_MAX_MESSAGES = 10
 BATCH_MAX_SECONDS = 30.0
 
@@ -41,6 +42,8 @@ class PendingBatch:
     trigger_seq: int = 0
     accepted_epoch: int | None = None
     forced: bool = False
+    forced_kind: str = ""
+    has_proactive: bool = False
     cancelled: bool = False
     changed: asyncio.Event = field(default_factory=asyncio.Event)
 
@@ -49,17 +52,24 @@ class PendingBatch:
         """是否已达到单批消息上限。"""
         return len(self.requests) >= BATCH_MAX_MESSAGES
 
-    def accept(self, request: ChatRequest, *, trigger: bool) -> bool:
-        """并入一条消息并顺延窗口；已满时拒绝。"""
+    def accept(self, request: ChatRequest, *, trigger: bool, extend: bool = True) -> bool:
+        """并入一条消息并按需顺延窗口；已满时拒绝。"""
         if self.full:
             return False
         self.requests.append(request)
+        self.has_proactive = self.has_proactive or request.proactive or request.trigger_kind == "proactive"
         if trigger:
             self.forced = True
+            if request.trigger_kind in {"mention", "persona", "private"}:
+                self.forced_kind = request.trigger_kind
             self.trigger_seq = request.trigger_seq or self.trigger_seq
             if request.accepted_epoch is not None:
                 self.accepted_epoch = request.accepted_epoch
-        self.deadline = min(_now() + window_for(request), self.started + BATCH_MAX_SECONDS)
+        if extend:
+            if trigger and request.trigger_kind in {"mention", "persona"} and self.has_proactive:
+                self.deadline = min(self.deadline, _now() + FORCED_FLUSH_SECONDS, self.started + BATCH_MAX_SECONDS)
+            else:
+                self.deadline = min(_now() + window_for(request), self.started + BATCH_MAX_SECONDS)
         self.changed.set()
         return True
 
@@ -112,6 +122,8 @@ class PendingBatch:
             batched=True,
             source_message_ids=message_ids,
             source_author_ids=author_ids,
+            trigger_kind=self.forced_kind or first.trigger_kind,
+            proactive=self.has_proactive,
             trigger_seq=self.trigger_seq,
             accepted_epoch=self.accepted_epoch,
             activity_seq=max(request.activity_seq for request in self.requests),
@@ -140,6 +152,8 @@ class DebounceRegistry:
             trigger_seq=request.trigger_seq,
             accepted_epoch=request.accepted_epoch,
             forced=True,
+            forced_kind=request.trigger_kind if request.trigger_kind != "proactive" else "",
+            has_proactive=request.proactive or request.trigger_kind == "proactive",
         )
         self._batches[request.session_id] = batch
         return batch
@@ -148,6 +162,13 @@ class DebounceRegistry:
         """把新的 @/人格触发并入已有批次；没有批次或已满时返回 None。"""
         batch = self._batches.get(request.session_id)
         if batch is None or not batch.accept(request, trigger=True):
+            return None
+        return batch
+
+    def merge_proactive(self, request: ChatRequest) -> PendingBatch | None:
+        """主动轮并入已有批次但不延长等待，没有批次或已满时返回 None。"""
+        batch = self._batches.get(request.session_id)
+        if batch is None or not batch.accept(request, trigger=False, extend=False):
             return None
         return batch
 

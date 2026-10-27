@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
+
+_TIME_RANGE = re.compile(r"^([01]?\d|2[0-3]):[0-5]\d-([01]?\d|2[0-3]):[0-5]\d$")
 
 SYSTEM_DEFAULTS = {
     "membership": {
@@ -73,6 +76,23 @@ SYSTEM_DEFAULTS = {
         },
         "jargon": {"enabled": True, "inject_max": 5},
         "expression": {"enabled": True, "learn": True, "llm_select": False, "sample_size": 50, "inject_top_k": 5},
+        "proactive": {
+            "enabled": False,
+            "gate_mode": "observe",
+            "talk_value": 1.0,
+            "enable_talk_value_rules": False,
+            "talk_value_rules": [
+                {"tenant": "", "time": "00:00-08:59", "value": 0.8},
+                {"tenant": "", "time": "09:00-18:59", "value": 1.0},
+            ],
+            "group_allowlist": [],
+            "no_action_backoff_base_seconds": 15,
+            "no_action_backoff_cap_seconds": 300,
+            "no_action_backoff_start_count": 2,
+            "no_action_backoff_bypass_pending_count": 6,
+        },
+        "planner": {"enabled": False, "mode": "simple", "max_rounds": 1, "wait_seconds": 60},
+        "mood": {"enabled": True, "decay_per_day": 0.1},
         "behavior": {
             "anti_repeat": True,
             "anti_repeat_threshold": 85,
@@ -151,6 +171,69 @@ def validate_system_config(data: dict[str, Any]) -> None:
     top_k = expression.get("inject_top_k", SYSTEM_DEFAULTS["chat"]["expression"]["inject_top_k"])
     if isinstance(top_k, bool) or not isinstance(top_k, int) or not 1 <= top_k <= 20:
         raise ValueError("chat.expression.inject_top_k 必须是 1 到 20 的整数")
+
+    planner = chat.get("planner", {})
+    if not isinstance(planner, dict):
+        raise ValueError("chat.planner 必须是对象")
+    for key in ("enabled",):
+        if key in planner and not isinstance(planner[key], bool):
+            raise ValueError(f"chat.planner.{key} 必须是布尔值")
+    mode = planner.get("mode", SYSTEM_DEFAULTS["chat"]["planner"]["mode"])
+    if mode not in {"simple", "complex"}:
+        raise ValueError("chat.planner.mode 只能是 simple 或 complex")
+    rounds = planner.get("max_rounds", SYSTEM_DEFAULTS["chat"]["planner"]["max_rounds"])
+    if isinstance(rounds, bool) or not isinstance(rounds, int) or rounds != 1:
+        raise ValueError("chat.planner.max_rounds 只能是 1")
+    wait_seconds = planner.get("wait_seconds", SYSTEM_DEFAULTS["chat"]["planner"]["wait_seconds"])
+    if isinstance(wait_seconds, bool) or not isinstance(wait_seconds, int) or not 30 <= wait_seconds <= 120:
+        raise ValueError("chat.planner.wait_seconds 必须是 30 到 120 的整数")
+
+    mood = chat.get("mood", {})
+    if not isinstance(mood, dict):
+        raise ValueError("chat.mood 必须是对象")
+    if "enabled" in mood and not isinstance(mood["enabled"], bool):
+        raise ValueError("chat.mood.enabled 必须是布尔值")
+    decay = mood.get("decay_per_day", SYSTEM_DEFAULTS["chat"]["mood"]["decay_per_day"])
+    if isinstance(decay, bool) or not isinstance(decay, (int, float)) or not 0 <= decay <= 1:
+        raise ValueError("chat.mood.decay_per_day 必须是 0 到 1 之间的数字")
+
+    proactive = chat.get("proactive", {})
+    if not isinstance(proactive, dict):
+        raise ValueError("chat.proactive 必须是对象")
+    for key in ("enabled", "enable_talk_value_rules"):
+        if key in proactive and not isinstance(proactive[key], bool):
+            raise ValueError(f"chat.proactive.{key} 必须是布尔值")
+    gate_mode = proactive.get("gate_mode", SYSTEM_DEFAULTS["chat"]["proactive"]["gate_mode"])
+    if gate_mode not in {"observe", "enforce"}:
+        raise ValueError("chat.proactive.gate_mode 只能是 observe 或 enforce")
+    talk_value = proactive.get("talk_value", SYSTEM_DEFAULTS["chat"]["proactive"]["talk_value"])
+    if isinstance(talk_value, bool) or not isinstance(talk_value, (int, float)) or not 0 <= talk_value <= 1:
+        raise ValueError("chat.proactive.talk_value 必须是 0 到 1 的数字")
+    allowlist = proactive.get("group_allowlist", SYSTEM_DEFAULTS["chat"]["proactive"]["group_allowlist"])
+    if not isinstance(allowlist, (list, tuple, set)) or any(not isinstance(item, str) for item in allowlist):
+        raise ValueError("chat.proactive.group_allowlist 必须是字符串数组")
+    rules = proactive.get("talk_value_rules", SYSTEM_DEFAULTS["chat"]["proactive"]["talk_value_rules"])
+    if not isinstance(rules, list):
+        raise ValueError("chat.proactive.talk_value_rules 必须是数组")
+    for rule in rules:
+        if not isinstance(rule, dict):
+            raise ValueError("chat.proactive.talk_value_rules 的每一项必须是对象")
+        if not isinstance(rule.get("tenant", ""), str):
+            raise ValueError("chat.proactive.talk_value_rules.tenant 必须是字符串")
+        if not _TIME_RANGE.fullmatch(str(rule.get("time") or "")):
+            raise ValueError("chat.proactive.talk_value_rules.time 必须形如 09:00-18:59")
+        value = rule.get("value")
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= 1:
+            raise ValueError("chat.proactive.talk_value_rules.value 必须是 0 到 1 的数字")
+    for key, minimum in (
+        ("no_action_backoff_base_seconds", 0),
+        ("no_action_backoff_cap_seconds", 0),
+        ("no_action_backoff_start_count", 1),
+        ("no_action_backoff_bypass_pending_count", 0),
+    ):
+        value = proactive.get(key, SYSTEM_DEFAULTS["chat"]["proactive"][key])
+        if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+            raise ValueError(f"chat.proactive.{key} 必须是不小于 {minimum} 的整数")
 
     behavior = chat.get("behavior", {})
     if not isinstance(behavior, dict):

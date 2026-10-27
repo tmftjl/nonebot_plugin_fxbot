@@ -22,6 +22,7 @@ class ToolContext:
     group_id: str | None = None
     session_id: str = ""
     platform: str = ""
+    proactive: bool = False
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @property

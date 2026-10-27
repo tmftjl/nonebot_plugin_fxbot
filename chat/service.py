@@ -8,13 +8,16 @@ import hashlib
 from uuid import uuid4
 from typing import Any
 from datetime import datetime
+from dataclasses import dataclass
 
 from nonebot import logger
 
+from .mood import planner_hints, record_action, touch_interaction
 from .tools import ToolContext, ToolRuntime, execute_tool, tool_allowed, default_registry
 from .types import MentionRef, ChatRequest, ChatResponse, speaker_label
 from .memory import state as memory_state
 from ..config import get_manager as get_config_manager
+from .planner import Plan, request_plan, plan_features, planner_config, planner_model_name, record_plan_sample
 from .session import ChatSessionStore, default_session_store
 from ..adapter import build_message, supports_reply, build_reply_segment, build_message_segment
 from .bindings import PERSONA, PROVIDER, get_binding
@@ -28,6 +31,7 @@ from .behavior.quote import should_quote, normalize_quote_mode
 from .message_adapter import load_images
 from .behavior.debounce import default_debounce_registry
 from .memory.repository import chat_repository
+from .behavior.reply_gate import default_reply_gate_registry
 from .behavior.anti_repeat import forget_replies, remember_reply, rewrite_reason, rewrite_instruction
 
 
@@ -122,6 +126,73 @@ def _mark_current(content: str | list[dict[str, Any]]) -> str | list[dict[str, A
     return [{"type": "text", "text": _CURRENT_MARK}, *content]
 
 
+def _append_note(messages: list[dict[str, Any]], note: str) -> None:
+    """把补充要求并进最后一条消息，避免新增 system 消息覆盖人格。"""
+    if not messages:
+        messages.append({"role": "user", "content": note})
+        return
+    content = messages[-1].get("content")
+    if isinstance(content, str):
+        messages[-1]["content"] = f"{content}\n{note}"
+    elif isinstance(content, list):
+        content.append({"type": "text", "text": note})
+    else:
+        messages.append({"role": "user", "content": note})
+
+
+def _assemble_messages(
+    request: ChatRequest,
+    history: list[dict[str, Any]],
+    persona_text: str,
+    memory_block: str,
+    current_content: Any,
+) -> list[dict[str, Any]]:
+    """组装发给模型的消息：人格、记忆、历史背景和本轮待回应内容。"""
+    messages: list[dict[str, Any]] = []
+    if persona_text:
+        messages.append({"role": "system", "content": persona_text})
+    if memory_block:
+        messages.append({"role": "system", "content": memory_block})
+    if request.is_group:
+        split = len(history)
+        while split and history[split - 1].get("role") == "user":
+            split -= 1
+        messages.extend(history[:split])
+        if block := _background_block(history[split:]):
+            messages.append({"role": "user", "content": block})
+        messages.append({"role": "user", "content": _mark_current(current_content)})
+    else:
+        messages.extend(history)
+        messages.append({"role": "user", "content": current_content})
+    return messages
+
+
+@dataclass
+class _PlanContext:
+    """规划动作执行所需的本轮上下文。"""
+
+    request: ChatRequest
+    messages: list[dict[str, Any]]
+    entry: dict[str, Any]
+    epoch: int
+    runtime: ToolRuntime
+    allowed_names: set[str]
+    persona_text: str
+    memory_block: str
+    current_content: Any
+    history_budget: int
+    limit: int
+    provider_name: str
+
+
+@dataclass
+class _PlanOutcome:
+    """动作执行结果；finished 表示本轮不再调用回复模型。"""
+
+    finished: bool = False
+    messages: list[dict[str, Any]] | None = None
+
+
 def _content_chars(content: Any) -> int:
     """统计一条历史消息的文本长度，图片段不计字符。"""
     if isinstance(content, str):
@@ -199,6 +270,11 @@ def _scene_hint(request: ChatRequest, persona_name: str = "") -> str:
                 "消息末尾的「[@成员: 昵称(ID)]」列出了被 @ 的成员，是系统标记不是正文；"
                 "用户要求对某人操作时直接用其中的 ID，没给出目标就先问清楚，不要对发起人自己执行。"
             )
+        if _is_proactive(request):
+            lines.append(
+                "本轮是主动接话：没有人在 @ 你，默认不要 @ 人、不要引用消息；"
+                "顺着话题自然接一句，不需要回应或话题已经结束时保持安静。"
+            )
         return "".join(lines)
     return "\n\n用户正在跟你私聊。"
 
@@ -248,18 +324,25 @@ async def _memory_block(request: ChatRequest, query: str = "") -> str:
         return ""
 
 
-async def _allowed_tools(runtime: ToolRuntime) -> tuple[set[str], list[dict[str, Any]]]:
-    """按控制台开关和调用者权限过滤工具。"""
+PROACTIVE_TOOLS = frozenset({"search_memory", "search_knowledge", "web_search"})
+
+
+def _is_proactive(request: ChatRequest) -> bool:
+    """本轮是否包含主动触发；混合批次也按主动轮限权。"""
+    return request.proactive or request.trigger_kind == "proactive"
+
+
+async def _allowed_tools(runtime: ToolRuntime, *, proactive: bool = False) -> tuple[set[str], list[dict[str, Any]]]:
+    """按控制台开关和调用者权限过滤工具；主动轮只保留只读工具。"""
     try:
         enabled = {str(name) for name in get_config_manager().get_system()["chat"].get("enabled_tools") or []}
     except Exception:
         logger.opt(exception=True).warning("[Chat] 读取工具配置失败，拒绝所有工具")
         return set(), []
-    names = {
-        spec.name
-        for spec in default_registry.list()
-        if (not enabled or spec.name in enabled) and await tool_allowed(spec, runtime)
-    }
+    specs = default_registry.list()
+    if proactive:
+        specs = [spec for spec in specs if spec.name in PROACTIVE_TOOLS]
+    names = {spec.name for spec in specs if (not enabled or spec.name in enabled) and await tool_allowed(spec, runtime)}
     tools = [tool for tool in default_registry.to_openai_tools() if tool["function"]["name"] in names]
     return names, tools
 
@@ -383,6 +466,8 @@ class ChatService:
         async with self.session_store.turn_lock(request.session_id):
             response = await self._process_locked(request, runtime)
             if not response.text or not self.is_current(request.session_id, response.epoch):
+                if not response.text and _is_proactive(request):
+                    default_reply_gate_registry.get(request.session_id).record_idle()
                 return False
             if not self.is_latest(request):
                 logger.debug(f"[Chat] 回复已被新触发取代，取消发送: session={request.session_id}")
@@ -403,10 +488,13 @@ class ChatService:
             logger.debug(f"[Chat] 清空后跳过排队轮次: session={request.session_id}")
             return ChatResponse(text="", epoch=request.accepted_epoch)
         try:
-            return await self._process(request, runtime)
+            response = await self._process(request, runtime)
         except Exception as exc:
             await self._mark_turn_failed(request, exc)
             raise
+        if not _is_proactive(request):
+            await touch_interaction(request)
+        return response
 
     @staticmethod
     def _item_id(response: ChatResponse, index: int) -> int | None:
@@ -432,7 +520,7 @@ class ChatService:
     def _quote_payload(self, request: ChatRequest, runtime: ToolRuntime, part: str) -> Any | None:
         """构造「引用段 + 正文」；平台不支持或构造失败时返回 None 走纯文本。"""
         bot = getattr(runtime, "bot", None)
-        if bot is None or not request.message_id:
+        if bot is None or not request.message_id or _is_proactive(request):
             return None
         has_newer = bool(request.activity_seq) and (
             self.session_store.activity(request.session_id) > request.activity_seq
@@ -482,6 +570,8 @@ class ChatService:
                 sent += 1
         if sent:
             remember_reply(request.session_id, "\n".join(parts[:sent]))
+            if request.is_group:
+                default_reply_gate_registry.get(request.session_id).record_reply()
         return sent > 0
 
     async def ensure_hydrated(self, session_id: str) -> None:
@@ -495,6 +585,7 @@ class ChatService:
     async def clear_session(self, session_id: str) -> None:
         """清空会话历史；内存、数据库、待合并批次与在途轮次一起失效。"""
         default_debounce_registry.clear(session_id)
+        default_reply_gate_registry.clear(session_id)
         forget_replies(session_id)
         async with self.session_store.lock(session_id):
             self.session_store.clear(session_id)
@@ -907,6 +998,163 @@ class ChatService:
         candidate.tool_call_ids = []
         return candidate
 
+    async def _maybe_plan(
+        self,
+        request: ChatRequest,
+        messages: list[dict[str, Any]],
+        tools: list[str],
+        provider: Any,
+        *,
+        history_len: int = 0,
+        memory_chars: int = 0,
+    ) -> Plan | None:
+        """复杂模式下调用一次规划器；关闭或失败时返回 None，回退普通回复。"""
+        config = planner_config()
+        if not config.get("enabled") or config.get("mode") != "complex":
+            return None
+        model = planner_model_name()
+        try:
+            hint = await planner_hints(request)
+            plan = await request_plan(
+                provider,
+                messages,
+                tools,
+                model=model,
+                default_wait=int(config.get("wait_seconds", 60)),
+                hint=hint,
+            )
+        except Exception:
+            logger.opt(exception=True).warning("[ChatPlanner] 规划失败，回退普通回复")
+            return None
+        if plan is None:
+            logger.debug("[ChatPlanner] 规划结果无法解析，回退普通回复")
+            return None
+        await record_action(request, plan.action)
+        actual_model = model or str(getattr(provider, "get_model", lambda: "")())
+        features = plan_features(request, history_len=history_len, memory_chars=memory_chars)
+        await record_plan_sample(
+            request,
+            plan,
+            features,
+            provider=str(getattr(provider, "provider_id", "")),
+            model=actual_model,
+        )
+        return plan
+
+    async def _dispatch_plan(self, context: _PlanContext, plan: Plan) -> _PlanOutcome:
+        """按动作分派；text_reply 与 emoji_reply 继续走回复模型。"""
+        handlers = {
+            "no_reply": self._plan_silent,
+            "end_conversation": self._plan_silent,
+            "wait": self._plan_wait,
+            "tool": self._plan_tool,
+            "fetch_knowledge": self._plan_tool,
+        }
+        handler = handlers.get(plan.action)
+        if handler is None:
+            return _PlanOutcome()
+        return await handler(context, plan)
+
+    async def _plan_silent(self, context: _PlanContext, _plan: Plan) -> _PlanOutcome:
+        """保持安静：结束本轮，不生成也不发送。"""
+        await self._end_turn_without_reply(context.request, context.provider_name)
+        return _PlanOutcome(finished=True)
+
+    async def _plan_wait(self, context: _PlanContext, plan: Plan) -> _PlanOutcome:
+        """等一会儿再回复；期间新消息进入历史，新触发会取代本轮。"""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(0, plan.wait_seconds)
+        while loop.time() < deadline:
+            if not self._alive(context.request, context.epoch):
+                break
+            await asyncio.sleep(min(1.0, deadline - loop.time()))
+        if not self._alive(context.request, context.epoch):
+            await self._mark_turn_aborted(context.request, "等待期间被新触发取代")
+            return _PlanOutcome(finished=True)
+        return _PlanOutcome(messages=await self._rebuild_messages(context))
+
+    async def _plan_tool(self, context: _PlanContext, plan: Plan) -> _PlanOutcome:
+        """先执行规划器选定的工具，再把结果交给回复模型。"""
+        tool_context = ToolContext(
+            user_id=context.request.user_id,
+            group_id=context.request.group_id,
+            session_id=context.request.session_id,
+            platform=context.request.platform,
+            proactive=_is_proactive(context.request),
+            metadata=dict(context.request.metadata),
+        )
+        arguments = json.dumps(plan.arguments, ensure_ascii=False, default=str)
+        try:
+            result = await asyncio.wait_for(
+                execute_tool(
+                    plan.tool,
+                    arguments,
+                    tool_context,
+                    context.runtime,
+                    allowed_names=context.allowed_names,
+                ),
+                timeout=_TOOL_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            result = {"ok": False, "error": "工具执行超时"}
+        except Exception:
+            logger.opt(exception=True).warning("[ChatPlanner] 规划工具调用失败")
+            result = {"ok": False, "error": "工具执行失败"}
+        call_id = f"plan-{uuid4().hex}"
+        call = {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": call_id,
+                    "type": "function",
+                    "function": {"name": plan.tool, "arguments": arguments},
+                }
+            ],
+        }
+        tool_message = {
+            "role": "tool",
+            "tool_call_id": call_id,
+            "name": plan.tool,
+            "content": _tool_result_content(result),
+        }
+        return _PlanOutcome(messages=[*context.messages, call, tool_message])
+
+    async def _rebuild_messages(self, context: _PlanContext) -> list[dict[str, Any]]:
+        """等待结束后重新读取历史，合并等待期间写入的普通消息。"""
+        async with self.session_store.lock(context.request.session_id):
+            self.session_store.trim(context.request.session_id, context.limit)
+            history = [
+                message
+                for message in self.session_store.get(context.request.session_id)
+                if message.get("role") != "system" and message is not context.entry
+            ]
+            while history and history[0].get("role") != "user":
+                history.pop(0)
+            history = _trim_history(history, context.history_budget)
+        return _assemble_messages(
+            context.request,
+            history,
+            context.persona_text,
+            context.memory_block,
+            context.current_content,
+        )
+
+    async def _end_turn_without_reply(self, request: ChatRequest, provider_name: str) -> None:
+        """规划为不回复时把轮次标成 ended，保留用户消息作为上下文。"""
+        if not memory_state.is_ready():
+            return
+        try:
+            await chat_repository.update_turn(
+                request.session_id,
+                request.turn_id,
+                status="ended",
+                provider=provider_name,
+                finished_at=utc_now_naive(),
+            )
+        except Exception:
+            logger.opt(exception=True).warning("[ChatPlanner] 记录结束轮次失败")
+
     async def _process(self, request: ChatRequest, runtime: ToolRuntime | None) -> ChatResponse:
         """完成一轮对话；全程持有轮次锁，仅在读写历史时持有状态锁。"""
         provider_name = _session_provider(request.session_id)
@@ -920,6 +1168,7 @@ class ChatService:
         limit = int(chat_cfg["max_history"])
         history_budget = _history_budget(chat_cfg)
         runtime = runtime or ToolRuntime()
+        proactive = _is_proactive(request)
         user_content = _build_user_content(request)
         current_content = _truncate_content(user_content)
         persona_name = request.metadata.get("persona_name") if isinstance(request.metadata, dict) else None
@@ -954,24 +1203,45 @@ class ChatService:
                 return ChatResponse(text="", epoch=epoch)
 
             memory_block = await _memory_block(request, _recall_query(request, history))
-            messages: list[dict[str, Any]] = []
-            if persona_text:
-                messages.append({"role": "system", "content": persona_text})
-            if memory_block:
-                messages.append({"role": "system", "content": memory_block})
-            if request.is_group:
-                split = len(history)
-                while split and history[split - 1].get("role") == "user":
-                    split -= 1
-                messages.extend(history[:split])
-                if block := _background_block(history[split:]):
-                    messages.append({"role": "user", "content": block})
-                messages.append({"role": "user", "content": _mark_current(current_content)})
-            else:
-                messages.extend(history)
-                messages.append({"role": "user", "content": current_content})
+            messages = _assemble_messages(request, history, persona_text, memory_block, current_content)
 
-            allowed_names, tools = await _allowed_tools(runtime)
+            allowed_names, tools = await _allowed_tools(runtime, proactive=proactive)
+            planner_cfg = planner_config()
+            plan = await self._maybe_plan(
+                request,
+                messages,
+                sorted(allowed_names),
+                provider,
+                history_len=len(history),
+                memory_chars=len(memory_block),
+            )
+            planner_expected = bool(planner_cfg.get("enabled")) and planner_cfg.get("mode") == "complex"
+            if plan is None and proactive and planner_expected:
+                await self._end_turn_without_reply(request, provider_name)
+                return ChatResponse(text="", epoch=epoch, metadata={"plan_action": "no_action"})
+            plan_action = plan.action if plan is not None else ""
+            if plan is not None:
+                context = _PlanContext(
+                    request=request,
+                    messages=messages,
+                    entry=entry,
+                    epoch=epoch,
+                    runtime=runtime,
+                    allowed_names=allowed_names,
+                    persona_text=persona_text,
+                    memory_block=memory_block,
+                    current_content=current_content,
+                    history_budget=history_budget,
+                    limit=limit,
+                    provider_name=provider_name,
+                )
+                outcome = await self._dispatch_plan(context, plan)
+                if outcome.finished:
+                    return ChatResponse(text="", epoch=epoch, metadata={"plan_action": plan.action})
+                if outcome.messages is not None:
+                    messages = outcome.messages
+                if plan.action == "emoji_reply":
+                    _append_note(messages, "[本轮只回一个自然的表情或很短的文字，不要展开或解释。]")
             response = await provider.chat(messages=messages, tools=tools or None)
 
             tool_calls_seen = 0
@@ -985,6 +1255,7 @@ class ChatService:
                     group_id=request.group_id,
                     session_id=request.session_id,
                     platform=request.platform,
+                    proactive=proactive,
                     metadata=dict(request.metadata),
                 )
                 previous_calls = tool_calls_seen
@@ -1066,6 +1337,8 @@ class ChatService:
                 request, persisted, response, provider_name, str(entry["content"]), descriptions, parts
             )
             result = ChatResponse(text=response.content, raw=response, epoch=epoch)
+            if plan_action:
+                result.metadata["plan_action"] = plan_action
             if parts:
                 result.metadata["reply_parts"] = parts
             if item_ids is not None:

@@ -33,6 +33,7 @@ from .message_adapter import (
     image_sources_for_event,
 )
 from .behavior.debounce import default_debounce_registry
+from .behavior.reply_gate import proactive_config, proactive_switch, default_reply_gate_registry
 from ..permission.message_policy import should_process_fxbot_message
 
 
@@ -74,6 +75,44 @@ def _has_image(event: Any) -> bool:
         return False
 
 
+_PROACTIVE_ATTR = "_fxbot_proactive_pass"
+
+
+def _proactive_allowlist(cfg: dict[str, Any]) -> set[str]:
+    """主动接话群白名单；空集合表示没有群启用。"""
+    value = cfg.get("group_allowlist")
+    if not isinstance(value, (list, tuple, set)):
+        return set()
+    return {str(item).strip() for item in value if item is not None and str(item).strip()}
+
+
+async def _proactive_gate(bot: Any, event: Any, cfg: dict[str, Any], *, text: str, has_image: bool) -> bool:
+    """普通群消息只采样一次；观察模式下永远返回 False。"""
+    identity = event_identity(bot, event)
+    gate = default_reply_gate_registry.get(identity.session_id)
+    observation = gate.observe_message(
+        [identity.dedupe_key],
+        [text or ("[图片]" if has_image else "")],
+    )
+    settings = proactive_config()
+    group_id = normalize_id(event_group_id(event)) or ""
+    enabled = (
+        settings.get("gate_mode") == "enforce"
+        and bool(settings.get("enabled"))
+        and bool(group_id)
+        and group_id in _proactive_allowlist(settings)
+    )
+    if enabled:
+        enabled = await proactive_switch(identity.session_id) is not False
+    if not enabled:
+        gate.reset_pending()
+        return False
+    if not observation.would_trigger or gate.backoff_delay() > 0:
+        return False
+    gate.mark_triggered()
+    return True
+
+
 def _allowed_group_id(cfg: dict[str, Any], event: Any) -> str | None:
     """返回允许使用 AI 的群 ID，不在白名单内时返回 None。"""
     group_id = event_group_id(event)
@@ -100,7 +139,7 @@ async def _ai_fallback_rule(bot: Bot, event: Event) -> bool:
     cfg = _chat_cfg()
     if not bool(cfg["enabled"]):
         return False
-    if not _match_context(cfg, bot, event):
+    if not getattr(event, _PROACTIVE_ATTR, False) and not _match_context(cfg, bot, event):
         return False
     text = event_plain_text(event)
     if not text and not _has_image(event):
@@ -124,7 +163,13 @@ async def _context_rule(bot: Bot, event: Event) -> bool:
     prefix = tuple(str(item) for item in cfg["command_prefixes"])
     if text and text.startswith(prefix):
         return False
-    return bool(text) or _has_image(event)
+    has_image = _has_image(event)
+    if not text and not has_image:
+        return False
+    if await _proactive_gate(bot, event, cfg, text=text, has_image=has_image):
+        setattr(event, _PROACTIVE_ATTR, True)
+        return False
+    return True
 
 
 # 优先级高于 AI 兜底：先记录群聊上下文，再由兜底决定是否回复
@@ -138,13 +183,14 @@ async def _handle_context(bot: Bot, event: Event) -> None:
     identity = event_identity(bot, event)
     if not chat_service.session_store.mark_seen(identity.session_id, identity.dedupe_key):
         return
+    has_image = _has_image(event)
+    text = event_plain_text(event)
     user_id = normalize_id(event_user_id(event)) or ""
     batch = default_debounce_registry.get(identity.session_id)
     if batch is not None and batch.owner_id == user_id and not batch.full:
         # 同作者在等待窗口内续发，完整适配后并入本轮而不是单独开一轮
         if default_debounce_registry.merge_context(await adapt_message_event(bot, event, trigger_kind="mention")):
             return
-    has_image = _has_image(event)
     images = image_sources_for_event(event) if has_image else []
     # 上下文消息只做廉价提取：昵称取消息段里现成的，不额外查成员接口
     mentions = await collect_mentions(bot, event, event_group_id(event), resolve_names=False)
@@ -152,7 +198,7 @@ async def _handle_context(bot: Bot, event: Event) -> None:
         identity.session_id,
         user_id,
         event_user_name(event, user_id),
-        event_plain_text(event),
+        text,
         images=images,
         has_image=has_image,
         mentions=mentions,
@@ -183,18 +229,27 @@ async def _handle_ai_fallback(bot: Bot, event: Event, matcher: Matcher) -> None:
     if not chat_service.session_store.mark_seen(identity.session_id, identity.dedupe_key):
         logger.debug("[Chat] 忽略重复投递的 AI 消息")
         return
-    trigger_kind: TriggerKind = "private" if not event_group_id(event) else "mention" if _is_to_me(event) else "persona"
+    if getattr(event, _PROACTIVE_ATTR, False):
+        trigger_kind: TriggerKind = "proactive"
+    else:
+        trigger_kind = "private" if not event_group_id(event) else "mention" if _is_to_me(event) else "persona"
     request = await adapt_message_event(bot, event, trigger_kind=trigger_kind)
+    if trigger_kind in {"mention", "persona"}:
+        default_reply_gate_registry.get(identity.session_id).record_forced_turn([identity.dedupe_key])
     # 序号与代次在进入 turn_lock 前捕获，用于丢弃被新消息或清空取代的旧回复
     await chat_service.ensure_hydrated(request.session_id)
-    request.trigger_seq = chat_service.session_store.next_seq(request.session_id, request.user_id)
+    seq_owner = "\0proactive" if trigger_kind == "proactive" else request.user_id
+    request.trigger_seq = chat_service.session_store.next_seq(request.session_id, seq_owner)
     request.accepted_epoch = chat_service.session_store.epoch(request.session_id)
     request.activity_seq = chat_service.session_store.activity(request.session_id)
     runtime = default_runtime_factory.create(bot=bot, event=event, matcher=matcher)
     registered = default_debounce_registry.get(identity.session_id)
     if registered is not None:
         # 并入已有批次由 owner 回复；批次已满时立即处理，避免丢掉这条触发
-        if default_debounce_registry.merge_trigger(request) is not None:
+        if trigger_kind == "proactive":
+            if default_debounce_registry.merge_proactive(request) is not None:
+                return
+        elif default_debounce_registry.merge_trigger(request) is not None:
             return
         await _process_and_send(request, runtime, matcher)
         return

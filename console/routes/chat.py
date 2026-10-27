@@ -9,8 +9,15 @@ from datetime import datetime
 from fastapi import Depends, APIRouter, HTTPException
 
 from ..auth import bearer_auth
-from ...utils.tz import as_shanghai
-from ...chat.memory.repository import chat_repository
+from ...utils.tz import SHANGHAI_TZ, as_shanghai
+from ...chat.memory.repository import BEHAVIOR_MIN_SAMPLES, chat_repository
+from ...chat.behavior.reply_gate import (
+    ReplyGate,
+    talk_value_for,
+    proactive_config,
+    proactive_switch,
+    default_reply_gate_registry,
+)
 
 router = APIRouter(prefix="/chat", tags=["fxbot-chat"], dependencies=[Depends(bearer_auth)])
 
@@ -95,6 +102,56 @@ def _expression_payload(row: object) -> dict[str, Any]:
     }
 
 
+def _planner_payload(row: object) -> dict[str, Any]:
+    """把规划样本转成控制台结构。"""
+    try:
+        features = json.loads(str(getattr(row, "features", "{}")))
+    except (TypeError, ValueError):
+        features = {}
+    return {
+        "id": getattr(row, "id", 0),
+        "turn_id": getattr(row, "turn_id", ""),
+        "trigger_kind": getattr(row, "trigger_kind", ""),
+        "action": getattr(row, "action", ""),
+        "label": getattr(row, "label", 0),
+        "features": features if isinstance(features, dict) else {},
+        "provider": getattr(row, "provider", ""),
+        "model": getattr(row, "model", ""),
+        "created_at": _iso(getattr(row, "created_at", None)),
+    }
+
+
+def _behavior_payload(row: object) -> dict[str, Any]:
+    """把行为聚合行转成控制台结构。"""
+    return {
+        "scene_tags": [str(item) for item in _json_list(getattr(row, "scene_tags", "[]"))],
+        "action": getattr(row, "action", ""),
+        "outcome": getattr(row, "outcome", ""),
+        "confidence": getattr(row, "confidence", 0.0),
+        "count": getattr(row, "count", 0),
+        "last_seen": _iso(getattr(row, "last_seen", None)),
+    }
+
+
+def _gate_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """把内存观察转成控制台结构；墙钟时间按上海时区输出。"""
+    observations: list[dict[str, Any]] = []
+    for row in payload.get("observations", []):
+        item = dict(row)
+        occurred_at = item.get("occurred_at")
+        if isinstance(occurred_at, (int, float)):
+            item["occurred_at"] = datetime.fromtimestamp(occurred_at, SHANGHAI_TZ).isoformat()
+        observations.append(item)
+    return {
+        # 发布权重只是先验，还没用本群 Planner 样本校准
+        "calibrated": False,
+        "window": payload.get("window", {}),
+        "backoff": payload.get("backoff", {}),
+        "observations": observations,
+        "distribution": payload.get("distribution", []),
+    }
+
+
 @router.get("/tenants")
 async def list_tenants() -> dict[str, Any]:
     """列出仍有消息的租户，供控制台选择。"""
@@ -103,6 +160,67 @@ async def list_tenants() -> dict[str, Any]:
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail="聊天记忆数据库尚未就绪") from exc
     return {"tenants": tenants}
+
+
+@router.get("/planner")
+async def list_planner_samples(tenant: str, limit: int = 100) -> dict[str, Any]:
+    """列出最近的 Planner 首轮动作样本，供校准与追溯。"""
+    tenant = _tenant(tenant)
+    limit = max(1, min(500, int(limit)))
+    try:
+        rows = await chat_repository.list_planner_samples(tenant, limit)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail="聊天记忆数据库尚未就绪") from exc
+    return {"items": [_planner_payload(row) for row in rows]}
+
+
+@router.get("/gate")
+async def get_reply_gate(tenant: str, limit: int = 100) -> dict[str, Any]:
+    """读取主动接话门控的观察窗口与当前开关。"""
+    tenant = _tenant(tenant)
+    limit = max(1, min(200, int(limit)))
+    gate = default_reply_gate_registry.peek(tenant)
+    payload = _gate_payload((gate or ReplyGate(tenant)).snapshot(limit))
+    cfg = proactive_config()
+    allowlist = {
+        str(item).strip() for item in cfg.get("group_allowlist") or [] if item is not None and str(item).strip()
+    }
+    group_id = tenant.rsplit(":group:", 1)[1] if ":group:" in tenant else ""
+    payload["proactive"] = {
+        "enabled": bool(cfg.get("enabled")),
+        "gate_mode": str(cfg.get("gate_mode") or "observe"),
+        "talk_value": talk_value_for(tenant),
+        "switch": await proactive_switch(tenant),
+        "group_allowed": bool(group_id and group_id in allowlist),
+    }
+    return payload
+
+
+@router.get("/behavior")
+async def get_behavior(tenant: str, limit: int = 100) -> dict[str, Any]:
+    """读取行为聚合与已归因样本数；达到阈值后才会进入 Planner 提示。"""
+    tenant = _tenant(tenant)
+    limit = max(1, min(200, int(limit)))
+    try:
+        rows, attributed = await chat_repository.behavior_hints(tenant, limit=limit, minimum=0)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail="聊天记忆数据库尚未就绪") from exc
+    return {
+        "items": [_behavior_payload(row) for row in rows],
+        "attributed": attributed,
+        "minimum": BEHAVIOR_MIN_SAMPLES,
+    }
+
+
+@router.delete("/behavior")
+async def delete_behavior(tenant: str) -> dict[str, bool]:
+    """清空指定租户的行为样本与聚合。"""
+    tenant = _tenant(tenant)
+    try:
+        await chat_repository.clear_behavior(tenant)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail="聊天记忆数据库尚未就绪") from exc
+    return {"deleted": True}
 
 
 @router.get("/style")

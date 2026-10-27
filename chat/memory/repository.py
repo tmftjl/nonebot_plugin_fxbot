@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+from typing import Any
 from datetime import datetime, timedelta
 from dataclasses import dataclass
 
@@ -15,12 +17,14 @@ from ...db import with_session
 from .models import (
     ChatTurn,
     ChatAlias,
+    ChatState,
     ChatStyle,
     ChatJargon,
     ChatMemory,
     ChatEpisode,
     ChatMessage,
     ChatProfile,
+    ChatBehavior,
     ChatJobBatch,
     ChatRelation,
     ChatTurnItem,
@@ -28,10 +32,47 @@ from .models import (
     ChatExpression,
     ChatForgetMarker,
     ChatSessionState,
+    ChatPlannerSample,
+    ChatBehaviorSample,
     ChatMemoryEvidence,
     utc_now_naive,
 )
+from ...config import get_manager as get_config_manager
 from .filtering import should_learn
+from ...utils.tz import as_shanghai
+
+FAMILIARITY_STEP = 0.02
+BEHAVIOR_OBSERVE_MINUTES = 10
+BEHAVIOR_MIN_SAMPLES = 50
+
+
+def _mood_config() -> dict[str, Any]:
+    """读取情绪配置；缺失或非法时按默认值处理。"""
+    try:
+        value = get_config_manager().get_system()["chat"].get("mood")
+    except Exception:
+        value = None
+    return value if isinstance(value, dict) else {}
+
+
+def mood_enabled() -> bool:
+    """情绪与熟悉度是否启用。"""
+    return bool(_mood_config().get("enabled", True))
+
+
+def _mood_decay_per_day() -> float:
+    value = _mood_config().get("decay_per_day", 0.1)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0.1
+    return min(1.0, max(0.0, float(value)))
+
+
+def _toward_zero(value: float, amount: float) -> float:
+    return max(0.0, value - amount) if value >= 0 else min(0.0, value + amount)
+
+
+def _clamp(value: float, low: float, high: float) -> float:
+    return min(high, max(low, value))
 
 
 @dataclass(frozen=True)
@@ -203,6 +244,7 @@ class ChatRepository:
         await session.execute(delete(ChatTurnItem).where(ChatTurnItem.tenant == tenant))
         await session.execute(delete(ChatTurn).where(ChatTurn.tenant == tenant))
         await session.execute(delete(ChatMessage).where(ChatMessage.tenant == tenant))
+        await session.execute(delete(ChatPlannerSample).where(ChatPlannerSample.tenant == tenant))
         states = await ChatSessionState.select_rows(tenant=tenant, session=session)
         state = states[0] if states else None
         timestamp = utc_now_naive()
@@ -227,6 +269,58 @@ class ChatRepository:
         state = await self._state_row(session, tenant)
         state.learn_enabled = enabled
         state.updated_at = utc_now_naive()
+
+    @with_session
+    async def set_proactive_enabled(self, session: AsyncSession, tenant: str, enabled: bool) -> None:
+        """写入本群的主动接话开关。"""
+        state = await self._state_row(session, tenant)
+        state.proactive_enabled = enabled
+        state.updated_at = utc_now_naive()
+
+    @with_session
+    async def get_states(
+        self, session: AsyncSession, tenant: str, subject_id: str
+    ) -> tuple[ChatState | None, ChatState | None]:
+        """读取租户情绪行与当前用户的熟悉度行，并顺带应用每日衰减。"""
+        if not mood_enabled():
+            return None, None
+        now = utc_now_naive()
+        decay = _mood_decay_per_day()
+        mood = await self._chat_state_row(session, tenant, "", create=False)
+        user = await self._chat_state_row(session, tenant, subject_id, create=False) if subject_id else None
+        for row in (mood, user):
+            if row is not None:
+                self._decay_state(row, now, decay)
+        return mood, user
+
+    @with_session
+    async def touch_interaction(
+        self, session: AsyncSession, tenant: str, subject_id: str, *, now: datetime | None = None
+    ) -> None:
+        """每次互动提升熟悉度；跨天后先衰减一次。"""
+        if not subject_id or not mood_enabled():
+            return
+        timestamp = now or utc_now_naive()
+        row = await self._chat_state_row(session, tenant, subject_id)
+        self._decay_state(row, timestamp, _mood_decay_per_day())
+        row.familiarity = min(1.0, row.familiarity + FAMILIARITY_STEP)
+        row.last_interaction_at = timestamp
+        row.updated_at = timestamp
+
+    @with_session
+    async def apply_emotion(
+        self,
+        session: AsyncSession,
+        tenant: str,
+        valence: float,
+        arousal: float,
+        *,
+        now: datetime | None = None,
+    ) -> None:
+        """按批次情绪更新租户 EMA；同一批次只调用一次。"""
+        if not mood_enabled():
+            return
+        await self._apply_emotion(session, tenant, (valence, arousal), now or utc_now_naive())
 
     @with_session
     async def upsert_alias(
@@ -798,6 +892,165 @@ class ChatRepository:
         return bool(result.rowcount)
 
     @with_session
+    async def save_planner_sample(self, session: AsyncSession, sample: ChatPlannerSample) -> None:
+        """一轮只保留一条规划样本；重复写入不覆盖首轮标签。"""
+        values = sample.model_dump(exclude={"id"})
+        statement = (
+            sqlite_insert(ChatPlannerSample)
+            .values(**values)
+            .on_conflict_do_nothing(index_elements=["tenant", "turn_id"])
+        )
+        await session.execute(statement)
+
+    @with_session
+    async def list_planner_samples(
+        self, session: AsyncSession, tenant: str, limit: int = 100
+    ) -> list[ChatPlannerSample]:
+        """按租户读取最近的规划样本，供控制台追溯。"""
+        statement = (
+            select(ChatPlannerSample)
+            .where(ChatPlannerSample.tenant == tenant)
+            .order_by(ChatPlannerSample.id.desc())
+            .limit(max(1, int(limit)))
+        )
+        return list((await session.execute(statement)).scalars().all())
+
+    @with_session
+    async def record_behavior_sample(
+        self,
+        session: AsyncSession,
+        tenant: str,
+        turn_id: str,
+        trigger_kind: str,
+        scene_tags: list[str],
+        action: str,
+        *,
+        now: datetime | None = None,
+    ) -> None:
+        """动作发生时写一条待归因样本。"""
+        timestamp = now or utc_now_naive()
+        statement = (
+            sqlite_insert(ChatBehaviorSample)
+            .values(
+                tenant=tenant,
+                turn_id=turn_id,
+                trigger_kind=trigger_kind,
+                scene_tags=json.dumps(scene_tags, ensure_ascii=False),
+                action=action,
+                acted_at=timestamp,
+                observed_until=timestamp + timedelta(minutes=BEHAVIOR_OBSERVE_MINUTES),
+                outcome="pending",
+            )
+            .on_conflict_do_nothing(index_elements=["tenant", "turn_id", "action"])
+        )
+        await session.execute(statement)
+
+    @with_session
+    async def attribute_behavior_samples(
+        self, session: AsyncSession, *, now: datetime | None = None, limit: int = 500
+    ) -> int:
+        """观察窗口结束后，按窗口内是否有人继续发言写入结果。"""
+        timestamp = now or utc_now_naive()
+        statement = (
+            select(ChatBehaviorSample)
+            .where(
+                ChatBehaviorSample.outcome == "pending",
+                ChatBehaviorSample.observed_until <= timestamp,
+            )
+            .limit(max(1, int(limit)))
+        )
+        rows = list((await session.execute(statement)).scalars())
+        for row in rows:
+            continued = (
+                await session.execute(
+                    select(func.count())
+                    .select_from(ChatMessage)
+                    .where(
+                        ChatMessage.tenant == row.tenant,
+                        ChatMessage.kind == "user",
+                        ChatMessage.deleted.is_(False),
+                        ChatMessage.ingested_at > row.acted_at,
+                        ChatMessage.ingested_at <= row.observed_until,
+                    )
+                )
+            ).scalar_one()
+            row.outcome = "continued" if continued else "ignored"
+            row.attributed_at = timestamp
+        return len(rows)
+
+    @with_session
+    async def behavior_tenants(self, session: AsyncSession) -> list[str]:
+        """有已归因样本的租户，用于周聚合。"""
+        statement = select(ChatBehaviorSample.tenant).where(ChatBehaviorSample.outcome != "pending").distinct()
+        return [str(item) for item in (await session.execute(statement)).scalars()]
+
+    @with_session
+    async def aggregate_behavior(self, session: AsyncSession, tenant: str) -> int:
+        """按场景与动作聚合已归因样本，覆盖该租户的旧聚合。"""
+        statement = select(ChatBehaviorSample).where(
+            ChatBehaviorSample.tenant == tenant,
+            ChatBehaviorSample.outcome != "pending",
+        )
+        samples = list((await session.execute(statement)).scalars())
+        groups: dict[tuple[str, str], dict[str, Any]] = {}
+        for sample in samples:
+            key = (sample.scene_tags, sample.action)
+            group = groups.setdefault(key, {"count": 0, "continued": 0, "last_seen": sample.acted_at})
+            group["count"] += 1
+            group["continued"] += 1 if sample.outcome == "continued" else 0
+            group["last_seen"] = max(group["last_seen"], sample.acted_at)
+        await session.execute(delete(ChatBehavior).where(ChatBehavior.tenant == tenant))
+        for (scene_tags, action), group in groups.items():
+            count = int(group["count"])
+            confidence = int(group["continued"]) / count if count else 0.0
+            session.add(
+                ChatBehavior(
+                    tenant=tenant,
+                    scene_hash=hashlib.sha1(scene_tags.encode("utf-8")).hexdigest(),
+                    scene_tags=scene_tags,
+                    action=action,
+                    outcome="continued" if confidence >= 0.5 else "ignored",
+                    confidence=confidence,
+                    count=count,
+                    last_seen=group["last_seen"],
+                )
+            )
+        return len(groups)
+
+    @with_session
+    async def behavior_hints(
+        self, session: AsyncSession, tenant: str, *, limit: int = 3, minimum: int = BEHAVIOR_MIN_SAMPLES
+    ) -> tuple[list[ChatBehavior], int]:
+        """样本足够时返回 top 场景→动作；样本数按已归因原始样本计。"""
+        total = int(
+            (
+                await session.execute(
+                    select(func.count())
+                    .select_from(ChatBehaviorSample)
+                    .where(
+                        ChatBehaviorSample.tenant == tenant,
+                        ChatBehaviorSample.outcome != "pending",
+                    )
+                )
+            ).scalar_one()
+        )
+        if total < max(0, int(minimum)):
+            return [], total
+        statement = (
+            select(ChatBehavior)
+            .where(ChatBehavior.tenant == tenant)
+            .order_by(ChatBehavior.confidence.desc(), ChatBehavior.count.desc())
+            .limit(max(1, int(limit)))
+        )
+        return list((await session.execute(statement)).scalars()), total
+
+    @with_session
+    async def clear_behavior(self, session: AsyncSession, tenant: str) -> None:
+        """删除租户的行为样本与聚合。"""
+        await session.execute(delete(ChatBehaviorSample).where(ChatBehaviorSample.tenant == tenant))
+        await session.execute(delete(ChatBehavior).where(ChatBehavior.tenant == tenant))
+
+    @with_session
     async def get_profile(self, session: AsyncSession, tenant: str, subject_id: str) -> ChatProfile | None:
         """读取主体画像；不存在时返回 None。"""
         rows = await ChatProfile.select_rows(tenant=tenant, subject_id=subject_id, session=session)
@@ -881,6 +1134,8 @@ class ChatRepository:
         participants = sorted(author_names)
         now = utc_now_naive()
         state = await self._state_row(session, tenant)
+        if result.emotion is not None:
+            await self._apply_emotion(session, tenant, result.emotion, now)
         markers = list(
             (await session.execute(select(ChatForgetMarker).where(ChatForgetMarker.tenant == tenant))).scalars()
         )
@@ -1325,6 +1580,60 @@ class ChatRepository:
             )
         )
         await session.execute(statement)
+
+    async def _chat_state_row(
+        self, session: AsyncSession, tenant: str, subject_id: str, *, create: bool = True
+    ) -> ChatState | None:
+        """读取或新建情绪行；调用方事务内使用。"""
+        rows = await ChatState.select_rows(tenant=tenant, subject_id=subject_id, session=session)
+        if rows:
+            return rows[0]
+        if not create:
+            return None
+        row = ChatState(tenant=tenant, subject_id=subject_id)
+        session.add(row)
+        await session.flush()
+        return row
+
+    @staticmethod
+    def _decay_state(row: ChatState, now: datetime, decay_per_day: float) -> None:
+        """按上海日期把情绪拉向 0，并按天衰减熟悉度；每天只应用一次。"""
+        if row.last_decay_at is None:
+            row.last_decay_at = now
+            return
+        days = (as_shanghai(now).date() - as_shanghai(row.last_decay_at).date()).days
+        if days <= 0:
+            return
+        row.valence = _toward_zero(row.valence, decay_per_day * days)
+        row.arousal = _toward_zero(row.arousal, decay_per_day * days)
+        row.familiarity = min(1.0, max(0.0, row.familiarity * (0.99**days)))
+        row.last_decay_at = now
+
+    async def _apply_emotion(
+        self, session: AsyncSession, tenant: str, emotion: tuple[float, float], now: datetime
+    ) -> None:
+        if not mood_enabled():
+            return
+        valence = _clamp(float(emotion[0]), -1.0, 1.0)
+        arousal = _clamp(float(emotion[1]), 0.0, 1.0)
+        row = await self._chat_state_row(session, tenant, "", create=False)
+        if row is None:
+            session.add(
+                ChatState(
+                    tenant=tenant,
+                    subject_id="",
+                    valence=valence,
+                    arousal=arousal,
+                    last_decay_at=now,
+                    updated_at=now,
+                )
+            )
+            await session.flush()
+            return
+        self._decay_state(row, now, _mood_decay_per_day())
+        row.valence = 0.7 * row.valence + 0.3 * valence
+        row.arousal = 0.7 * row.arousal + 0.3 * arousal
+        row.updated_at = now
 
     async def _state_row(self, session: AsyncSession, tenant: str) -> ChatSessionState:
         """读取或新建会话状态行，调用方事务内使用。"""
