@@ -308,3 +308,65 @@ export interface ChatBehaviorResponse {
   attributed: number
   minimum: number
 }
+
+export interface ChatEmoji {
+  hash: string
+  description: string
+  tags: string[]
+  count: number
+  last_used: string | null
+  enabled: boolean
+  created_at: string | null
+}
+
+export interface ChatKnowledgeDoc {
+  id: number
+  title: string
+  source: string
+  status: string
+  hash: string
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface ChatReminder {
+  id: number
+  user_id: string
+  content: string
+  due_at: string | null
+  status: string
+  attempts: number
+  next_attempt_at: string | null
+  last_error: string
+  sent_at: string | null
+  created_at: string | null
+}
+
+export interface ChatHealth {
+  enabled: boolean
+  memory_ready: boolean
+  degraded_reason: string
+  scheduler_ready: boolean
+  online_bots: number
+}
+
+export interface ChatJob {
+  id: string
+  next_run: string | null
+  pending: boolean
+}
+
+export interface ChatJobCursor {
+  job: string
+  direction: string
+  cursor_seq: number
+  fail_count: number
+  next_retry_at: string | null
+  last_error: string
+  updated_at: string | null
+}
+
+export interface ChatJobs {
+  jobs: ChatJob[]
+  cursors: ChatJobCursor[]
+}

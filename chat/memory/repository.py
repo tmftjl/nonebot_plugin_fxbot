@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from dataclasses import dataclass
 
 from sqlmodel import select
-from sqlalchemy import func, delete, update
+from sqlalchemy import or_, func, delete, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
@@ -17,6 +17,7 @@ from ...db import with_session
 from .models import (
     ChatTurn,
     ChatAlias,
+    ChatEmoji,
     ChatState,
     ChatStyle,
     ChatJargon,
@@ -27,13 +28,16 @@ from .models import (
     ChatBehavior,
     ChatJobBatch,
     ChatRelation,
+    ChatReminder,
     ChatTurnItem,
     ChatJobCursor,
     ChatExpression,
     ChatForgetMarker,
+    ChatKnowledgeDoc,
     ChatSessionState,
     ChatPlannerSample,
     ChatBehaviorSample,
+    ChatKnowledgeChunk,
     ChatMemoryEvidence,
     utc_now_naive,
 )
@@ -1049,6 +1053,361 @@ class ChatRepository:
         """删除租户的行为样本与聚合。"""
         await session.execute(delete(ChatBehaviorSample).where(ChatBehaviorSample.tenant == tenant))
         await session.execute(delete(ChatBehavior).where(ChatBehavior.tenant == tenant))
+
+    @with_session
+    async def list_emoji(
+        self, session: AsyncSession, tenant: str, *, enabled_only: bool = False
+    ) -> list[ChatEmoji]:
+        """读取租户的表情包索引。"""
+        statement = select(ChatEmoji).where(ChatEmoji.tenant == tenant)
+        if enabled_only:
+            statement = statement.where(ChatEmoji.enabled.is_(True))
+        statement = statement.order_by(ChatEmoji.count.desc(), ChatEmoji.created_at.desc())
+        return list((await session.execute(statement)).scalars().all())
+
+    @with_session
+    async def get_emoji(self, session: AsyncSession, tenant: str, emoji_hash: str) -> ChatEmoji | None:
+        """按租户与内容哈希读取表情。"""
+        rows = await ChatEmoji.select_rows(tenant=tenant, hash=emoji_hash, session=session)
+        return rows[0] if rows else None
+
+    @with_session
+    async def save_emoji(
+        self,
+        session: AsyncSession,
+        tenant: str,
+        emoji_hash: str,
+        path: str,
+        description: str = "",
+        tags: list[str] | None = None,
+    ) -> ChatEmoji:
+        """写入或更新一条表情索引；重复上传只刷新描述与标签。"""
+        await session.execute(
+            sqlite_insert(ChatEmoji)
+            .values(
+                tenant=tenant,
+                hash=emoji_hash,
+                path=path,
+                description=description,
+                tags=json.dumps(tags or [], ensure_ascii=False),
+            )
+            .on_conflict_do_update(
+                index_elements=["tenant", "hash"],
+                set_={
+                    "path": path,
+                    "description": description,
+                    "tags": json.dumps(tags or [], ensure_ascii=False),
+                    "enabled": True,
+                },
+            )
+        )
+        return await self.get_emoji(tenant, emoji_hash, session=session)
+
+    @with_session
+    async def mark_emoji_used(
+        self, session: AsyncSession, tenant: str, emoji_hash: str, *, now: datetime | None = None
+    ) -> None:
+        """记录表情实际发送。"""
+        await session.execute(
+            update(ChatEmoji)
+            .where(ChatEmoji.tenant == tenant, ChatEmoji.hash == emoji_hash)
+            .values(count=ChatEmoji.count + 1, last_used=now or utc_now_naive())
+        )
+
+    @with_session
+    async def set_emoji_enabled(
+        self, session: AsyncSession, tenant: str, emoji_hash: str, enabled: bool
+    ) -> bool:
+        """启停一条表情。"""
+        result = await session.execute(
+            update(ChatEmoji)
+            .where(ChatEmoji.tenant == tenant, ChatEmoji.hash == emoji_hash)
+            .values(enabled=bool(enabled))
+        )
+        return bool(result.rowcount)
+
+    @with_session
+    async def delete_emoji(self, session: AsyncSession, tenant: str, emoji_hash: str) -> ChatEmoji | None:
+        """删除索引并返回原行，供调用方清理文件。"""
+        row = await self.get_emoji(tenant, emoji_hash, session=session)
+        if row is not None:
+            await session.execute(
+                delete(ChatEmoji).where(ChatEmoji.tenant == tenant, ChatEmoji.hash == emoji_hash)
+            )
+        return row
+
+    @with_session
+    async def list_knowledge_docs(self, session: AsyncSession, tenant: str) -> list[ChatKnowledgeDoc]:
+        """列出未删除的知识文档。"""
+        statement = (
+            select(ChatKnowledgeDoc)
+            .where(ChatKnowledgeDoc.tenant == tenant, ChatKnowledgeDoc.status != "deleted")
+            .order_by(ChatKnowledgeDoc.updated_at.desc())
+        )
+        return list((await session.execute(statement)).scalars().all())
+
+    @with_session
+    async def get_knowledge_doc(
+        self, session: AsyncSession, tenant: str, doc_id: int
+    ) -> ChatKnowledgeDoc | None:
+        """按租户读取知识文档。"""
+        rows = await ChatKnowledgeDoc.select_rows(tenant=tenant, id=int(doc_id), session=session)
+        return rows[0] if rows else None
+
+    @with_session
+    async def save_knowledge_doc(
+        self,
+        session: AsyncSession,
+        tenant: str,
+        *,
+        title: str,
+        source: str,
+        digest: str,
+        chunks: list[tuple[str, str]],
+    ) -> ChatKnowledgeDoc:
+        """整份文档先写 staging 切片，最后在同一事务里置为 active。"""
+        rows = await ChatKnowledgeDoc.select_rows(tenant=tenant, hash=digest, session=session)
+        if rows and rows[0].status == "active":
+            return rows[0]
+        if rows:
+            doc = rows[0]
+            doc.title = title
+            doc.source = source
+            doc.status = "staging"
+            doc.updated_at = utc_now_naive()
+            await session.execute(
+                delete(ChatKnowledgeChunk).where(
+                    ChatKnowledgeChunk.tenant == tenant, ChatKnowledgeChunk.doc_id == doc.id
+                )
+            )
+        else:
+            doc = ChatKnowledgeDoc(tenant=tenant, title=title, source=source, hash=digest)
+            session.add(doc)
+            await session.flush()
+        for seq, (content, keywords) in enumerate(chunks):
+            session.add(
+                ChatKnowledgeChunk(
+                    tenant=tenant,
+                    doc_id=int(doc.id or 0),
+                    seq=seq,
+                    content=content,
+                    keywords=keywords,
+                )
+            )
+        doc.status = "active"
+        doc.updated_at = utc_now_naive()
+        await session.flush()
+        return doc
+
+    @with_session
+    async def delete_knowledge_doc(self, session: AsyncSession, tenant: str, doc_id: int) -> bool:
+        """标记文档删除；切片保留但不参与检索。"""
+        result = await session.execute(
+            update(ChatKnowledgeDoc)
+            .where(
+                ChatKnowledgeDoc.tenant == tenant,
+                ChatKnowledgeDoc.id == int(doc_id),
+                ChatKnowledgeDoc.status != "deleted",
+            )
+            .values(status="deleted", updated_at=utc_now_naive())
+        )
+        return bool(result.rowcount)
+
+    @with_session
+    async def knowledge_chunks(
+        self, session: AsyncSession, tenant: str
+    ) -> list[tuple[str, str]]:
+        """读取租户 active 文档的切片及文档标题。"""
+        statement = (
+            select(ChatKnowledgeDoc.title, ChatKnowledgeChunk.content)
+            .join(ChatKnowledgeDoc, ChatKnowledgeDoc.id == ChatKnowledgeChunk.doc_id)
+            .where(
+                ChatKnowledgeChunk.tenant == tenant,
+                ChatKnowledgeDoc.tenant == tenant,
+                ChatKnowledgeDoc.status == "active",
+            )
+            .order_by(ChatKnowledgeDoc.id, ChatKnowledgeChunk.seq)
+        )
+        return [(str(title), str(content)) for title, content in (await session.execute(statement)).all()]
+
+    @with_session
+    async def list_cursors(self, session: AsyncSession, tenant: str) -> list[ChatJobCursor]:
+        """列出租户的后台任务游标。"""
+        statement = select(ChatJobCursor).where(ChatJobCursor.tenant == tenant).order_by(ChatJobCursor.job)
+        return list((await session.execute(statement)).scalars().all())
+
+    @with_session
+    async def find_reminder(
+        self, session: AsyncSession, tenant: str, idempotency_key: str
+    ) -> ChatReminder | None:
+        """按幂等键查找提醒。"""
+        rows = await ChatReminder.select_rows(
+            tenant=tenant, idempotency_key=idempotency_key, session=session
+        )
+        return rows[0] if rows else None
+
+    @with_session
+    async def count_active_reminders(self, session: AsyncSession, tenant: str, user_id: str) -> int:
+        """统计用户尚未结束的提醒。"""
+        statement = (
+            select(func.count())
+            .select_from(ChatReminder)
+            .where(
+                ChatReminder.tenant == tenant,
+                ChatReminder.user_id == user_id,
+                ChatReminder.status.in_(("pending_confirmation", "pending", "claimed", "failed")),
+            )
+        )
+        return int((await session.execute(statement)).scalar_one())
+
+    @with_session
+    async def create_reminder(
+        self,
+        session: AsyncSession,
+        tenant: str,
+        user_id: str,
+        content: str,
+        due_at: datetime,
+        idempotency_key: str,
+        *,
+        status: str = "pending_confirmation",
+    ) -> ChatReminder:
+        """创建提醒；确认模式由调用方决定。"""
+        now = utc_now_naive()
+        row = ChatReminder(
+            tenant=tenant,
+            user_id=user_id,
+            content=content,
+            due_at=due_at,
+            status=status,
+            confirmed_at=now if status == "pending" else None,
+            idempotency_key=idempotency_key,
+        )
+        session.add(row)
+        await session.flush()
+        return row
+
+    @with_session
+    async def confirm_reminder(
+        self, session: AsyncSession, tenant: str, user_id: str, reminder_id: int
+    ) -> bool:
+        """确认自己的待确认提醒。"""
+        result = await session.execute(
+            update(ChatReminder)
+            .where(
+                ChatReminder.tenant == tenant,
+                ChatReminder.user_id == user_id,
+                ChatReminder.id == int(reminder_id),
+                ChatReminder.status == "pending_confirmation",
+            )
+            .values(status="pending", confirmed_at=utc_now_naive())
+        )
+        return bool(result.rowcount)
+
+    @with_session
+    async def cancel_reminder(
+        self, session: AsyncSession, tenant: str, user_id: str, reminder_id: int
+    ) -> bool:
+        """取消自己的未发送提醒。"""
+        result = await session.execute(
+            update(ChatReminder)
+            .where(
+                ChatReminder.tenant == tenant,
+                ChatReminder.user_id == user_id,
+                ChatReminder.id == int(reminder_id),
+                ChatReminder.status.in_(("pending_confirmation", "pending", "failed")),
+            )
+            .values(status="cancelled")
+        )
+        return bool(result.rowcount)
+
+    @with_session
+    async def list_reminders(
+        self,
+        session: AsyncSession,
+        tenant: str,
+        *,
+        user_id: str | None = None,
+        limit: int = 100,
+    ) -> list[ChatReminder]:
+        """列出提醒，供控制台查看。"""
+        statement = select(ChatReminder).where(ChatReminder.tenant == tenant)
+        if user_id:
+            statement = statement.where(ChatReminder.user_id == user_id)
+        statement = statement.order_by(ChatReminder.due_at.desc()).limit(max(1, int(limit)))
+        return list((await session.execute(statement)).scalars().all())
+
+    @with_session
+    async def claim_due_reminders(
+        self, session: AsyncSession, now: datetime, token: str, *, limit: int = 20
+    ) -> list[ChatReminder]:
+        """领取到期提醒；状态改为 claimed 并写入领取 token。"""
+        statement = (
+            select(ChatReminder)
+            .where(
+                ChatReminder.status.in_(("pending", "failed")),
+                ChatReminder.due_at <= now,
+                or_(ChatReminder.next_attempt_at.is_(None), ChatReminder.next_attempt_at <= now),
+            )
+            .order_by(ChatReminder.due_at)
+            .limit(max(1, int(limit)))
+        )
+        rows = list((await session.execute(statement)).scalars().all())
+        claimed: list[ChatReminder] = []
+        for row in rows:
+            result = await session.execute(
+                update(ChatReminder)
+                .where(
+                    ChatReminder.id == row.id,
+                    ChatReminder.status.in_(("pending", "failed")),
+                )
+                .values(status="claimed", claim_token=token, claimed_at=now)
+            )
+            if result.rowcount:
+                claimed.append(row)
+        return claimed
+
+    @with_session
+    async def recover_stale_claims(self, session: AsyncSession, before: datetime) -> int:
+        """回收超时未完成的领取，交给下一轮重试。"""
+        result = await session.execute(
+            update(ChatReminder)
+            .where(ChatReminder.status == "claimed", ChatReminder.claimed_at < before)
+            .values(status="pending", claim_token="", claimed_at=None)
+        )
+        return int(result.rowcount or 0)
+
+    @with_session
+    async def finish_reminder(
+        self,
+        session: AsyncSession,
+        reminder_id: int,
+        token: str,
+        *,
+        sent_message_id: str = "",
+        error: str = "",
+        next_attempt_at: datetime | None = None,
+    ) -> bool:
+        """按领取 token 结束提醒；失败时记录错误与下次重试。"""
+        rows = await ChatReminder.select_rows(id=int(reminder_id), claim_token=token, session=session)
+        if not rows:
+            return False
+        row = rows[0]
+        now = utc_now_naive()
+        row.claim_token = ""
+        row.claimed_at = None
+        if error:
+            row.status = "failed"
+            row.attempts += 1
+            row.last_error = error[:500]
+            row.next_attempt_at = next_attempt_at
+        else:
+            row.status = "sent"
+            row.sent_at = now
+            row.sent_message_id = sent_message_id
+            row.last_error = ""
+            row.next_attempt_at = None
+        return True
 
     @with_session
     async def get_profile(self, session: AsyncSession, tenant: str, subject_id: str) -> ChatProfile | None:

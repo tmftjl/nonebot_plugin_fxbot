@@ -73,7 +73,7 @@ def _normalize(scores: list[float]) -> list[float]:
     return [(score - low) / (high - low) if score > 0 else 0.0 for score in scores]
 
 
-class _Index:
+class Index:
     """一个租户一类文档的倒排统计；文档值是不可变的。"""
 
     def __init__(self, docs: list[tuple[Any, str]]) -> None:
@@ -163,7 +163,7 @@ def _recency(moment: datetime | None) -> float:
     return 1 / (1 + days / 30)
 
 
-async def _indexed(tenant: str, kind: str, version: int, loader: Any) -> _Index:
+async def _indexed(tenant: str, kind: str, version: int, loader: Any) -> Index:
     """懒加载索引；异步读取后版本未变才写缓存。"""
     key = (_DOMAIN, tenant, kind, version)
     index = cache.get(key)
@@ -186,18 +186,18 @@ async def _version(tenant: str, kind: str) -> int:
     return int(state.episodes_version if kind == "episodes" else state.facts_version)
 
 
-async def _episode_index(tenant: str) -> _Index:
-    async def load() -> _Index:
+async def _episode_index(tenant: str) -> Index:
+    async def load() -> Index:
         hits = [_episode_hit(row) for row in await chat_repository.list_active_episodes(tenant)]
-        return _Index([(hit, _episode_text(hit)) for hit in hits])
+        return Index([(hit, _episode_text(hit)) for hit in hits])
 
     return await _indexed(tenant, "episodes", await _version(tenant, "episodes"), load)
 
 
-async def _fact_index(tenant: str) -> _Index:
-    async def load() -> _Index:
+async def _fact_index(tenant: str) -> Index:
+    async def load() -> Index:
         hits = [_fact_hit(row) for row in await chat_repository.list_active_facts(tenant)]
-        return _Index([(hit, _fact_text(hit)) for hit in hits])
+        return Index([(hit, _fact_text(hit)) for hit in hits])
 
     return await _indexed(tenant, "facts", await _version(tenant, "facts"), load)
 

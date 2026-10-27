@@ -17,6 +17,11 @@ import type {
   ChatPlannerSample,
   ChatReplyGate,
   ChatBehaviorResponse,
+  ChatEmoji,
+  ChatKnowledgeDoc,
+  ChatReminder,
+  ChatHealth,
+  ChatJobs,
 } from '@/types/api'
 
 export function getToken(): string {
@@ -153,6 +158,33 @@ export const chatApi = {
     ),
   clearBehavior: (tenant: string) =>
     api.delete<{ deleted: boolean }>(`/chat/behavior?tenant=${encodeURIComponent(tenant)}`),
+  listEmoji: (tenant: string) =>
+    api.get<{ items: ChatEmoji[] }>(`/chat/emoji?tenant=${encodeURIComponent(tenant)}`),
+  uploadEmoji: (tenant: string, content: string, description = '', tags: string[] = []) =>
+    api.post<{ item: ChatEmoji }>('/chat/emoji', { tenant, content, description, tags }),
+  setEmojiEnabled: (tenant: string, hash: string, enabled: boolean) =>
+    api.patch<{ enabled: boolean }>(
+      `/chat/emoji/${encodeURIComponent(hash)}?tenant=${encodeURIComponent(tenant)}&enabled=${enabled}`,
+    ),
+  deleteEmoji: (tenant: string, hash: string) =>
+    api.delete<{ deleted: boolean }>(
+      `/chat/emoji/${encodeURIComponent(hash)}?tenant=${encodeURIComponent(tenant)}`,
+    ),
+  emojiImageUrl: (tenant: string, hash: string) =>
+    `/fxbot/chat/emoji/${encodeURIComponent(hash)}/image?tenant=${encodeURIComponent(tenant)}&token=${encodeURIComponent(getToken())}`,
+  listKnowledge: (tenant: string) =>
+    api.get<{ items: ChatKnowledgeDoc[] }>(`/chat/knowledge?tenant=${encodeURIComponent(tenant)}`),
+  uploadKnowledge: (tenant: string, title: string, content: string, source = '控制台') =>
+    api.post<{ item: ChatKnowledgeDoc }>('/chat/knowledge', { tenant, title, content, source }),
+  deleteKnowledge: (tenant: string, id: number) =>
+    api.delete<{ deleted: boolean }>(`/chat/knowledge/${id}?tenant=${encodeURIComponent(tenant)}`),
+  listReminders: (tenant: string, limit = 100) =>
+    api.get<{ items: ChatReminder[] }>(
+      `/chat/reminders?tenant=${encodeURIComponent(tenant)}&limit=${limit}`,
+    ),
+  getHealth: () => api.get<ChatHealth>('/chat/health'),
+  getJobs: (tenant: string) =>
+    api.get<ChatJobs>(`/chat/jobs?tenant=${encodeURIComponent(tenant)}`),
 }
 
 // 会员续费 API

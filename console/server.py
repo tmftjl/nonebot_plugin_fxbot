@@ -32,6 +32,7 @@ def mount_console() -> None:
     router.include_router(logs.router)
     router.include_router(cache_routes.router)
     router.include_router(chat.router)
+    router.include_router(chat.image_router)
 
     @router.get("/health")
     async def health() -> dict[str, bool]:

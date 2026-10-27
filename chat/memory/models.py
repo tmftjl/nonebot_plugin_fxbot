@@ -470,3 +470,79 @@ class ChatBehavior(BaseIDModel, table=True):
     confidence: float = Field(default=0.0, nullable=False)
     count: int = Field(default=0, nullable=False)
     last_seen: datetime = Field(default_factory=utc_now_naive, nullable=False)
+
+
+class ChatEmoji(BaseIDModel, table=True):
+    """表情包索引；文件保存在 ai_chat/emoji。"""
+
+    __tablename__ = "chat_emoji"
+    __table_args__ = (UniqueConstraint("tenant", "hash"),)
+
+    tenant: str = Field(nullable=False)
+    hash: str = Field(nullable=False)
+    path: str = Field(nullable=False)
+    description: str = Field(default="", nullable=False)
+    tags: str = Field(default="[]", nullable=False)
+    count: int = Field(default=0, nullable=False)
+    last_used: datetime | None = Field(default=None, nullable=True)
+    enabled: bool = Field(default=True, nullable=False)
+    created_at: datetime = Field(default_factory=utc_now_naive, nullable=False)
+
+
+class ChatKnowledgeDoc(BaseIDModel, table=True):
+    """租户知识文档；staging → active 在同一事务内完成。"""
+
+    __tablename__ = "chat_knowledge_doc"
+    __table_args__ = (UniqueConstraint("tenant", "hash"),)
+
+    tenant: str = Field(nullable=False)
+    title: str = Field(nullable=False)
+    source: str = Field(default="", nullable=False)
+    hash: str = Field(nullable=False)
+    status: str = Field(default="staging", nullable=False)
+    created_at: datetime = Field(default_factory=utc_now_naive, nullable=False)
+    updated_at: datetime = Field(default_factory=utc_now_naive, nullable=False)
+
+
+class ChatKnowledgeChunk(BaseIDModel, table=True):
+    """知识文档切片，参与租户内 BM25 检索。"""
+
+    __tablename__ = "chat_knowledge_chunk"
+    __table_args__ = (
+        UniqueConstraint("tenant", "doc_id", "seq"),
+        Index("ix_chat_knowledge_chunk_tenant_doc", "tenant", "doc_id"),
+    )
+
+    tenant: str = Field(nullable=False)
+    doc_id: int = Field(nullable=False)
+    seq: int = Field(nullable=False)
+    content: str = Field(nullable=False)
+    keywords: str = Field(default="[]", nullable=False)
+    created_at: datetime = Field(default_factory=utc_now_naive, nullable=False)
+
+
+class ChatReminder(BaseIDModel, table=True):
+    """用户提醒；确认后由调度任务领取并发送。"""
+
+    __tablename__ = "chat_reminder"
+    __table_args__ = (
+        UniqueConstraint("tenant", "idempotency_key"),
+        Index("ix_chat_reminder_status_due", "status", "due_at"),
+        Index("ix_chat_reminder_status_next", "status", "next_attempt_at"),
+    )
+
+    tenant: str = Field(nullable=False)
+    user_id: str = Field(nullable=False)
+    content: str = Field(nullable=False)
+    due_at: datetime = Field(nullable=False)
+    status: str = Field(default="pending_confirmation", nullable=False)
+    confirmed_at: datetime | None = Field(default=None, nullable=True)
+    claim_token: str = Field(default="", nullable=False)
+    claimed_at: datetime | None = Field(default=None, nullable=True)
+    attempts: int = Field(default=0, nullable=False)
+    next_attempt_at: datetime | None = Field(default=None, nullable=True)
+    sent_message_id: str = Field(default="", nullable=False)
+    idempotency_key: str = Field(nullable=False)
+    last_error: str = Field(default="", nullable=False)
+    created_at: datetime = Field(default_factory=utc_now_naive, nullable=False)
+    sent_at: datetime | None = Field(default=None, nullable=True)

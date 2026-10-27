@@ -97,6 +97,16 @@ SYSTEM_DEFAULTS = {
             "anti_repeat": True,
             "anti_repeat_threshold": 85,
         },
+        "typo": {
+            "enabled": False,
+            "error_rate": 0.01,
+            "tone_error_rate": 0.1,
+            "word_replace_rate": 0.006,
+            "correction_quote": True,
+        },
+        "emoji": {"enabled": False, "max_per_reply": 1, "collect_from_group": False},
+        "knowledge": {"enabled": False, "chunk_chars": 400, "top_k": 4},
+        "reminder": {"enabled": False, "max_pending_per_user": 10, "require_confirmation": True},
         "model_routing": {
             "reply": "",
             "extract": "",
@@ -196,6 +206,51 @@ def validate_system_config(data: dict[str, Any]) -> None:
     decay = mood.get("decay_per_day", SYSTEM_DEFAULTS["chat"]["mood"]["decay_per_day"])
     if isinstance(decay, bool) or not isinstance(decay, (int, float)) or not 0 <= decay <= 1:
         raise ValueError("chat.mood.decay_per_day 必须是 0 到 1 之间的数字")
+
+    typo = chat.get("typo", {})
+    if not isinstance(typo, dict):
+        raise ValueError("chat.typo 必须是对象")
+    for key in ("enabled", "correction_quote"):
+        if key in typo and not isinstance(typo[key], bool):
+            raise ValueError(f"chat.typo.{key} 必须是布尔值")
+    for key in ("error_rate", "tone_error_rate", "word_replace_rate"):
+        value = typo.get(key, SYSTEM_DEFAULTS["chat"]["typo"][key])
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= 1:
+            raise ValueError(f"chat.typo.{key} 必须是 0 到 1 之间的数字")
+
+    emoji = chat.get("emoji", {})
+    if not isinstance(emoji, dict):
+        raise ValueError("chat.emoji 必须是对象")
+    for key in ("enabled", "collect_from_group"):
+        if key in emoji and not isinstance(emoji[key], bool):
+            raise ValueError(f"chat.emoji.{key} 必须是布尔值")
+    max_emoji = emoji.get("max_per_reply", SYSTEM_DEFAULTS["chat"]["emoji"]["max_per_reply"])
+    if isinstance(max_emoji, bool) or not isinstance(max_emoji, int) or not 0 <= max_emoji <= 3:
+        raise ValueError("chat.emoji.max_per_reply 必须是 0 到 3 的整数")
+
+    knowledge = chat.get("knowledge", {})
+    if not isinstance(knowledge, dict):
+        raise ValueError("chat.knowledge 必须是对象")
+    if "enabled" in knowledge and not isinstance(knowledge["enabled"], bool):
+        raise ValueError("chat.knowledge.enabled 必须是布尔值")
+    chunk_chars = knowledge.get("chunk_chars", SYSTEM_DEFAULTS["chat"]["knowledge"]["chunk_chars"])
+    if isinstance(chunk_chars, bool) or not isinstance(chunk_chars, int) or not 100 <= chunk_chars <= 2000:
+        raise ValueError("chat.knowledge.chunk_chars 必须是 100 到 2000 的整数")
+    top_k = knowledge.get("top_k", SYSTEM_DEFAULTS["chat"]["knowledge"]["top_k"])
+    if isinstance(top_k, bool) or not isinstance(top_k, int) or not 1 <= top_k <= 10:
+        raise ValueError("chat.knowledge.top_k 必须是 1 到 10 的整数")
+
+    reminder = chat.get("reminder", {})
+    if not isinstance(reminder, dict):
+        raise ValueError("chat.reminder 必须是对象")
+    for key in ("enabled", "require_confirmation"):
+        if key in reminder and not isinstance(reminder[key], bool):
+            raise ValueError(f"chat.reminder.{key} 必须是布尔值")
+    max_pending = reminder.get(
+        "max_pending_per_user", SYSTEM_DEFAULTS["chat"]["reminder"]["max_pending_per_user"]
+    )
+    if isinstance(max_pending, bool) or not isinstance(max_pending, int) or not 1 <= max_pending <= 100:
+        raise ValueError("chat.reminder.max_pending_per_user 必须是 1 到 100 的整数")
 
     proactive = chat.get("proactive", {})
     if not isinstance(proactive, dict):

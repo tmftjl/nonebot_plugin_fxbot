@@ -93,6 +93,7 @@ async def init() -> None:
     _import_startup_module("chat.commands")
     _import_startup_module("chat.recall")
     _import_startup_module("chat.memory.commands")
+    _import_startup_module("chat.reminder_commands")
 
     try:
         from .membership.tasks import setup_membership_tasks

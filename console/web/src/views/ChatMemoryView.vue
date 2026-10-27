@@ -2,6 +2,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import type { UploadFile } from 'element-plus'
 import { Refresh, Delete } from '@element-plus/icons-vue'
 import { chatApi } from '@/api'
 import type {
@@ -13,6 +14,11 @@ import type {
   ChatPlannerSample,
   ChatReplyGate,
   ChatReplyGateObservation,
+  ChatEmoji,
+  ChatKnowledgeDoc,
+  ChatReminder,
+  ChatHealth,
+  ChatJobs,
 } from '@/types/api'
 
 const emptyReplyGate = (): ChatReplyGate => ({
@@ -57,6 +63,20 @@ const behaviorLoading = ref(false)
 const gateLoading = ref(false)
 const acting = ref(false)
 const loaded = ref(false)
+const emojis = ref<ChatEmoji[]>([])
+const emojiLoading = ref(false)
+const emojiUploading = ref(false)
+const emojiDescription = ref('')
+const knowledge = ref<ChatKnowledgeDoc[]>([])
+const knowledgeLoading = ref(false)
+const knowledgeUploading = ref(false)
+const knowledgeTitle = ref('')
+const knowledgeText = ref('')
+const reminders = ref<ChatReminder[]>([])
+const reminderLoading = ref(false)
+const health = ref<ChatHealth | null>(null)
+const jobs = ref<ChatJobs>({ jobs: [], cursors: [] })
+const healthLoading = ref(false)
 
 const plannerLabelCounts = computed(() => {
   const replies = plannerSamples.value.filter((row) => row.label === 1).length
@@ -219,6 +239,224 @@ const gateFeature = (row: ChatReplyGateObservation, key: string) => {
   return value === undefined || value === null ? '—' : String(value)
 }
 
+const reminderTag = (status: string): { type: 'success' | 'warning' | 'info' | 'danger'; text: string } => {
+  switch (status) {
+    case 'sent':
+      return { type: 'success', text: '已送达' }
+    case 'failed':
+      return { type: 'danger', text: '发送失败' }
+    case 'claimed':
+      return { type: 'warning', text: '发送中' }
+    case 'cancelled':
+      return { type: 'info', text: '已取消' }
+    case 'pending_confirmation':
+      return { type: 'warning', text: '待确认' }
+    default:
+      return { type: 'info', text: '待发送' }
+  }
+}
+
+const loadEmoji = async () => {
+  if (!tenant.value) {
+    emojis.value = []
+    return
+  }
+  emojiLoading.value = true
+  try {
+    const result = await chatApi.listEmoji(tenant.value)
+    emojis.value = result.items || []
+  } catch (error) {
+    console.error('加载表情失败', error)
+    ElMessage.error('加载表情失败，请重试')
+  } finally {
+    emojiLoading.value = false
+  }
+}
+
+const readBase64 = (file: File) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result || ''))
+    reader.onerror = () => reject(reader.error)
+    reader.readAsDataURL(file)
+  })
+
+const uploadEmojiFile = async (file: UploadFile) => {
+  if (!file.raw || emojiUploading.value) return false
+  if (!file.raw.type.startsWith('image/')) {
+    ElMessage.warning('只能上传图片文件')
+    return false
+  }
+  emojiUploading.value = true
+  try {
+    const content = await readBase64(file.raw)
+    await chatApi.uploadEmoji(tenant.value, content, emojiDescription.value.trim())
+    emojiDescription.value = ''
+    ElMessage.success('表情已入库')
+    await loadEmoji()
+  } catch (error) {
+    console.error('上传表情失败', error)
+    ElMessage.error('上传表情失败，请重试')
+  } finally {
+    emojiUploading.value = false
+  }
+  return false
+}
+
+const toggleEmoji = async (row: ChatEmoji) => {
+  if (acting.value) return
+  acting.value = true
+  try {
+    await chatApi.setEmojiEnabled(tenant.value, row.hash, !row.enabled)
+    row.enabled = !row.enabled
+    ElMessage.success(row.enabled ? '表情已启用' : '表情已停用')
+  } catch (error) {
+    console.error('切换表情状态失败', error)
+    ElMessage.error('切换表情状态失败，请重试')
+  } finally {
+    acting.value = false
+  }
+}
+
+const deleteEmoji = async (row: ChatEmoji) => {
+  if (acting.value) return
+  try {
+    await ElMessageBox.confirm('确定删除这条表情？文件与索引会一起移除。', '删除表情', {
+      confirmButtonText: '确定删除',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+  } catch (action) {
+    if (action === 'cancel' || action === 'close') return
+    throw action
+  }
+  acting.value = true
+  try {
+    await chatApi.deleteEmoji(tenant.value, row.hash)
+    ElMessage.success('表情已删除')
+    await loadEmoji()
+  } catch (error) {
+    console.error('删除表情失败', error)
+    ElMessage.error('删除表情失败，请重试')
+  } finally {
+    acting.value = false
+  }
+}
+
+const loadKnowledge = async () => {
+  if (!tenant.value) {
+    knowledge.value = []
+    return
+  }
+  knowledgeLoading.value = true
+  try {
+    const result = await chatApi.listKnowledge(tenant.value)
+    knowledge.value = result.items || []
+  } catch (error) {
+    console.error('加载知识文档失败', error)
+    ElMessage.error('加载知识文档失败，请重试')
+  } finally {
+    knowledgeLoading.value = false
+  }
+}
+
+const loadKnowledgeFile = (file: UploadFile) => {
+  if (!file.raw) return false
+  const reader = new FileReader()
+  reader.onload = () => {
+    knowledgeText.value = String(reader.result || '')
+    if (!knowledgeTitle.value.trim()) {
+      knowledgeTitle.value = file.name.replace(/\.[^.]+$/, '')
+    }
+  }
+  reader.readAsText(file.raw)
+  return false
+}
+
+const uploadKnowledge = async () => {
+  if (knowledgeUploading.value) return
+  if (!knowledgeText.value.trim()) {
+    ElMessage.warning('请填写或上传文档内容')
+    return
+  }
+  knowledgeUploading.value = true
+  try {
+    await chatApi.uploadKnowledge(tenant.value, knowledgeTitle.value.trim(), knowledgeText.value)
+    knowledgeTitle.value = ''
+    knowledgeText.value = ''
+    ElMessage.success('文档已入库')
+    await loadKnowledge()
+  } catch (error) {
+    console.error('导入知识文档失败', error)
+    ElMessage.error('导入知识文档失败，请重试')
+  } finally {
+    knowledgeUploading.value = false
+  }
+}
+
+const deleteKnowledge = async (row: ChatKnowledgeDoc) => {
+  if (acting.value) return
+  try {
+    await ElMessageBox.confirm(`确定删除文档「${row.title}」？删除后不再参与检索。`, '删除知识文档', {
+      confirmButtonText: '确定删除',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+  } catch (action) {
+    if (action === 'cancel' || action === 'close') return
+    throw action
+  }
+  acting.value = true
+  try {
+    await chatApi.deleteKnowledge(tenant.value, row.id)
+    ElMessage.success('知识文档已删除')
+    await loadKnowledge()
+  } catch (error) {
+    console.error('删除知识文档失败', error)
+    ElMessage.error('删除知识文档失败，请重试')
+  } finally {
+    acting.value = false
+  }
+}
+
+const loadReminders = async () => {
+  if (!tenant.value) {
+    reminders.value = []
+    return
+  }
+  reminderLoading.value = true
+  try {
+    const result = await chatApi.listReminders(tenant.value)
+    reminders.value = result.items || []
+  } catch (error) {
+    console.error('加载提醒失败', error)
+    ElMessage.error('加载提醒失败，请重试')
+  } finally {
+    reminderLoading.value = false
+  }
+}
+
+const loadHealth = async () => {
+  healthLoading.value = true
+  try {
+    health.value = await chatApi.getHealth()
+  } catch (error) {
+    console.error('加载聊天状态失败', error)
+    health.value = null
+  } finally {
+    healthLoading.value = false
+  }
+}
+
+const loadJobs = async () => {
+  try {
+    jobs.value = await chatApi.getJobs(tenant.value)
+  } catch (error) {
+    console.error('加载后台任务失败', error)
+    jobs.value = { jobs: [], cursors: [] }
+  }
+}
+
 const load = async () => {
   if (!tenant.value.trim()) {
     ElMessage.warning('请先选择或填写租户')
@@ -234,6 +472,11 @@ const load = async () => {
       loadPlannerSamples(),
       loadBehavior(),
       loadReplyGate(),
+      loadEmoji(),
+      loadKnowledge(),
+      loadReminders(),
+      loadHealth(),
+      loadJobs(),
     ])
     style.value = styleResult.style
     loaded.value = true
@@ -379,6 +622,179 @@ onMounted(() => {
       <div class="tenant-help">
         群聊和私聊各自独立；这里的租户等于 session_id，不会跨群合并。
       </div>
+    </div>
+
+    <div v-if="loaded" class="panel">
+      <div class="panel-header">
+        <h3 class="panel-title">运行状态</h3>
+        <el-button :icon="Refresh" :loading="healthLoading" @click="loadHealth">刷新</el-button>
+      </div>
+      <div class="meta-grid">
+        <span>
+          对话
+          <el-tag :type="health?.enabled ? 'success' : 'info'" size="small">
+            {{ health?.enabled ? '已启用' : '未启用' }}
+          </el-tag>
+        </span>
+        <span>
+          记忆库
+          <el-tag :type="health?.memory_ready ? 'success' : 'danger'" size="small">
+            {{ health?.memory_ready ? '就绪' : '未就绪' }}
+          </el-tag>
+        </span>
+        <span>
+          调度器
+          <el-tag :type="health?.scheduler_ready ? 'success' : 'warning'" size="small">
+            {{ health?.scheduler_ready ? '运行中' : '未加载' }}
+          </el-tag>
+        </span>
+        <span>在线 Bot：{{ health?.online_bots ?? 0 }}</span>
+        <span v-if="health?.degraded_reason">降级：{{ health.degraded_reason }}</span>
+      </div>
+    </div>
+
+    <div v-if="loaded" class="panel">
+      <div class="panel-header">
+        <h3 class="panel-title">表情包</h3>
+        <div class="panel-actions">
+          <el-input
+            v-model="emojiDescription"
+            class="emoji-description"
+            clearable
+            placeholder="描述（留空由视觉模型生成）"
+          />
+          <el-upload
+            :auto-upload="false"
+            :show-file-list="false"
+            :disabled="emojiUploading"
+            accept="image/*"
+            :on-change="uploadEmojiFile"
+          >
+            <el-button type="primary" plain :loading="emojiUploading">上传表情</el-button>
+          </el-upload>
+          <el-button :icon="Refresh" :loading="emojiLoading" @click="loadEmoji">刷新</el-button>
+        </div>
+      </div>
+      <div class="tenant-help">按描述与标签匹配当前回复，同一表情冷却 5 分钟；发送失败时只保留文字。</div>
+      <el-table v-loading="emojiLoading" :data="emojis" row-key="hash" empty-text="暂无表情">
+        <el-table-column label="预览" width="96">
+          <template #default="{ row }">
+            <img class="emoji-preview" :src="chatApi.emojiImageUrl(tenant, row.hash)" :alt="row.description" />
+          </template>
+        </el-table-column>
+        <el-table-column prop="description" label="描述" min-width="200" show-overflow-tooltip />
+        <el-table-column label="标签" min-width="160">
+          <template #default="{ row }">
+            <el-tag v-for="tag in row.tags" :key="tag" size="small" type="info" class="rule-tag">{{ tag }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="count" label="发送" width="80" />
+        <el-table-column label="最近发送" min-width="170">
+          <template #default="{ row }">{{ formatTime(row.last_used) }}</template>
+        </el-table-column>
+        <el-table-column label="启用" width="90">
+          <template #default="{ row }">
+            <el-switch :model-value="row.enabled" :disabled="acting" @change="toggleEmoji(row)" />
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="90" fixed="right">
+          <template #default="{ row }">
+            <el-button link type="danger" :disabled="acting" @click="deleteEmoji(row)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </div>
+
+    <div v-if="loaded" class="panel">
+      <div class="panel-header">
+        <h3 class="panel-title">知识库</h3>
+        <el-button :icon="Refresh" :loading="knowledgeLoading" @click="loadKnowledge">刷新</el-button>
+      </div>
+      <div class="knowledge-form">
+        <el-input v-model="knowledgeTitle" class="knowledge-title" clearable placeholder="文档标题" />
+        <el-upload
+          :auto-upload="false"
+          :show-file-list="false"
+          accept=".txt,.md,text/plain,text/markdown"
+          :on-change="loadKnowledgeFile"
+        >
+          <el-button plain>读取文本文件</el-button>
+        </el-upload>
+        <el-button type="primary" :loading="knowledgeUploading" @click="uploadKnowledge">导入文档</el-button>
+      </div>
+      <el-input
+        v-model="knowledgeText"
+        type="textarea"
+        :rows="4"
+        placeholder="粘贴纯文本或 Markdown；导入后按配置切块并立即参与检索"
+      />
+      <el-table v-loading="knowledgeLoading" :data="knowledge" row-key="id" empty-text="暂无知识文档" class="knowledge-table">
+        <el-table-column prop="title" label="标题" min-width="200" show-overflow-tooltip />
+        <el-table-column prop="source" label="来源" width="120" />
+        <el-table-column label="更新时间" min-width="170">
+          <template #default="{ row }">{{ formatTime(row.updated_at) }}</template>
+        </el-table-column>
+        <el-table-column label="操作" width="90" fixed="right">
+          <template #default="{ row }">
+            <el-button link type="danger" :disabled="acting" @click="deleteKnowledge(row)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </div>
+
+    <div v-if="loaded" class="panel">
+      <div class="panel-header">
+        <h3 class="panel-title">提醒</h3>
+        <el-button :icon="Refresh" :loading="reminderLoading" @click="loadReminders">刷新</el-button>
+      </div>
+      <div class="tenant-help">待确认的提醒需要用户回复 #确认提醒 &lt;编号&gt; 后才会发送；失败会按 1/2/5/10/30 分钟退避重试。</div>
+      <el-table v-loading="reminderLoading" :data="reminders" row-key="id" empty-text="暂无提醒">
+        <el-table-column prop="id" label="编号" width="80" />
+        <el-table-column prop="user_id" label="用户" width="140" show-overflow-tooltip />
+        <el-table-column prop="content" label="内容" min-width="200" show-overflow-tooltip />
+        <el-table-column label="计划时间" min-width="170">
+          <template #default="{ row }">{{ formatTime(row.due_at) }}</template>
+        </el-table-column>
+        <el-table-column label="状态" width="100">
+          <template #default="{ row }">
+            <el-tag :type="reminderTag(row.status).type" size="small">{{ reminderTag(row.status).text }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="attempts" label="重试" width="80" />
+        <el-table-column label="下次重试" min-width="170">
+          <template #default="{ row }">{{ formatTime(row.next_attempt_at) }}</template>
+        </el-table-column>
+        <el-table-column prop="last_error" label="错误" min-width="160" show-overflow-tooltip />
+        <el-table-column label="送达时间" min-width="170">
+          <template #default="{ row }">{{ formatTime(row.sent_at) }}</template>
+        </el-table-column>
+      </el-table>
+    </div>
+
+    <div v-if="loaded" class="panel">
+      <div class="panel-header">
+        <h3 class="panel-title">后台任务</h3>
+        <el-button :icon="Refresh" @click="loadJobs">刷新</el-button>
+      </div>
+      <el-table :data="jobs.jobs" empty-text="调度器未加载或没有聊天任务">
+        <el-table-column prop="id" label="任务" min-width="200" />
+        <el-table-column label="下次运行" min-width="170">
+          <template #default="{ row }">{{ formatTime(row.next_run) }}</template>
+        </el-table-column>
+        <el-table-column label="等待中" width="90">
+          <template #default="{ row }">{{ row.pending ? '是' : '否' }}</template>
+        </el-table-column>
+      </el-table>
+      <el-table :data="jobs.cursors" empty-text="没有任务游标" class="knowledge-table">
+        <el-table-column prop="job" label="游标" width="120" />
+        <el-table-column prop="direction" label="方向" width="100" />
+        <el-table-column prop="cursor_seq" label="位置" width="100" />
+        <el-table-column prop="fail_count" label="失败" width="80" />
+        <el-table-column label="下次重试" min-width="170">
+          <template #default="{ row }">{{ formatTime(row.next_retry_at) }}</template>
+        </el-table-column>
+        <el-table-column prop="last_error" label="错误" min-width="200" show-overflow-tooltip />
+      </el-table>
     </div>
 
     <div v-if="loaded" class="panel">
@@ -807,5 +1223,32 @@ onMounted(() => {
 
 .gate-distribution .block-label {
   margin-bottom: 0;
+}
+
+.emoji-description {
+  width: 240px;
+}
+
+.emoji-preview {
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+}
+
+.knowledge-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.knowledge-title {
+  width: 320px;
+}
+
+.knowledge-table {
+  margin-top: 16px;
 }
 </style>
