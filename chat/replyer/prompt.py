@@ -9,19 +9,13 @@ from __future__ import annotations
 import random
 from typing import Any
 
-from ..types import ChatRequest, is_proactive, speaker_label
+from ..types import ChatRequest, speaker_label
 from ..bindings import PERSONA, get_binding
 from ..personas import DEFAULT_PERSONA, get_persona_text, compose_persona_prompt
-from ...utils.tz import now
 from ..context_summary import SUMMARY_HEADER
 from ..message_receive.reactions import reaction_block
 
-MAX_BACKGROUND_CHARS = 2000
-MAX_BACKGROUND_LINE_CHARS = 500
 MAX_CURRENT_CHARS = 4000
-CURRENT_MARK = "[需要你回应]"
-BACKGROUND_HEADER = "[群聊背景，不要回复]"
-_WEEKDAYS = "一二三四五六日"
 
 # 注意力漂移提示块对齐 MaiBot（commit 062d45c，`src/maisaka/attention_drift.py`），只保留中文。
 _DRIFT_LEVEL_RULES = {
@@ -71,54 +65,6 @@ def mentions_line(mentions: list[Any]) -> str:
     return "[@成员: " + ", ".join(ref.render() for ref in mentions) + "]"
 
 
-def _flatten(content: Any) -> str:
-    """把一条历史消息压成单行，合并后不会伪造出新的发言人。"""
-    line = " ".join(str(content or "").split())
-    return f"{line[: MAX_BACKGROUND_LINE_CHARS - 1]}…" if len(line) > MAX_BACKGROUND_LINE_CHARS else line
-
-
-def _split_speaker(line: str) -> tuple[str, str]:
-    """拆分「昵称(ID): 正文」，没有发言标识时返回空标签。"""
-    label, sep, text = line.partition(": ")
-    return (label, text) if sep else ("", line)
-
-
-def background_block(messages: list[dict[str, Any]]) -> str:
-    """把未触发的群消息并成一段背景；同一人连续发言合并，超预算时保留最近的。"""
-    lines: list[str] = []
-    dropped = len(messages)
-    for index in range(len(messages) - 1, -1, -1):
-        line = _flatten(messages[index].get("content"))
-        if not line:
-            continue
-        label, text = _split_speaker(line)
-        candidate = [line, *lines]
-        if label and lines and _split_speaker(lines[0])[0] == label:
-            merged = f"{line}；{_split_speaker(lines[0])[1]}" if text else lines[0]
-            if len(merged) <= MAX_BACKGROUND_LINE_CHARS:
-                candidate = [merged, *lines[1:]]
-        header = BACKGROUND_HEADER if not index else f"{BACKGROUND_HEADER}（更早的 {index} 条已省略）"
-        budget = MAX_BACKGROUND_CHARS - len(header) - 1
-        if len("\n".join(candidate)) > budget:
-            if not lines:
-                lines = [line[: budget - 1] + "…"] if budget > 0 else []
-                dropped = index
-            break
-        lines = candidate
-        dropped = index
-    if not lines:
-        return ""
-    header = BACKGROUND_HEADER if not dropped else f"{BACKGROUND_HEADER}（更早的 {dropped} 条已省略）"
-    return f"{header}\n" + "\n".join(lines)
-
-
-def mark_current(content: str | list[dict[str, Any]]) -> str | list[dict[str, Any]]:
-    """给本轮要回答的消息加标记，与背景块区分。"""
-    if isinstance(content, str):
-        return f"{CURRENT_MARK}\n{content}"
-    return [{"type": "text", "text": CURRENT_MARK}, *content]
-
-
 def append_note(messages: list[dict[str, Any]], note: str) -> None:
     """把补充要求并进最后一条消息，避免新增 system 消息覆盖人格。"""
     if not messages:
@@ -133,9 +79,28 @@ def append_note(messages: list[dict[str, Any]], note: str) -> None:
         messages.append({"role": "user", "content": note})
 
 
+def requested_reply_style(style: str) -> str:
+    """采用 MaiBot 原版的本轮篇幅指示。"""
+    return {
+        "简短表达": "请简短的回复，允许句子残缺，奇怪表达，倒装，省略，符合口语习惯，符合省力随意回复习惯",
+        "正常回复": "",
+        "长回复": "可以针对问题做出较为详细的评论和说明",
+    }.get(style.strip(), "")
+
+
 def _public(message: dict[str, Any]) -> dict[str, Any]:
     """去掉只给运行时用的内部字段，历史条目里的来源标记不发给模型。"""
-    return {key: value for key, value in message.items() if not str(key).startswith("_")}
+    public = {key: value for key, value in message.items() if not str(key).startswith("_")}
+    source_ids = message.get("_source_ids")
+    if source_ids and public.get("role") == "user":
+        identity = "[msg_id: " + ", ".join(str(value) for value in source_ids) + "]"
+        content = public.get("content")
+        public["content"] = (
+            f"{identity}\n{content}"
+            if isinstance(content, str)
+            else [{"type": "text", "text": identity}, *(content or [])]
+        )
+    return public
 
 
 def assemble_messages(
@@ -148,6 +113,11 @@ def assemble_messages(
     context_summary: str = "",
 ) -> list[dict[str, Any]]:
     """组装发给模型的消息：人格、记忆、状态摘要、历史背景和本轮待回应内容。"""
+    current_ids = set(request.source_message_ids or [request.message_id or request.dedupe_key])
+    current_present = any(
+        message.get("role") == "user" and bool(current_ids.intersection(message.get("_source_ids", [])))
+        for message in history
+    )
     history = [_public(message) for message in history]
     messages: list[dict[str, Any]] = []
     if persona_text:
@@ -156,16 +126,8 @@ def assemble_messages(
         messages.append({"role": "system", "content": memory_block})
     if context_summary:
         messages.append({"role": "system", "content": f"{SUMMARY_HEADER}\n{context_summary}"})
-    if request.is_group:
-        split = len(history)
-        while split and history[split - 1].get("role") == "user":
-            split -= 1
-        messages.extend(history[:split])
-        if block := background_block(history[split:]):
-            messages.append({"role": "user", "content": block})
-        messages.append({"role": "user", "content": mark_current(current_content)})
-    else:
-        messages.extend(history)
+    messages.extend(history)
+    if not current_present:
         messages.append({"role": "user", "content": current_content})
     return messages
 
@@ -190,57 +152,6 @@ def truncate_content(content: Any, limit: int = MAX_CURRENT_CHARS) -> Any:
             result.append({**part, "text": text[: remaining - 1] + "…"})
             remaining = 0
     return result
-
-
-def scene_hint(request: ChatRequest, persona_name: str = "") -> str:
-    """告诉模型当前是群聊还是私聊、自己的名字，以及 @ 目标的读法。"""
-    if request.is_group:
-        lines = [
-            "\n\n你正在群聊中。只有开头带「[需要你回应]」的那条消息要你回答；"
-            "「[群聊背景，不要回复]」和更早的消息只是背景，不要逐条回复、总结或重新回答。",
-            "用户消息的「昵称(ID): 」是发言人标识，不是消息内容。不要把不同成员当成同一个人。",
-            "「[图片: 描述]」是图片摘要。指代某人用其昵称，回复不要加「昵称: 」前缀。",
-        ]
-        if "[合并转发消息]" in request.text:
-            lines.append("「[合并转发消息]」是一张转发卡片，需要其中的内容时用 view_forward_message 展开。")
-        if persona_name:
-            lines.append(f"你的名字是「{persona_name}」。")
-        if request.mentions:
-            lines.append(
-                "消息末尾的「[@成员: 昵称(ID)]」列出了被 @ 的成员，是系统标记不是正文；"
-                "用户要求对某人操作时直接用其中的 ID，没给出目标就先问清楚，不要对发起人自己执行。"
-            )
-        if is_proactive(request):
-            lines.append(
-                "本轮是主动接话：没有人在 @ 你，默认不要 @ 人、不要引用消息；"
-                "顺着话题自然接一句，不需要回应或话题已经结束时保持安静。"
-            )
-        return "".join(lines)
-    lines = ["\n\n用户正在跟你私聊。"]
-    if "[合并转发消息]" in request.text:
-        lines.append("「[合并转发消息]」是一张转发卡片，需要其中的内容时用 view_forward_message 展开。")
-    return "".join(lines)
-
-
-def time_hint() -> str:
-    """注入一行当前北京时间与时段；深夜和早上附带一句语气提示。"""
-    current = now()
-    hour = current.hour
-    advice = ""
-    if hour < 6 or hour >= 23:
-        period, advice = "深夜", "语气轻，不要主动问早或道晚安。"
-    elif hour < 9:
-        period, advice = "早上", "可以自然地问候。"
-    elif hour < 11:
-        period = "上午"
-    elif hour < 13:
-        period = "中午"
-    elif hour < 18:
-        period = "下午"
-    else:
-        period = "晚上"
-    stamp = f"{current:%Y-%m-%d %H:%M} 周{_WEEKDAYS[current.weekday()]}"
-    return f"\n\n现在：{stamp}，{period}。{advice}"
 
 
 def build_user_content(request: ChatRequest) -> str | list[dict[str, Any]]:
@@ -344,9 +255,17 @@ def build_persona_text(request: ChatRequest, chat_cfg: dict[str, Any], behavior:
     effective_persona = str(persona_name or bound_persona or chat_cfg["persona"] or DEFAULT_PERSONA)
     scene_prompt = behavior.get("group_chat_prompt" if request.is_group else "private_chat_prompts")
     persona_text = compose_persona_prompt(
-        effective_persona, get_persona_text(effective_persona), scene_prompt=str(scene_prompt or "")
+        effective_persona,
+        get_persona_text(effective_persona),
+        scene_prompt=str(scene_prompt or ""),
+        planner=bool(request.metadata.get("planner_loop") and not request.metadata.get("planner_reply")),
     )
-    persona_text = f"{persona_text}{scene_hint(request, effective_persona)}".strip()
+    if request.metadata.get("planner_loop") and not request.metadata.get("planner_reply"):
+        from ..heart_flow.prompts import planner_prompt
+
+        persona_text = planner_prompt(
+            effective_persona, get_persona_text(effective_persona), behavior, is_group=request.is_group
+        )
     if extra_prompt := extra_prompt_block(chat_cfg, request):
         persona_text = f"{persona_text}\n\n当前聊天额外注意事项：\n{extra_prompt}"
     if reaction := reaction_block(chat_cfg, request.text):
@@ -354,11 +273,6 @@ def build_persona_text(request: ChatRequest, chat_cfg: dict[str, Any], behavior:
     if drift := attention_drift_block(chat_cfg.get("attention_drift")):
         persona_text = f"{persona_text}\n\n{drift}"
     aliases = [str(alias).strip() for alias in behavior.get("persona_aliases") or [] if str(alias).strip()]
-    if aliases:
+    if aliases and (not request.metadata.get("planner_loop") or request.metadata.get("planner_reply")):
         persona_text = f"{persona_text}\n有人也这么叫你：{'、'.join(aliases)}。"
-    if request.is_group and behavior.get("enable_reply_at", True):
-        persona_text = (
-            f"{persona_text}\n\n回复时如需 @ 某人，可在开头写 @昵称；只能 @ 本条消息的发送者或消息中被 @ 的人。"
-        )
-    persona_text = f"{persona_text}{time_hint()}"
     return effective_persona, persona_text

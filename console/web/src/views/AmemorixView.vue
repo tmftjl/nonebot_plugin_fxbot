@@ -975,7 +975,7 @@ onMounted(async () => {
                   </div>
                 </div>
 
-                <div v-loading="recordLoading" class="record-list">
+                <div class="record-list">
                   <div
                     v-for="row in records"
                     :key="recordKey(row)"
@@ -1011,7 +1011,6 @@ onMounted(async () => {
 
               <template v-else>
                 <el-table
-                  v-loading="profileLoading"
                   :data="profiles"
                   empty-text="还没有生成画像"
                   @row-click="openProfile"
@@ -1055,7 +1054,7 @@ onMounted(async () => {
                 <span v-if="imageStatus?.dimension">维度 {{ imageStatus.dimension }}</span>
                 <span v-if="imageStatus?.message">{{ imageStatus.message }}</span>
               </div>
-              <el-table v-loading="imageLoading" :data="images" empty-text="当前会话没有图片记忆">
+              <el-table :data="images" empty-text="当前会话没有图片记忆">
                 <el-table-column label="预览" width="110">
                   <template #default="{ row }">
                     <el-image
@@ -1090,7 +1089,7 @@ onMounted(async () => {
                 <h3 class="panel-title">记忆流</h3>
                 <el-button :icon="Refresh" :loading="timelineLoading" @click="loadTimeline">刷新</el-button>
               </div>
-              <el-table v-loading="timelineLoading" :data="timelineItems" empty-text="没有记忆变更">
+              <el-table :data="timelineItems" empty-text="没有记忆变更">
                 <el-table-column label="时间" width="170">
                   <template #default="{ row }">{{ formatTime(row.timestamp) }}</template>
                 </el-table-column>
@@ -1133,7 +1132,7 @@ onMounted(async () => {
                   已生成
                   <a :href="bundleDownload.url" target="_blank" rel="noopener">{{ bundleDownload.name }}</a>
                 </div>
-                <el-table v-loading="bundleLoading" :data="bundles" empty-text="没有已安装的记忆包">
+                <el-table :data="bundles" empty-text="没有已安装的记忆包">
                   <el-table-column label="名称" min-width="220">
                     <template #default="{ row }">
                       <div class="record-title">{{ row.name || row.package_id }}</div>
@@ -1189,7 +1188,7 @@ onMounted(async () => {
                   </el-button>
                 </div>
                 <h4 class="sub-title">导入任务</h4>
-                <el-table v-loading="importLoading" :data="importTasks" empty-text="没有导入任务">
+                <el-table :data="importTasks" empty-text="没有导入任务">
                   <el-table-column label="任务" min-width="220">
                     <template #default="{ row }">
                       <div class="record-title">{{ row.task_id }}</div>
@@ -1228,7 +1227,7 @@ onMounted(async () => {
                     <el-button :icon="Refresh" :loading="correctionLoading" @click="loadCorrections">刷新</el-button>
                   </div>
                 </div>
-                <el-table v-loading="correctionLoading" :data="correctionItems" empty-text="没有纠正记录">
+                <el-table :data="correctionItems" empty-text="没有纠正记录">
                   <el-table-column type="expand">
                     <template #default="{ row }">
                       <pre class="json-block">{{ JSON.stringify(row.detail, null, 2) }}</pre>
@@ -1345,7 +1344,6 @@ onMounted(async () => {
                   </div>
                 </div>
                 <el-table
-                  v-loading="episodeLoading"
                   :data="episodes"
                   empty-text="还没有生成情景片段"
                   @row-click="openRecord"
@@ -1381,7 +1379,7 @@ onMounted(async () => {
                         :prefix-icon="Search"
                       />
                     </div>
-                    <div v-loading="graphLoading" class="node-list">
+                    <div class="node-list">
                       <button
                         v-for="node in filteredNodes"
                         :key="node.id"
@@ -1400,7 +1398,7 @@ onMounted(async () => {
                     <div class="section-toolbar">
                       <h4 class="sub-title no-margin">{{ selectedNode || '节点详情' }}</h4>
                     </div>
-                    <div v-if="nodeLoading" v-loading="true" class="loading-block" />
+                    <div v-if="nodeLoading" class="loading-block">加载中…</div>
                     <template v-else-if="nodeDetail">
                       <h4 class="sub-title">相关关系（{{ nodeDetail.relations.length }}）</h4>
                       <el-table :data="nodeDetail.relations" size="small" empty-text="没有关系">
@@ -1441,7 +1439,7 @@ onMounted(async () => {
               <div class="config-hint">
                 展示当前会话可恢复的删除操作与已撤回事实。永久清理会跨会话清理超过 24 小时的回收记录。
               </div>
-              <el-table v-loading="recycleLoading" :data="recycleItems" empty-text="回收站为空">
+              <el-table :data="recycleItems" empty-text="回收站为空">
                 <el-table-column label="类型" width="86">
                   <template #default="{ row }">
                     <el-tag size="small" effect="plain">{{ row.kind === 'fact' ? '事实' : '删除' }}</el-tag>
@@ -1533,7 +1531,7 @@ onMounted(async () => {
     </el-dialog>
 
     <el-drawer v-model="recordDrawer" :title="selectedRecord?.title || '记忆详情'" size="560px">
-      <div v-loading="detailLoading" class="drawer-body">
+      <div class="drawer-body">
         <template v-if="recordDetail">
           <div class="meta-grid">
             <span>类型 <el-tag size="small">{{ typeLabels[recordDetail.record.type] }}</el-tag></span>

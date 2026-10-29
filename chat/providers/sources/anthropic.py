@@ -175,17 +175,27 @@ class AnthropicProvider(ChatProvider):
         model: str | None = None,
         temperature: float = 0.7,
         tools: list[dict[str, Any]] | None = None,
+        max_tokens: int | None = None,
     ) -> AsyncGenerator[LLMResponse, None]:
         """执行 Claude 流式对话请求。"""
         system_prompt, converted_messages = self._convert_to_anthropic_format(messages)
         params: dict[str, Any] = {
             "model": model or self.model_name,
             "messages": converted_messages,
-            "max_tokens": 4096,
+            "max_tokens": max_tokens or 4096,
             "temperature": temperature,
         }
         if system_prompt:
             params["system"] = system_prompt
+        if tools:
+            params["tools"] = [
+                {
+                    "name": tool["function"]["name"],
+                    "description": tool["function"].get("description", ""),
+                    "input_schema": tool["function"].get("parameters", {}),
+                }
+                for tool in tools
+            ]
 
         try:
             full_content = ""
@@ -201,7 +211,22 @@ class AnthropicProvider(ChatProvider):
                             content=event.delta.text,
                             is_stream_chunk=True,
                         )
-            yield LLMResponse(role="assistant", content=full_content)
+                final = await stream.get_final_message()
+            calls = [
+                {
+                    "id": block.id,
+                    "type": "function",
+                    "function": {"name": block.name, "arguments": json.dumps(block.input, ensure_ascii=False)},
+                }
+                for block in final.content
+                if block.type == "tool_use"
+            ]
+            yield LLMResponse(
+                role="assistant",
+                content=full_content,
+                tool_calls=calls,
+                tool_call_ids=[call["id"] for call in calls],
+            )
         except Exception as exc:
             logger.error(f"[{self.provider_id}] Claude stream 失败: {exc}")
             raise

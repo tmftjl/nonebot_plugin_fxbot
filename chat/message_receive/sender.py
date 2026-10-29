@@ -14,15 +14,16 @@ from functools import partial
 from nonebot import logger
 
 from ..typo import apply_typo, typo_config
-from ..emoji import mark_used, pick_emoji, emoji_config, emoji_by_hash
+from ..emoji import mark_used, emoji_by_hash
+from ..trace import turn_trace
 from ..types import ChatRequest, ChatResponse, is_proactive
 from ..voice import synthesize, tts_enabled
 from ..memory import state as memory_state
 from ..session import history_enabled
 from ...adapter import build_message, supports_reply, build_reply_segment, build_message_segment
-from ..memory.models import utc_now_naive
+from ..memory.models import ChatTurnItem, utc_now_naive
 from ..behavior.quote import decide_quote, quote_counter, quote_frequency
-from ..behavior.mentions import split_mentions
+from ..behavior.mentions import split_mentions, reply_at_enabled
 from ..behavior.response import typing_time, process_response
 from ..memory.repository import chat_repository
 from ..amemorix.writeback import chat_writeback
@@ -70,9 +71,10 @@ def _bot_id(runtime: Any) -> str:
 
 def _should_quote(request: ChatRequest, runtime: Any, part: str) -> bool:
     """按群聊/私聊引用频率抽签。"""
-    if not request.message_id or is_proactive(request):
+    target = str(request.metadata.get("reply_target_id") or request.message_id or "")
+    if not target or (is_proactive(request) and not request.metadata.get("planner_reply")):
         return False
-    context = quote_counter(request.session_id).snapshot(request.message_id)
+    context = quote_counter(request.session_id).snapshot(target)
     quote, _ = decide_quote(
         context=context,
         bot_user_id=_bot_id(runtime),
@@ -92,7 +94,8 @@ def first_payload(service: Any, request: ChatRequest, runtime: Any, part: str, u
     if _should_quote(request, runtime, part):
         try:
             if supports_reply(bot):
-                segments.append(build_reply_segment(bot, request.message_id))
+                target = str(request.metadata.get("reply_target_id") or request.message_id or "")
+                segments.append(build_reply_segment(bot, target))
         except Exception:
             logger.opt(exception=True).debug("[Chat] 引用构造失败，降级为纯文本")
     if user_ids:
@@ -109,6 +112,57 @@ def first_payload(service: Any, request: ChatRequest, runtime: Any, part: str, u
     except Exception:
         logger.opt(exception=True).debug("[Chat] 首段构造失败，降级为纯文本")
         return part
+
+
+async def send_pictures(service: Any, request: ChatRequest, response: ChatResponse, runtime: Any, matcher: Any) -> None:
+    """正文成功后依序附图，成功回执才进入可见历史，清空后停止发送。"""
+    bot = getattr(runtime, "bot", None)
+    if bot is None:
+        return
+    for index, picture in enumerate(response.metadata.get("attach_pictures", [])):
+        if index < int(response.metadata.get("sent_pictures", 0)):
+            continue
+        if not _alive(service, request, response):
+            return
+        persisted_id = None
+        if (turn_id := response.metadata.get("turn_db_id")) and memory_state.is_ready():
+            persisted_id = await chat_repository.append_turn_item(
+                ChatTurnItem(
+                    tenant=request.session_id,
+                    turn_id=turn_id,
+                    item_seq=len(parts(response)) + 1 + index,
+                    role="assistant",
+                    content="[图片]",
+                    visible=False,
+                    send_status="pending",
+                ),
+                generation=response.epoch,
+            )
+        if not _alive(service, request, response):
+            return
+        try:
+            receipt = await matcher.send(build_message(bot, build_message_segment(bot, "image", picture)))
+        except Exception:
+            logger.opt(exception=True).warning("[Chat] 回复附图发送失败")
+            if persisted_id is not None:
+                await chat_repository.update_turn_item(
+                    request.session_id, persisted_id, generation=response.epoch, send_status="failed", visible=False
+                )
+                await chat_repository.update_turn(
+                    request.session_id,
+                    request.turn_id,
+                    generation=response.epoch,
+                    status="partial",
+                    error="附图发送失败",
+                )
+            return
+        response.metadata["sent_pictures"] = index + 1
+        attachment = ChatResponse(
+            text="[图片]",
+            epoch=response.epoch,
+            metadata={"reply_parts": ["[图片]"], "turn_item_ids": [persisted_id] if persisted_id is not None else []},
+        )
+        await service.mark_sent(request, attachment, 0, _receipt_id(receipt), content="[图片]")
 
 
 async def send_voice(runtime: Any, matcher: Any, text: str, alive: Any = None) -> bool:
@@ -164,15 +218,78 @@ async def send_correction(runtime: Any, matcher: Any, text: str, message_id: str
         logger.opt(exception=True).debug("[Chat] 纠正消息发送失败，已跳过")
 
 
-async def _send_emoji_row(matcher: Any, bot: Any, row: Any) -> bool:
-    """发送一条表情并记录使用；失败只降级，不影响正文。"""
+async def deliver_emoji(
+    service: Any,
+    request: ChatRequest,
+    response: ChatResponse,
+    runtime: Any,
+    matcher: Any,
+    row: Any,
+    sequence: int,
+    *,
+    target_id: str = "",
+) -> bool:
+    """发送成功后记录表情的使用、平台回执和可见历史。"""
+    if response.metadata.get("emoji_sent") or not _alive(service, request, response):
+        return False
+    bot = getattr(runtime, "bot", None)
+    if bot is None:
+        return False
+    content = f"[表情包: {row.description}]" if row.description else "[表情包]"
+    identifier = None
+    if (turn_id := response.metadata.get("turn_db_id")) and memory_state.is_ready():
+        identifier = await chat_repository.append_turn_item(
+            ChatTurnItem(
+                tenant=request.session_id,
+                turn_id=turn_id,
+                item_seq=sequence,
+                role="assistant",
+                content=content,
+                payload=f'{{"emoji_hash":"{row.hash}"}}',
+                visible=False,
+                send_status="pending",
+            ),
+            generation=response.epoch,
+        )
+        if identifier is None:
+            return False
+    if not _alive(service, request, response):
+        if identifier is not None:
+            await chat_repository.update_turn_item(
+                request.session_id, identifier, generation=response.epoch, send_status="skipped", visible=False
+            )
+        return False
     try:
         segment = build_message_segment(bot, "image", row.path)
-        await matcher.send(build_message(bot, segment))
+        segments = [segment]
+        if target_id and supports_reply(bot):
+            segments.insert(0, build_reply_segment(bot, target_id))
+        receipt = await matcher.send(build_message(bot, *segments))
     except Exception:
-        logger.opt(exception=True).debug("[Chat] 表情发送失败，已降级为文字")
+        logger.opt(exception=True).warning("[Chat] 表情发送失败")
+        if identifier is not None:
+            await chat_repository.update_turn_item(
+                request.session_id, identifier, generation=response.epoch, send_status="failed", visible=False
+            )
+            await chat_repository.update_turn(
+                request.session_id,
+                request.turn_id,
+                generation=response.epoch,
+                status="failed" if sequence == 1 else "partial",
+                error="表情发送失败",
+            )
         return False
+    response.metadata["emoji_sent"] = True
     await mark_used(row)
+    visible = ChatResponse(
+        text=content,
+        epoch=response.epoch,
+        metadata={"reply_parts": [content], "turn_item_ids": [identifier] if identifier is not None else []},
+    )
+    receipt_id = _receipt_id(receipt)
+    await service.mark_sent(request, visible, 0, receipt_id, content=content)
+    if receipt_id:
+        quote_counter(request.session_id).record(receipt_id, _bot_id(runtime))
     return True
 
 
@@ -185,7 +302,7 @@ async def send_emoji(
     sent: int,
     alive: Any = None,
 ) -> None:
-    """正文发送后补表情；新逻辑只发规划器选中的，旧逻辑按回复内容匹配。"""
+    """正文发送后只交付 Planner 明确指定的表情附件。"""
     alive = alive or _always_alive
     bot = getattr(runtime, "bot", None)
     if bot is None or not alive():
@@ -194,13 +311,16 @@ async def send_emoji(
     if attached:
         row = await emoji_by_hash(request.session_id, attached)
         if row is not None and alive():
-            await _send_emoji_row(matcher, bot, row)
+            await deliver_emoji(
+                service,
+                request,
+                response,
+                runtime,
+                matcher,
+                row,
+                len(parts(response)) + len(response.metadata.get("attach_pictures", [])) + 1,
+            )
         return
-    if emoji_config().get("use_new_send_logic"):
-        return
-    row = await pick_emoji(request.session_id, "\n".join(parts(response)[:sent]))
-    if row is not None and alive():
-        await _send_emoji_row(matcher, bot, row)
 
 
 async def send_parts(service: Any, request: ChatRequest, response: ChatResponse, runtime: Any, matcher: Any) -> str:
@@ -231,22 +351,38 @@ async def record_send_trace(
     error: str = "",
 ) -> None:
     """补写发送追踪；失败不影响对话。"""
+    state = turn_trace(request)
+    delivery = {
+        "sent_parts": sent_parts,
+        "total_parts": len(parts(response)),
+        "failed_index": failed_index,
+        "cancelled": cancelled,
+        "send_ms": send_ms,
+    }
+    budget: dict = {"send": delivery}
+    if state is not None:
+        provider = next((stage["provider"] for stage in reversed(state.stages) if stage["kind"] == "replyer"), "")
+        state.add_stage(
+            "send",
+            "发送回复",
+            send_ms,
+            provider=provider,
+            error=error,
+            target_message_id=request.message_id or "",
+            send=delivery,
+        )
+        if not state.saved:
+            return
+        budget = state.snapshot()
     if not memory_state.is_ready() or not history_enabled(request.is_group):
         return
     try:
         await chat_repository.update_trace(
             request.session_id,
-            request.turn_id,
-            budget={
-                "send": {
-                    "sent_parts": sent_parts,
-                    "total_parts": len(parts(response)),
-                    "failed_index": failed_index,
-                    "cancelled": cancelled,
-                    "send_ms": send_ms,
-                }
-            },
+            state.turn_id if state is not None else request.turn_id,
+            budget=budget,
             latency_ms=send_ms,
+            total_latency_ms=budget["timings"]["total_ms"] if state is not None else None,
             error=error,
         )
     except Exception:
@@ -264,8 +400,8 @@ async def _send_parts(
     sent_texts: list[str] = []
     async with service.session_store.send_lock(request.session_id):
         for index, part in enumerate(send_queue):
-            # MaiBot 在每段发送前都按内容长度模拟打字；首段也等待
-            await asyncio.sleep(typing_time(part))
+            if index > 0:
+                await asyncio.sleep(typing_time(part))
             if not service.is_current(request.session_id, response.epoch) or not service.is_latest(request):
                 delivery["cancelled"] = True
                 await service.mark_send_aborted(request, response, index)
@@ -279,7 +415,10 @@ async def _send_parts(
             user_ids: list[str] = []
             body = part
             if index == 0:
-                user_ids, body = split_mentions(part, request)
+                if request.metadata.get("planner_reply"):
+                    user_ids = request.metadata.get("reply_at_users", []) if reply_at_enabled() else []
+                else:
+                    user_ids, body = split_mentions(part, request)
             typo = apply_typo(body)
             payload = first_payload(service, request, runtime, typo.text, user_ids) if index == 0 else typo.text
             try:
@@ -300,6 +439,8 @@ async def _send_parts(
             if typo.correction:
                 await send_correction(runtime, matcher, typo.correction, receipt_id, alive)
         if sent_texts:
+            if delivery.get("failed_index") is None and not delivery.get("cancelled"):
+                await send_pictures(service, request, response, runtime, matcher)
             await send_emoji(service, request, response, runtime, matcher, len(sent_texts), alive)
     reply_text = "\n".join(sent_texts)
     if sent_texts and history_enabled(request.is_group):
@@ -310,6 +451,7 @@ async def _send_parts(
             user_name=request.user_name,
             group_id=str(request.group_id or ""),
             reply_text=reply_text,
+            reply_to_message_id=str(request.metadata.get("reply_target_id") or request.message_id or ""),
             occurred_at=utc_now_naive(),
         )
         if request.is_group:

@@ -6,7 +6,7 @@ from .result import MAX_TOOL_RESULT_CHARS, tool_result_content, prepare_tool_res
 from .search import TOOL_SEARCH_NAME, tool_search_tool
 from .forward import view_forward_message_tool
 from .runtime import ToolRuntime
-from .amemorix import query_memory_tool, query_person_profile_tool
+from .amemorix import query_memory_tool, query_image_memory_tool, query_person_profile_tool
 from .executor import execute_tool, tool_allowed
 from .registry import ToolRegistry, tool, default_registry
 from .subagent import (
@@ -52,5 +52,6 @@ __all__ = [
     "web_fetch_tool",
     "web_search_tool",
     "query_memory_tool",
+    "query_image_memory_tool",
     "query_person_profile_tool",
 ]

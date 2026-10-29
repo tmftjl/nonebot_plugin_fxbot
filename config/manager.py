@@ -12,7 +12,7 @@ from nonebot import logger
 from .proxy import Validator, ConfigProxy
 from ..utils.cache import cache
 from ..utils.paths import config_dir
-from .system_defaults import SYSTEM_DEFAULTS, migrate_system_config, validate_system_config
+from .system_defaults import SYSTEM_DEFAULTS, validate_system_config
 
 
 class ConfigConflictError(ValueError):
@@ -55,13 +55,7 @@ class ConfigManager:
         if self._bootstrapped:
             return
         config_dir()
-        system = self.register("system", SYSTEM_DEFAULTS, clean_extra=True, validator=validate_system_config)
-        try:
-            raw = system.storage.read(strict=True)
-            if migrate_system_config(raw):
-                system.save(raw)
-        except Exception as exc:
-            logger.warning(f"[Config] system/config.json 配置迁移跳过，读取或校验失败: {exc}")
+        self.register("system", SYSTEM_DEFAULTS, clean_extra=True, validator=validate_system_config)
         for proxy in list(self._proxies.values()):
             proxy.merge_and_save()
         self._bootstrapped = True

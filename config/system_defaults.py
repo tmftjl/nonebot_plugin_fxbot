@@ -26,9 +26,9 @@ SYSTEM_DEFAULTS = {
         "bot_admins": [],
     },
     "chat": {
-        "enabled": False,
+        "enabled": True,
         "command_prefixes": ["gs", "#", "ww"],
-        "private_enabled": False,
+        "private_enabled": True,
         "private_allowlist": [],
         "group_allowlist": [],
         "persona": "小鱼",
@@ -59,8 +59,6 @@ SYSTEM_DEFAULTS = {
         "reply_timing": {
             "message_debounce_mode": "natural",
             "talk_value": 1.0,
-            "private_reply_paused": False,
-            "private_reply_pause_rules": [],
             "mentioned_bot_reply": True,
             "inevitable_at_reply": True,
             "planner_message_steering": False,
@@ -75,8 +73,6 @@ SYSTEM_DEFAULTS = {
             "no_action_backoff_bypass_pending_count": 6,
         },
         "planner": {
-            "mode": "simple",
-            "wait_seconds": 60,
             "context_summary_max_chars": 6000,
             "passive_replyer": False,
         },
@@ -172,8 +168,6 @@ SYSTEM_DEFAULTS = {
         },
         "model_routing": {
             "reply": "",
-            "extract": "",
-            "style": "",
             "planner": "",
             "vision": "",
             "memory": "",
@@ -187,7 +181,6 @@ SYSTEM_DEFAULTS = {
             "image_embedding": "",
             "web_search": "",
         },
-        "provider_fallback": [],
         "capabilities": {
             "tool_result_condense": False,
             "tool_result_condense_threshold": 3000,
@@ -200,41 +193,6 @@ SYSTEM_DEFAULTS = {
         },
     },
 }
-
-
-def migrate_system_config(raw: dict[str, Any]) -> bool:
-    """把旧的 chat.web_search 迁移为 web.services；返回是否有改动。"""
-    chat = raw.get("chat")
-    if not isinstance(chat, dict) or "web_search" not in chat:
-        return False
-    legacy = chat.pop("web_search")
-    if not isinstance(legacy, dict):
-        return True
-    api_key = str(legacy.get("api_key") or "").strip()
-    if not api_key:
-        return True
-    web = chat.setdefault("web", {})
-    if not isinstance(web, dict):
-        return True
-    services = web.setdefault("services", [])
-    if isinstance(services, list) and not any(
-        isinstance(entry, dict) and entry.get("name") == "deepseek" for entry in services
-    ):
-        services.append(
-            {
-                "name": "deepseek",
-                "adapter": "deepseek",
-                "base_url": str(legacy.get("base_url") or ""),
-                "api_key": api_key,
-                "timeout": 60,
-                "search_depth": "basic",
-                "extract_depth": "basic",
-            }
-        )
-        routing = chat.setdefault("model_routing", {})
-        if isinstance(routing, dict):
-            routing["web_search"] = "deepseek"
-    return True
 
 
 def _validate_target_list(items: Any, name: str) -> None:
@@ -325,12 +283,6 @@ def validate_system_config(data: dict[str, Any]) -> None:
     planner = chat.get("planner", {})
     if not isinstance(planner, dict):
         raise ValueError("chat.planner 必须是对象")
-    mode = planner.get("mode", SYSTEM_DEFAULTS["chat"]["planner"]["mode"])
-    if mode not in {"simple", "complex"}:
-        raise ValueError("chat.planner.mode 只能是 simple 或 complex")
-    wait_seconds = planner.get("wait_seconds", SYSTEM_DEFAULTS["chat"]["planner"]["wait_seconds"])
-    if isinstance(wait_seconds, bool) or not isinstance(wait_seconds, int) or not 30 <= wait_seconds <= 120:
-        raise ValueError("chat.planner.wait_seconds 必须是 30 到 120 的整数")
     summary_chars = planner.get(
         "context_summary_max_chars", SYSTEM_DEFAULTS["chat"]["planner"]["context_summary_max_chars"]
     )
@@ -446,21 +398,9 @@ def validate_system_config(data: dict[str, Any]) -> None:
     mode = reply_timing.get("message_debounce_mode", SYSTEM_DEFAULTS["chat"]["reply_timing"]["message_debounce_mode"])
     if mode not in {"off", "fast", "natural", "steady"}:
         raise ValueError("chat.reply_timing.message_debounce_mode 只能是 off、fast、natural 或 steady")
-    for key in ("private_reply_paused", "mentioned_bot_reply", "inevitable_at_reply", "planner_message_steering"):
+    for key in ("mentioned_bot_reply", "inevitable_at_reply", "planner_message_steering"):
         if key in reply_timing and not isinstance(reply_timing[key], bool):
             raise ValueError(f"chat.reply_timing.{key} 必须是布尔值")
-    rules = reply_timing.get("private_reply_pause_rules", [])
-    if not isinstance(rules, list):
-        raise ValueError("chat.reply_timing.private_reply_pause_rules 必须是数组")
-    for rule in rules:
-        if not isinstance(rule, dict):
-            raise ValueError("chat.reply_timing.private_reply_pause_rules 的每一项必须是对象")
-        if not isinstance(rule.get("platform", ""), str):
-            raise ValueError("chat.reply_timing.private_reply_pause_rules.platform 必须是字符串")
-        if not str(rule.get("user_id") or "").strip():
-            raise ValueError("chat.reply_timing.private_reply_pause_rules.user_id 不能为空")
-        if "paused" in rule and not isinstance(rule["paused"], bool):
-            raise ValueError("chat.reply_timing.private_reply_pause_rules.paused 必须是布尔值")
     if "enable_talk_value_rules" in reply_timing and not isinstance(reply_timing["enable_talk_value_rules"], bool):
         raise ValueError("chat.reply_timing.enable_talk_value_rules 必须是布尔值")
     talk_value = reply_timing.get("talk_value", SYSTEM_DEFAULTS["chat"]["reply_timing"]["talk_value"])
@@ -597,9 +537,6 @@ def validate_system_config(data: dict[str, Any]) -> None:
         raise ValueError("chat.model_routing 必须是对象")
     if any(not isinstance(value, str) for value in routing.values()):
         raise ValueError("chat.model_routing 的值必须是字符串")
-    fallback = chat.get("provider_fallback", [])
-    if not isinstance(fallback, list) or any(not isinstance(name, str) for name in fallback):
-        raise ValueError("chat.provider_fallback 必须是字符串数组")
 
     providers = chat.get("providers", {})
     if not isinstance(providers, dict) or any(not isinstance(value, dict) for value in providers.values()):
@@ -617,8 +554,6 @@ def validate_system_config(data: dict[str, Any]) -> None:
             raise ValueError(f"{field} 必须引用 {capability} 类型的 Provider：{name}")
 
     validate_provider(chat.get("provider", ""), "chat.provider", "chat")
-    for name in fallback:
-        validate_provider(name, "chat.provider_fallback", "chat")
     task_capabilities = {"voice": "stt", "tts": "tts", "embedding": "embedding", "image_embedding": "embedding"}
     for task, name in routing.items():
         if task != "web_search":

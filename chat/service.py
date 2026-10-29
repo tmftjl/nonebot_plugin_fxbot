@@ -16,24 +16,47 @@ from collections.abc import Callable
 from nonebot import logger
 
 from .tools import ToolRuntime, subagent as subagent_module, tool_result_store
+from .trace import TurnTrace, turn_trace
 from .types import MentionRef, ChatRequest, ChatResponse, is_proactive
 from .memory import state as memory_state
 from .vision import describe_images, vision_configured
 from ..config import get_manager as get_config_manager
-from .planner import Plan
 from .replyer import prompt, generator
 from .session import ChatSessionStore, history_limit, default_session_store
+from ..utils.tz import now
 from .providers import LLMResponse
-from .heart_flow import plan_flow
+from .heart_flow import plan_flow, conversation
 from .memory.inject import learning_context
 from .behavior.quote import forget_counter
 from .amemorix.inject import memory_block
 from .context_summary import clear_summary, current_summary, compact_messages
+from .message_adapter import is_ignored_command
 from .message_receive import sender as sender_module, history as history_module
 from .memory.filtering import sanitize_line
 from .behavior.debounce import default_debounce_registry
-from .providers.routing import FallbackProvider, routed_task, fallback_provider, candidate_providers
+from .providers.routing import TaskProvider, routed_task, fallback_provider, candidate_providers
 from .behavior.reply_gate import default_reply_gate_registry
+
+
+def _cached_image_descriptions(request: ChatRequest, history: list[dict[str, Any]]) -> list[str] | None:
+    """复用当前消息已经完成的识图结果，避免 Planner 和回复器重复调用视觉模型。"""
+    if not request.images:
+        return None
+    cached = request.metadata.get("recognized_images")
+    if isinstance(cached, dict) and cached.get("sources") == request.images:
+        descriptions = cached.get("descriptions")
+        if isinstance(descriptions, list) and len(descriptions) == len(request.images) and any(descriptions):
+            return list(descriptions)
+    if request.batched or len(request.source_message_ids) > 1:
+        return None
+    identity = request.message_id or request.dedupe_key
+    for message in reversed(history):
+        if message.get("role") != "user" or identity not in message.get("_source_ids", []):
+            continue
+        descriptions = message.get("_image_descriptions")
+        if isinstance(descriptions, list) and len(descriptions) == len(request.images) and any(descriptions):
+            return list(descriptions)
+    return None
 
 
 async def _describe_images(request: ChatRequest) -> list[str]:
@@ -92,6 +115,37 @@ class ChatService:
 
     def __init__(self, session_store: ChatSessionStore = default_session_store) -> None:
         self.session_store = session_store
+        self._active_requests: dict[str, ChatRequest] = {}
+
+    async def queue_message(self, request: ChatRequest) -> bool:
+        """运行中的会话接收后续消息，由同一个 Planner 消费。"""
+        active = self._active_requests.get(request.session_id)
+        if active is None:
+            return False
+        if request.metadata.get("history_recorded"):
+            active.metadata["planner_pending"] = True
+            return True
+        await self.record_group_message(
+            request.session_id,
+            request.user_id,
+            request.user_name,
+            request.text,
+            is_group=request.is_group,
+            images=request.images,
+            mentions=request.mentions,
+            dedupe_key=request.dedupe_key,
+            platform=request.platform,
+            event_id=request.event_id,
+            message_id=request.message_id,
+            reply_to_message_id=request.reply_to_message_id,
+            occurred_at=request.occurred_at,
+        )
+        request.metadata["history_recorded"] = True
+        request.metadata["history_appended"] = True
+        if self._active_requests.get(request.session_id) is not active:
+            return False
+        active.metadata["planner_pending"] = True
+        return True
 
     async def process(self, request: ChatRequest, runtime: ToolRuntime | None = None) -> ChatResponse:
         """处理一次对话请求；规划等待时先让出轮次锁，醒后重新规划。"""
@@ -106,17 +160,29 @@ class ChatService:
 
     async def process_and_send(self, request: ChatRequest, runtime: ToolRuntime | None = None) -> bool:
         """生成并逐段发送；生成到发送结束之间持有轮次锁，规划等待期间让出。"""
-        while True:
-            async with self.session_store.turn_lock(request.session_id):
-                response = await self._process_locked(request, runtime)
-                pause = float(response.metadata.get("wait_seconds") or 0)
-                if not pause:
-                    return await self._send_generated(request, response, runtime)
-            if not await self._pause_turn(request, pause):
-                return False
+        if await self.queue_message(request):
+            return False
+        self._active_requests[request.session_id] = request
+        try:
+            while True:
+                async with self.session_store.turn_lock(request.session_id):
+                    response = await self._process_locked(request, runtime)
+                    pause = float(response.metadata.get("wait_seconds") or 0)
+                    if not pause:
+                        sent = await self._send_generated(request, response, runtime)
+                        if request.metadata.pop("planner_pending", False):
+                            continue
+                        return sent
+                if not await self._pause_turn(request, pause):
+                    return False
+        finally:
+            if self._active_requests.get(request.session_id) is request:
+                self._active_requests.pop(request.session_id, None)
 
     async def _send_generated(self, request: ChatRequest, response: ChatResponse, runtime: ToolRuntime | None) -> bool:
         """发送已生成的回复；空正文、失效轮次或缺少发送目标时结束本轮。"""
+        if response.metadata.get("planner_sent"):
+            return True
         if not response.text or not self.is_current(request.session_id, response.epoch):
             if response.text:
                 await sender_module.record_send_trace(request, response, cancelled=True)
@@ -142,7 +208,9 @@ class ChatService:
             if not self._alive(request, epoch):
                 await self._mark_turn_aborted(request, "等待期间被新触发取代")
                 return False
-            if plan_flow.steering_enabled() and self.session_store.activity(request.session_id) != request.activity_seq:
+            if (not request.is_group or plan_flow.steering_enabled()) and self.session_store.activity(
+                request.session_id
+            ) != request.activity_seq:
                 return True
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -153,10 +221,15 @@ class ChatService:
         self, request: ChatRequest, runtime: ToolRuntime, instruction: str, *, is_valid: Callable[[], bool]
     ) -> str:
         """Focus 规划器指定方向后，由该聊天自己的回复模型生成并发送；返回已发出的正文。"""
+        request.metadata["planner_reply"] = True
         async with self.session_store.turn_lock(request.session_id):
             if not is_valid():
                 return ""
             response = await self._process_locked(request, runtime, focus_instruction=instruction)
+            if pictures := request.metadata.get("reply_pictures"):
+                response.metadata["attach_pictures"] = pictures
+            if digest := request.metadata.get("reply_emoji"):
+                response.metadata["attach_emoji"] = digest
             if not is_valid():
                 if response.text:
                     await sender_module.record_send_trace(request, response, cancelled=True)
@@ -218,6 +291,12 @@ class ChatService:
 
     async def clear_session(self, session_id: str) -> None:
         """清空会话历史；内存、数据库、待合并批次与在途轮次一起失效。"""
+        from .memory.trimmed import trimmed_learning
+        from .behavior.turn_scheduler import normal_scheduler
+
+        normal_scheduler.clear(session_id)
+        trimmed_learning.clear(session_id)
+        self._active_requests.pop(session_id, None)
         default_debounce_registry.clear(session_id)
         default_reply_gate_registry.clear(session_id)
         forget_counter(session_id)
@@ -345,6 +424,8 @@ class ChatService:
 
     def is_latest(self, request: ChatRequest) -> bool:
         """该轮次之后没有同一触发者的新触发。"""
+        if request.metadata.get("planner_loop"):
+            return True
         if not request.trigger_seq:
             return True
         owner = request.trigger_owner or request.user_id
@@ -371,6 +452,7 @@ class ChatService:
         message_id: str | None = None,
         reply_to_message_id: str | None = None,
         occurred_at: datetime | None = None,
+        memory_images: list[tuple[str, str | bytes]] | None = None,
     ) -> None:
         """记录群聊或私聊的上下文消息，图片同样转成文字描述写入历史。"""
         images = list(images or [])
@@ -378,6 +460,8 @@ class ChatService:
             return
         chat_cfg = get_config_manager().get_system()["chat"]
         limit = history_limit(chat_cfg, is_group)
+        if is_ignored_command(text, chat_cfg):
+            return
         if limit <= 0:
             return
         await self._hydrate(session_id, limit)
@@ -398,60 +482,10 @@ class ChatService:
             message_id=message_id,
             reply_to_message_id=reply_to_message_id,
             occurred_at=occurred_at,
+            memory_images=memory_images,
         )
-
-    async def _maybe_plan(
-        self,
-        request: ChatRequest,
-        messages: list[dict[str, Any]],
-        tools: list[dict[str, Any]],
-        *,
-        history_len: int = 0,
-        memory_chars: int = 0,
-        alive: Any = None,
-    ) -> Plan | None:
-        """复杂模式下调用一次规划器；关闭或失败时返回 None，回退普通回复。"""
-        return await plan_flow.maybe_plan(
-            request,
-            messages,
-            tools,
-            history_len=history_len,
-            memory_chars=memory_chars,
-            alive=alive,
-        )
-
-    async def _plan_with_steering(
-        self,
-        context: plan_flow.PlanContext,
-        tools: list[dict[str, Any]],
-        *,
-        history_len: int = 0,
-        memory_chars: int = 0,
-    ) -> Plan | None:
-        """规划期间收到新消息时，用最新历史重新规划一次。"""
-        request = context.request
-
-        def alive() -> bool:
-            return self._alive(request, context.epoch)
-
-        steering = plan_flow.steering_enabled()
-        plan: Plan | None = None
-        for _ in range(2):
-            version = self.session_store.activity(request.session_id) if steering else 0
-            plan = await self._maybe_plan(
-                request,
-                context.messages,
-                tools,
-                history_len=history_len,
-                memory_chars=memory_chars,
-                alive=lambda: alive() and (not version or self.session_store.activity(request.session_id) == version),
-            )
-            if plan is not None or not version or not alive():
-                return plan
-            if self.session_store.activity(request.session_id) == version:
-                return plan
-            context.messages = await plan_flow.rebuild_messages(self, context)
-        return plan
+        if active := self._active_requests.get(session_id):
+            active.metadata["planner_pending"] = True
 
     async def _process(
         self, request: ChatRequest, runtime: ToolRuntime | None, *, focus_instruction: str | None = None
@@ -462,11 +496,16 @@ class ChatService:
             "request_preview": sanitize_line(request.text, 200),
             "trigger_kind": request.trigger_kind,
         }
+        state = turn_trace(request)
+        if state is None:
+            state = TurnTrace(request.turn_id)
+            request.metadata["_turn_trace"] = state
+        owns_trace = state.turn_id == request.turn_id
         started = time.monotonic()
         error = ""
-        providers: FallbackProvider | None = None
+        providers: TaskProvider | None = None
         try:
-            async with FallbackProvider(candidates, task="reply") as providers:
+            async with TaskProvider(candidates, task="reply") as providers:
                 return await self._process_with_provider(
                     request, runtime, providers, providers.name, trace, focus_instruction=focus_instruction
                 )
@@ -474,13 +513,26 @@ class ChatService:
             error = f"{type(exc).__name__}: {exc}"
             raise
         finally:
-            await history_module.record_trace(
-                request,
-                providers.name if providers is not None else candidates[0],
-                int((time.monotonic() - started) * 1000),
-                error,
-                trace,
-            )
+            provider_name = providers.name if providers is not None else candidates[0]
+            if focus_instruction is not None:
+                state.add_stage(
+                    "replyer",
+                    "回复生成",
+                    int((time.monotonic() - started) * 1000),
+                    provider=provider_name,
+                    error=error,
+                    target_message_id=request.message_id or "",
+                    budget=dict(trace.get("budget") or {}),
+                    injected=dict(trace.get("injected") or {}),
+                )
+            if owns_trace:
+                snapshot = state.snapshot()
+                trace.setdefault("budget", {}).update(snapshot)
+                failures = "\n".join(dict.fromkeys(stage["error"] for stage in state.stages if stage.get("error")))
+                await history_module.record_trace(
+                    request, provider_name, snapshot["timings"]["total_ms"], error or failures, trace
+                )
+                state.saved = True
 
     async def _process_with_provider(
         self,
@@ -493,6 +545,8 @@ class ChatService:
         focus_instruction: str | None = None,
     ) -> ChatResponse:
         chat_cfg = get_config_manager().get_system()["chat"]
+        if focus_instruction is None:
+            request.metadata["planner_loop"] = True
         behavior = chat_cfg.get("behavior") or {}
         limit = history_limit(chat_cfg, request.is_group)
         if trace is not None:
@@ -503,10 +557,7 @@ class ChatService:
         current_content = prompt.truncate_content(user_content)
         effective_persona, persona_text = prompt.build_persona_text(request, chat_cfg, behavior)
 
-        # 描述与主对话并发执行，避免图片消息多等一次模型调用
-        description_task = (
-            asyncio.create_task(_describe_images(request)) if vision_configured(chat_cfg) and request.images else None
-        )
+        description_task = None
         try:
             async with self.session_store.lock(request.session_id):
                 self.session_store.trim(request.session_id, limit)
@@ -519,6 +570,7 @@ class ChatService:
                     else self.session_store.epoch(request.session_id)
                 )
                 entry = prompt.strip_images([{"role": "user", "content": user_content}])[0]
+                entry["_sender_id"] = request.user_id
                 source_ids = request.source_message_ids or ([request.message_id] if request.message_id else [])
                 if source_ids:
                     # 撤回通知按平台消息 ID 找到并丢弃这一条
@@ -529,6 +581,9 @@ class ChatService:
                     self.session_store.append(request.session_id, entry, limit=limit)
                     request.metadata["history_appended"] = True
                 dropped = self.session_store.take_dropped(request.session_id)
+            descriptions = _cached_image_descriptions(request, history)
+            if descriptions is None and vision_configured(chat_cfg) and request.images:
+                description_task = asyncio.create_task(_describe_images(request))
             persisted = await self._persist_turn_start(request, str(entry["content"]), epoch)
             if not self._alive(request, epoch):
                 await self._mark_turn_aborted(request, "生成前已被新触发取代")
@@ -544,8 +599,13 @@ class ChatService:
                 await self._mark_turn_aborted(request, "生成前已被新触发取代")
                 return ChatResponse(text="", epoch=epoch)
             memory_block = await _memory_block(request, prompt.recall_query(request, history), trace)
-            descriptions = await _wait_image_descriptions(description_task)
+            if descriptions is None:
+                descriptions = await _wait_image_descriptions(description_task)
             if descriptions:
+                request.metadata["recognized_images"] = {
+                    "sources": list(request.images),
+                    "descriptions": list(descriptions),
+                }
                 # 回复模型按纯文本处理：有描述就把本轮图片换成文字，历史与本轮保持同一种写法
                 entry["content"] = prompt.strip_images([entry], descriptions)[0]["content"]
                 current_content = prompt.truncate_content(entry["content"])
@@ -558,8 +618,22 @@ class ChatService:
                 context_summary=summary,
             )
             if focus_instruction:
-                # 共享组已经决定要在这里发言，指示只给方向，正文仍由本聊天的回复模型生成
-                messages.append({"role": "user", "content": f"[Focus 共享组指示]\n{focus_instruction}"})
+                messages.append({"role": "user", "content": focus_instruction.strip()})
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            f"当前时间：{now():%Y-%m-%d %H:%M:%S}\n\n"
+                            f"你想要回复的消息是 {request.user_name or request.user_id} 发送的 msg_id为 "
+                            f"{request.message_id or request.dedupe_key} 的消息，你这次要回复的就是这条目标消息，"
+                            "不要把其他历史消息当成当前回复对象。\n"
+                            f"- 发言内容：{' '.join(request.text.split())[:300] or '[无可见文本内容]'}\n\n"
+                            "请自然地回复。不要输出多余说明、括号、@ 或额外标记，只输出实际要发言的内容。"
+                        ),
+                    }
+                )
+                if style := prompt.requested_reply_style(str(request.metadata.get("requested_reply_style") or "")):
+                    messages.append({"role": "user", "content": style})
             if trace is not None:
                 trace["budget"]["memory_chars"] = len(memory_block)
                 trace["budget"]["summary_chars"] = len(summary)
@@ -569,8 +643,6 @@ class ChatService:
             )
             if trace is not None:
                 trace["budget"]["tools"] = len(allowed_names)
-            planner_cfg = plan_flow.planner_config() if focus_instruction is None else {}
-            planner_expected = planner_cfg.get("mode") == "complex"
             context = plan_flow.PlanContext(
                 request=request,
                 messages=messages,
@@ -584,55 +656,23 @@ class ChatService:
                 limit=limit,
                 provider_name=provider_name,
             )
-            plan = None
             if focus_instruction is None:
-                plan = await self._plan_with_steering(
-                    context, tools, history_len=len(history), memory_chars=len(memory_block)
-                )
-                if planner_expected and not self._alive(request, epoch):
-                    await self._mark_turn_aborted(request, "规划期间被新触发取代")
-                    return ChatResponse(text="", epoch=epoch)
-                if plan is None and proactive and planner_expected:
-                    await history_module.end_turn_without_reply(request, provider_name)
-                    return ChatResponse(text="", epoch=epoch, metadata={"plan_action": "no_action"})
-                if plan is not None:
-                    outcome = await plan_flow.dispatch_plan(self, context, plan)
-                    if outcome.finished:
-                        return ChatResponse(text="", epoch=epoch, metadata={"plan_action": plan.action})
-                    if outcome.pause:
-                        return ChatResponse(
-                            text="",
-                            epoch=epoch,
-                            metadata={"plan_action": plan.action, "wait_seconds": outcome.pause},
-                        )
-                    if outcome.messages is not None:
-                        context.messages = outcome.messages
-                if plan is not None and plan.action == "emoji_reply":
-                    prompt.append_note(context.messages, "[本轮只回一个自然的表情或很短的文字，不要展开或解释。]")
+                return await conversation.run(self, context)
             messages = context.messages
-            plan_action = plan.action if plan is not None else ""
-            if trace is not None:
-                trace["plan_action"] = plan_action
 
             if style_note := prompt.temporary_style_note(behavior):
                 prompt.append_note(messages, style_note)
-            if (
-                plan is not None
-                and plan.reply_reference
-                and plan.action in {"text_reply", "emoji_reply"}
-                and planner_cfg.get("passive_replyer")
-            ):
-                # 被动式 replyer：规划正文只当作发言指导，正文仍由回复模型生成
-                messages.append({"role": "user", "content": f"[发言指导]\n{plan.reply_reference}"})
             response = await generator.generate(
                 self, request, runtime, provider, messages, tools, allowed_names, epoch, limit
             )
             post_cfg = chat_cfg.get("response_post_process") or {}
             splitter_cfg = chat_cfg.get("response_splitter")
-            # 断句可单独走快速模型，未配置时沿用回复模型
+            # 上游快速任务未分配时使用 utils，规则断句不额外租用模型。
             splitter_scope = (
-                fallback_provider("fast_model", request.session_id)
-                if routed_task("fast_model", "reply") == "fast_model"
+                fallback_provider(routed_task("fast_model", "utils"), request.session_id)
+                if isinstance(splitter_cfg, dict)
+                and splitter_cfg.get("mode") == "llm"
+                and splitter_cfg.get("enable", True)
                 else nullcontext(provider)
             )
             async with splitter_scope as splitter_provider:
@@ -660,14 +700,12 @@ class ChatService:
                 generated_text,
             )
             result = ChatResponse(text=response.content, raw=response, epoch=epoch)
-            if plan_action:
-                result.metadata["plan_action"] = plan_action
-            if plan is not None and plan.emoji_hash:
-                result.metadata["attach_emoji"] = plan.emoji_hash
             if parts:
                 result.metadata["reply_parts"] = parts
             if item_ids is not None:
                 result.metadata["turn_item_ids"] = item_ids
+            if persisted is not None:
+                result.metadata["turn_db_id"] = persisted[0]
             return result
         finally:
             if description_task is not None:

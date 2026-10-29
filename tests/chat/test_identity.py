@@ -18,6 +18,8 @@ from src.plugins.nonebot_plugin_fxbot.chat.behavior.debounce import PendingBatch
 from src.plugins.nonebot_plugin_fxbot.adapter.platforms.onebot11 import OneBotV11MessageAdapter
 from src.plugins.nonebot_plugin_fxbot.adapter.platforms.onebot12 import OneBotV12MessageAdapter
 
+from .support import RouterUnitTests
+
 
 def make_bot(self_id: str = "bot", platform: str = "test") -> SimpleNamespace:
     """构造不启动平台连接的 Bot。"""
@@ -187,7 +189,7 @@ class SessionDedupeTests(unittest.TestCase):
             self.assertTrue(store.mark_seen("old", "msg:1"))
 
 
-class RequestAndRouterTests(unittest.IsolatedAsyncioTestCase):
+class RequestAndRouterTests(RouterUnitTests):
     """请求字段和路由去重集成测试。"""
 
     async def test_request_times_are_captured_before_adaptation(self) -> None:
@@ -257,6 +259,8 @@ class RequestAndRouterTests(unittest.IsolatedAsyncioTestCase):
                 matcher = SimpleNamespace(finish=AsyncMock())
                 service = SimpleNamespace(
                     session_store=store,
+                    queue_message=AsyncMock(return_value=False),
+                    record_group_message=AsyncMock(),
                     process_and_send=AsyncMock(return_value=False),
                     ensure_hydrated=AsyncMock(),
                 )
@@ -285,10 +289,13 @@ class RequestAndRouterTests(unittest.IsolatedAsyncioTestCase):
                 service.process_and_send.assert_awaited_once()
                 matcher.finish.assert_not_awaited()
 
-    async def test_context_cannot_also_write_ai_history(self) -> None:
+    async def test_context_delivery_is_not_dispatched_twice(self) -> None:
         event = make_event(message_id="message")
         service = SimpleNamespace(
-            session_store=ChatSessionStore(), record_group_message=AsyncMock(), process_and_send=AsyncMock()
+            queue_message=AsyncMock(return_value=False),
+            session_store=ChatSessionStore(),
+            record_group_message=AsyncMock(),
+            process_and_send=AsyncMock(),
         )
         with (
             patch.object(message_adapter, "get_platform_adapter", return_value=OneBotV12MessageAdapter()),
@@ -300,4 +307,4 @@ class RequestAndRouterTests(unittest.IsolatedAsyncioTestCase):
             await router._handle_context(make_bot(), event)
             await router._handle_ai_fallback(make_bot(), event, SimpleNamespace(finish=AsyncMock()))
         service.record_group_message.assert_awaited_once()
-        service.process_and_send.assert_not_awaited()
+        service.process_and_send.assert_awaited_once()

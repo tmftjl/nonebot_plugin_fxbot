@@ -76,14 +76,14 @@ class EmojiPipelineTests(unittest.IsolatedAsyncioTestCase):
         patch.object(
             emoji_module,
             "get_config_manager",
-            return_value=_FakeConfig(emoji=self.config),
+            return_value=_FakeConfig(emoji=self.config, model_routing={"vision": "test"}),
         ).start()
 
     async def test_collect_then_analyze_registers(self) -> None:
         with (
             patch.object(emoji_module, "emoji_sources_for_event", return_value=[_PNG]),
             patch.object(emoji_module, "load_image_bytes", new=AsyncMock(return_value=_PNG)),
-            patch.object(emoji_module, "_schedule_analysis") as schedule,
+            patch.object(emoji_module, "_analyze") as analyze,
         ):
             await emoji_module.collect_from_event(self.tenant, object())
 
@@ -93,7 +93,7 @@ class EmojiPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(row.registered)
         self.assertFalse(row.vlm_processed)
         self.assertEqual(emoji_module.emoji_status(row), "unidentified")
-        schedule.assert_called_once()
+        analyze.assert_not_called()
 
         with (
             patch.object(emoji_module, "fallback_provider", lambda *args: _FakeProvider()),
@@ -116,7 +116,7 @@ class EmojiPipelineTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(emoji_module, "emoji_sources_for_event", return_value=[_PNG]),
             patch.object(emoji_module, "load_image_bytes", new=AsyncMock(return_value=_PNG)),
-            patch.object(emoji_module, "_schedule_analysis"),
+            patch.object(emoji_module, "_analyze"),
         ):
             await emoji_module.collect_from_event(self.tenant, object())
 
@@ -188,13 +188,20 @@ class EmojiPipelineTests(unittest.IsolatedAsyncioTestCase):
         updated = await chat_repository.get_emoji(self.tenant, row.hash)
         self.assertEqual(emoji_module.emoji_status(updated), "pending")
 
-    async def test_ensure_slot_respects_limit_and_replace_switch(self) -> None:
+    async def test_registration_respects_limit_and_replace_switch(self) -> None:
         await emoji_module.save_emoji(self.tenant, _PNG, description="旧表情")
+        path = Path(self.folder.name) / "new.png"
+        path.write_bytes(_PNG)
+        row = await chat_repository.save_collected_emoji(self.tenant, "new", str(path))
         self.config["max_reg_num"] = 1
         self.config["do_replace"] = False
-        self.assertFalse(await emoji_module._ensure_slot(self.tenant, "新表情"))
+        self.assertFalse(await emoji_module._analyze(self.tenant, row.hash, path))
         self.config["max_reg_num"] = 2
-        self.assertTrue(await emoji_module._ensure_slot(self.tenant, "新表情"))
+        with (
+            patch.object(emoji_module, "fallback_provider", lambda *args: _FakeProvider()),
+            patch.object(emoji_module, "describe_emoji", AsyncMock(return_value=("新表情", ["新"]))),
+        ):
+            self.assertTrue(await emoji_module._analyze(self.tenant, row.hash, path))
 
     async def test_replace_by_llm_unregisters_picked_emoji(self) -> None:
         old = await emoji_module.save_emoji(self.tenant, _PNG, description="旧表情")
@@ -211,7 +218,7 @@ class EmojiPipelineTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(emoji_module, "emoji_sources_for_event", return_value=[_PNG + b"y"]),
             patch.object(emoji_module, "load_image_bytes", new=AsyncMock(return_value=_PNG + b"y")),
-            patch.object(emoji_module, "_schedule_analysis"),
+            patch.object(emoji_module, "_analyze"),
         ):
             await emoji_module.collect_from_event(self.tenant, object())
         collected = await chat_repository.get_emoji(self.tenant, hashlib.sha256(_PNG + b"y").hexdigest())
@@ -231,7 +238,7 @@ class EmojiPipelineTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(emoji_module, "emoji_sources_for_event", return_value=[_PNG + b"z"]),
             patch.object(emoji_module, "load_image_bytes", new=AsyncMock(return_value=_PNG + b"z")),
-            patch.object(emoji_module, "_schedule_analysis"),
+            patch.object(emoji_module, "_analyze"),
         ):
             await emoji_module.collect_from_event(self.tenant, object())
         collected = await chat_repository.get_emoji(self.tenant, hashlib.sha256(_PNG + b"z").hexdigest())
@@ -239,13 +246,13 @@ class EmojiPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stats, {"files": 0, "records": 0})
         self.assertTrue(Path(collected.path).exists())
 
-    async def test_reconcile_schedules_unanalyzed_rows(self) -> None:
+    async def test_reconcile_processes_unanalyzed_rows(self) -> None:
         path = Path(self.folder.name) / "b.png"
         path.write_bytes(_PNG)
         row = await chat_repository.save_collected_emoji(self.tenant, "b" * 64, str(path))
-        with patch.object(emoji_module, "_schedule_analysis") as schedule:
+        with patch.object(emoji_module, "_analyze", AsyncMock(return_value=True)) as analyze:
             await emoji_module.reconcile_emoji_cache()
-        scheduled = [call.args[1] for call in schedule.call_args_list]
+        scheduled = [call.args[1] for call in analyze.await_args_list]
         self.assertIn(row.hash, scheduled)
 
 

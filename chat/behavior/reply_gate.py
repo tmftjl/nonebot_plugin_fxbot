@@ -503,13 +503,13 @@ class ReplyGate:
             start_count=_setting_int(cfg, "no_action_backoff_start_count", 1),
         )
 
-    def backoff_delay(self, *, now: float | None = None) -> float:
+    def backoff_delay(self, *, now: float | None = None, pending_count: int | None = None) -> float:
         """当前退避剩余秒数；待处理消息达到阈值时返回 0。"""
         cfg = reply_timing_config()
         current = self._clock() if now is None else now
         return self._backoff.delay(
             current,
-            pending=self._pending,
+            pending=self._pending if pending_count is None else pending_count,
             bypass_pending=_setting_int(cfg, "no_action_backoff_bypass_pending_count"),
         )
 

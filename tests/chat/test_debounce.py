@@ -19,7 +19,8 @@ from src.plugins.nonebot_plugin_fxbot.chat.behavior.debounce import (
     PendingBatch,
     DebounceRegistry,
 )
-from src.plugins.nonebot_plugin_fxbot.chat.behavior.reply_gate import ReplyGateRegistry
+
+from .support import RouterUnitTests
 
 
 def _request(**values: object) -> ChatRequest:
@@ -98,11 +99,12 @@ class BatchMergeTests(_NaturalMode):
         self.assertEqual(merged.source_message_ids, ["1", "2"])
         self.assertEqual(merged.source_author_ids, ["u1"])
 
-    def test_cross_author_context_is_not_merged(self) -> None:
+    def test_cross_author_context_is_merged_with_identity(self) -> None:
         registry = DebounceRegistry()
         batch = registry.create(_request())
-        self.assertFalse(registry.merge_context(_request(user_id="u2", user_name="Bob")))
-        self.assertEqual(len(batch.requests), 1)
+        self.assertTrue(registry.merge_context(_request(user_id="u2", user_name="Bob")))
+        self.assertEqual(len(batch.requests), 2)
+        self.assertIn("Bob", batch.merge().text)
 
     def test_cross_author_trigger_is_merged_and_forced(self) -> None:
         registry = DebounceRegistry()
@@ -260,256 +262,60 @@ class BatchWaitTests(_NaturalMode):
         await asyncio.wait_for(task, 1.0)
 
 
-class RouterBatchTests(_NaturalMode):
-    """路由只由首个触发消息生成一轮。"""
+class RouterBatchTests(RouterUnitTests):
+    """路由只负责落库和投递，防抖与门控由调度器统一完成。"""
 
-    def _identity(self) -> SimpleNamespace:
-        return SimpleNamespace(
+    async def _handle(self, service, *, twice=False, epoch=None):
+        request = _request()
+        identity = SimpleNamespace(
             session_id="tenant",
+            event_id="event",
+            message_id="1",
             dedupe_key="msg:1",
             platform="test",
-            event_id=None,
-            message_id="1",
             reply_to_message_id=None,
         )
-
-    def _event(self, user_id: str = "u1") -> SimpleNamespace:
-        event = SimpleNamespace(user_id=user_id, group_id="group", message=[], text="你好")
-        event.get_message = lambda: event.message
-        event.get_plaintext = lambda: event.text
-        return event
-
-    async def test_context_joins_same_author_batch(self) -> None:
-        registry = DebounceRegistry()
-        batch = registry.create(_request())
-        service = SimpleNamespace(
-            session_store=ChatSessionStore(),
-            record_group_message=AsyncMock(),
-        )
-        adapted = _request(dedupe_key="msg:2", message_id="2", text="在吗")
+        event = SimpleNamespace(user_id="u1", group_id="group", message_id="1")
         with (
-            patch.object(router, "default_debounce_registry", registry),
-            patch.object(router, "chat_service", service),
-            patch.object(router, "event_identity", return_value=self._identity()),
-            patch.object(router, "adapt_message_event", new=AsyncMock(return_value=adapted)),
-            patch.object(router, "collect_mentions", new=AsyncMock(return_value=[])),
-        ):
-            await router._handle_context(None, self._event())
-
-        self.assertEqual(len(batch.requests), 2)
-        self.assertEqual(batch.requests[1].text, "在吗")
-        service.record_group_message.assert_not_awaited()
-
-    async def test_context_from_other_author_writes_history_immediately(self) -> None:
-        registry = DebounceRegistry()
-        batch = registry.create(_request())
-        service = SimpleNamespace(
-            session_store=ChatSessionStore(),
-            record_group_message=AsyncMock(),
-        )
-        with (
-            patch.object(router, "default_debounce_registry", registry),
-            patch.object(router, "chat_service", service),
-            patch.object(router, "event_identity", return_value=self._identity()),
-            patch.object(router, "collect_mentions", new=AsyncMock(return_value=[])),
-        ):
-            await router._handle_context(None, self._event(user_id="u2"))
-
-        self.assertEqual(len(batch.requests), 1)
-        service.record_group_message.assert_awaited_once()
-
-    async def test_owner_flushes_batch_once(self) -> None:
-        registry = DebounceRegistry()
-        service = SimpleNamespace(
-            session_store=ChatSessionStore(),
-            persist_batch=AsyncMock(),
-            process_and_send=AsyncMock(return_value=False),
-            is_current=lambda *_: True,
-            ensure_hydrated=AsyncMock(),
-        )
-        first = _request()
-        second = _request(dedupe_key="msg:2", message_id="2", text="在吗")
-
-        async def wait_and_add_context(batch: PendingBatch) -> None:
-            batch.accept(second, trigger=False)
-
-        with (
-            patch.object(router, "default_debounce_registry", registry),
-            patch.object(router, "chat_service", service),
-            patch.object(router, "event_identity", return_value=self._identity()),
-            patch.object(router, "adapt_message_event", new=AsyncMock(return_value=first)),
-            patch.object(PendingBatch, "wait", wait_and_add_context),
-            patch.object(router.default_runtime_factory, "create", return_value=object()),
-        ):
-            await router._handle_ai_fallback(None, self._event(), SimpleNamespace(finish=AsyncMock()))
-
-        service.process_and_send.assert_awaited_once()
-        merged = service.process_and_send.await_args.args[0]
-        self.assertTrue(merged.batched)
-        self.assertEqual(merged.text, "你好\n在吗")
-        service.persist_batch.assert_awaited_once_with([first, second])
-
-    async def test_merged_forced_triggers_count_once_and_deduplicate_all_ids(self) -> None:
-        for first_kind in ("mention", "persona", "proactive"):
-            with self.subTest(first_kind=first_kind):
-                registry = DebounceRegistry()
-                gates = ReplyGateRegistry()
-                service = SimpleNamespace(
-                    session_store=ChatSessionStore(),
-                    persist_batch=AsyncMock(),
-                    process_and_send=AsyncMock(return_value=False),
-                    is_current=lambda *_: True,
-                    ensure_hydrated=AsyncMock(),
-                )
-                first = _request(trigger_kind=first_kind)
-                second = _request(dedupe_key="msg:2", message_id="2")
-                event = self._event()
-                setattr(event, router._PROACTIVE_ATTR, first_kind == "proactive")
-                second_identity = self._identity()
-                second_identity.dedupe_key = second.dedupe_key
-                second_identity.message_id = second.message_id
-                gate = gates.get("tenant")
-
-                async def wait_and_add_trigger(batch: PendingBatch) -> None:
-                    self.assertEqual(gate.snapshot()["window"]["expected_forced"], 0)
-                    await router._handle_ai_fallback(None, self._event(), SimpleNamespace(finish=AsyncMock()))
-                    self.assertEqual(batch.requests, [first, second])
-                    self.assertEqual(gate.snapshot()["window"]["expected_forced"], 0)
-                    service.process_and_send.assert_not_awaited()
-
-                with (
-                    patch.object(router, "default_debounce_registry", registry),
-                    patch.object(router, "default_reply_gate_registry", gates),
-                    patch.object(router, "chat_service", service),
-                    patch.object(router, "event_identity", side_effect=[self._identity(), second_identity]),
-                    patch.object(router, "adapt_message_event", new=AsyncMock(side_effect=[first, second])),
-                    patch.object(
-                        router,
-                        "_is_to_me",
-                        side_effect=[True] if first_kind == "proactive" else [first_kind == "mention", True],
-                    ),
-                    patch.object(PendingBatch, "wait", wait_and_add_trigger),
-                    patch.object(router.default_runtime_factory, "create", return_value=object()),
-                ):
-                    await router._handle_ai_fallback(None, event, SimpleNamespace(finish=AsyncMock()))
-
-                service.process_and_send.assert_awaited_once()
-                self.assertTrue(service.process_and_send.await_args.args[0].batched)
-                self.assertAlmostEqual(gate.snapshot()["window"]["expected_forced"], 0.91)
-                for request in (first, second):
-                    gate.record_forced_turn([request.dedupe_key])
-                    self.assertAlmostEqual(gate.snapshot()["window"]["expected_forced"], 0.91)
-
-    async def test_immediate_forced_turn_counting(self) -> None:
-        for full_batch in (False, True):
-            for kind in ("mention", "persona", "proactive", "private"):
-                with self.subTest(full_batch=full_batch, kind=kind):
-                    registry = DebounceRegistry()
-                    if full_batch:
-                        batch = registry.create(_request(dedupe_key="owner"))
-                        for index in range(BATCH_MAX_MESSAGES - 1):
-                            batch.accept(_request(dedupe_key=f"context:{index}"), trigger=False)
-                    gates = ReplyGateRegistry()
-                    service = SimpleNamespace(
-                        session_store=ChatSessionStore(),
-                        process_and_send=AsyncMock(return_value=False),
-                        ensure_hydrated=AsyncMock(),
-                    )
-                    event = self._event()
-                    if kind == "private":
-                        event.group_id = None
-                    setattr(event, router._PROACTIVE_ATTR, kind == "proactive")
-                    with (
-                        patch.object(debounce, "_mode", return_value="off"),
-                        patch.object(router, "default_debounce_registry", registry),
-                        patch.object(router, "default_reply_gate_registry", gates),
-                        patch.object(router, "chat_service", service),
-                        patch.object(router, "event_identity", return_value=self._identity()),
-                        patch.object(
-                            router, "adapt_message_event", new=AsyncMock(return_value=_request(trigger_kind=kind))
-                        ),
-                        patch.object(router, "_is_to_me", return_value=kind == "mention"),
-                        patch.object(router.default_runtime_factory, "create", return_value=object()),
-                    ):
-                        await router._handle_ai_fallback(None, event, SimpleNamespace(finish=AsyncMock()))
-
-                    service.process_and_send.assert_awaited_once()
-                    self.assertAlmostEqual(
-                        gates.get("tenant").snapshot()["window"]["expected_forced"],
-                        0.91 if kind in {"mention", "persona"} else 0,
-                    )
-
-    async def test_epoch_is_captured_after_hydration(self) -> None:
-        registry = DebounceRegistry()
-        store = ChatSessionStore()
-
-        async def hydrate(_session_id: str, *, is_group: bool = True) -> None:
-            store.set_epoch("tenant", 5)
-
-        service = SimpleNamespace(
-            session_store=store,
-            process_and_send=AsyncMock(return_value=False),
-            is_current=lambda *_: True,
-            is_latest=lambda *_: True,
-            ensure_hydrated=hydrate,
-        )
-        first = _request()
-        with (
-            patch.object(router, "default_debounce_registry", registry),
-            patch.object(router, "chat_service", service),
-            patch.object(router, "event_identity", return_value=self._identity()),
-            patch.object(router, "adapt_message_event", new=AsyncMock(return_value=first)),
-            patch.object(PendingBatch, "wait", new=AsyncMock()),
-            patch.object(router.default_runtime_factory, "create", return_value=object()),
-        ):
-            await router._handle_ai_fallback(None, self._event(), SimpleNamespace(finish=AsyncMock()))
-
-        self.assertEqual(first.accepted_epoch, 5)
-        self.assertEqual(first.trigger_seq, 1)
-
-    async def test_second_trigger_merges_without_processing(self) -> None:
-        registry = DebounceRegistry()
-        service = SimpleNamespace(
-            session_store=ChatSessionStore(), process_and_send=AsyncMock(), ensure_hydrated=AsyncMock()
-        )
-        first = _request()
-        second = _request(dedupe_key="msg:2", message_id="2", text="在吗")
-        registry.create(first)
-        identity = self._identity()
-        identity.dedupe_key = "msg:2"
-
-        with (
-            patch.object(router, "default_debounce_registry", registry),
             patch.object(router, "chat_service", service),
             patch.object(router, "event_identity", return_value=identity),
-            patch.object(router, "adapt_message_event", new=AsyncMock(return_value=second)),
+            patch.object(router, "adapt_message_event", AsyncMock(return_value=request)),
+            patch.object(router, "_is_to_me", return_value=True),
+            patch.object(router, "_focus_or_detach", AsyncMock(return_value=False)),
+            patch.object(router, "mention_flags", return_value=(True, False)),
+            patch.object(router.emoji_module, "collect_in_background"),
             patch.object(router.default_runtime_factory, "create", return_value=object()),
         ):
-            await router._handle_ai_fallback(None, self._event("u2"), SimpleNamespace(finish=AsyncMock()))
+            if epoch is not None:
+                service.ensure_hydrated.side_effect = lambda *args, **kwargs: service.session_store.set_epoch(
+                    "tenant", epoch
+                )
+            await router._handle_ai_fallback(None, event, SimpleNamespace(finish=AsyncMock()))
+            if twice:
+                await router._handle_ai_fallback(None, event, SimpleNamespace(finish=AsyncMock()))
+        return request
 
-        self.assertEqual(len(registry.get("tenant").requests), 2)  # type: ignore[union-attr]
-        service.process_and_send.assert_not_awaited()
-
-    async def test_clear_during_wait_skips_reply(self) -> None:
-        registry = DebounceRegistry()
-        gates = ReplyGateRegistry()
-        service = SimpleNamespace(
-            session_store=ChatSessionStore(), process_and_send=AsyncMock(), ensure_hydrated=AsyncMock()
+    def service(self):
+        return SimpleNamespace(
+            session_store=ChatSessionStore(),
+            ensure_hydrated=AsyncMock(),
+            record_group_message=AsyncMock(),
+            process_and_send=AsyncMock(return_value=False),
         )
 
-        async def wait_then_clear(batch: PendingBatch) -> None:
-            registry.clear(batch.tenant)
+    async def test_incoming_message_is_persisted_before_dispatch(self):
+        service = self.service()
+        request = await self._handle(service)
+        service.record_group_message.assert_awaited_once()
+        self.assertTrue(request.metadata["history_recorded"])
+        service.process_and_send.assert_awaited_once()
 
-        with (
-            patch.object(router, "default_debounce_registry", registry),
-            patch.object(router, "default_reply_gate_registry", gates),
-            patch.object(router, "chat_service", service),
-            patch.object(router, "event_identity", return_value=self._identity()),
-            patch.object(router, "adapt_message_event", new=AsyncMock(return_value=_request())),
-            patch.object(PendingBatch, "wait", wait_then_clear),
-            patch.object(router.default_runtime_factory, "create", return_value=object()),
-        ):
-            await router._handle_ai_fallback(None, self._event(), SimpleNamespace(finish=AsyncMock()))
+    async def test_duplicate_delivery_does_not_dispatch_twice(self):
+        service = self.service()
+        await self._handle(service, twice=True)
+        service.record_group_message.assert_awaited_once()
+        service.process_and_send.assert_awaited_once()
 
-        service.process_and_send.assert_not_awaited()
-        self.assertEqual(gates.get("tenant").snapshot()["window"]["expected_forced"], 0)
+    async def test_epoch_is_captured_after_hydration(self):
+        request = await self._handle(self.service(), epoch=5)
+        self.assertEqual(request.accepted_epoch, 5)

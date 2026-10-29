@@ -352,7 +352,7 @@ onMounted(() => {
       width="680"
       align-center
     >
-      <div v-loading="loadingKnowledge">
+      <div>
         <div class="knowledge-stats">
           <span class="knowledge-stats-value">{{ knowledgeStats.count }}</span>
           <span class="knowledge-stats-label">条知识文档</span>

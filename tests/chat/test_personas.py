@@ -20,6 +20,7 @@ STRUCTURED = """你的名字是雪球。
 
 TAIL = "请注意不要输出多余内容(包括不必要的前后缀，冒号，括号，表情包，@等 )，只输出发言内容就好。"
 LEAD = "现在请你读读之前的聊天记录，把握当前的话题，然后给出日常且口语化的回复，"
+REFERENCE = "你可以参考【回复信息参考】中的信息，但是视情况而定，不用完全遵守。"
 
 
 class ComposePersonaPromptTests(unittest.TestCase):
@@ -30,7 +31,7 @@ class ComposePersonaPromptTests(unittest.TestCase):
 
         self.assertEqual(
             text,
-            f"你的名字是雪球。\n冷淡。\n你的行为风格是：先查再答。\n{LEAD}\n说人话。\n\n{TAIL}",
+            f"你的名字是雪球。\n冷淡。\n{LEAD}\n说人话。\n{REFERENCE}\n\n{TAIL}",
         )
 
     def test_scene_prompt(self) -> None:
@@ -42,7 +43,7 @@ class ComposePersonaPromptTests(unittest.TestCase):
     def test_plain_text_is_identity(self) -> None:
         text = compose_persona_prompt("小鱼", "你是一个友好、耐心且乐于助人的 AI 助手。")
 
-        self.assertEqual(text, f"你是一个友好、耐心且乐于助人的 AI 助手。\n{LEAD}\n\n{TAIL}")
+        self.assertEqual(text, f"你是一个友好、耐心且乐于助人的 AI 助手。\n{LEAD}\n\n{REFERENCE}\n\n{TAIL}")
 
     def test_unknown_heading_falls_back(self) -> None:
         text = compose_persona_prompt("小鱼", "你好。\n\n## 额外设定\n\n原样保留。")

@@ -262,9 +262,9 @@ class DebounceRegistry:
         return batch
 
     def merge_context(self, request: ChatRequest) -> bool:
-        """同作者的普通群消息并入批次，其他作者仍立即写历史。"""
+        """同一会话的普通消息并入批次，保留各自发言人。"""
         batch = self._batches.get(request.session_id)
-        if batch is None or batch.owner_id != request.user_id:
+        if batch is None:
             return False
         return batch.accept(request, trigger=False)
 

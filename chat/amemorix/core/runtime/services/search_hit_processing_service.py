@@ -1,23 +1,21 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Sequence
-
 import json
 import time
+from typing import Any, Dict, List, Optional, Sequence
 
-from ...._host.chat_manager import chat_manager
+from .base import KernelServiceBase
+from ..models import _NormalizedSearchTimeWindow
+from ...retrieval import RetrievalScope, RetrievalResult
 from ...._host.logger import get_logger
-
-from ...retrieval import RetrievalResult, RetrievalScope
+from ...utils.metadata import coerce_metadata_dict
+from ...utils.time_parser import format_timestamp, parse_query_datetime_to_timestamp
+from ...._host.chat_manager import chat_manager
 from ...utils.feedback_policy import (
     feedback_cfg_episode_query_block_enabled,
     feedback_cfg_paragraph_hard_filter_enabled,
 )
-from ...utils.metadata import coerce_metadata_dict
-from ...utils.runtime_payloads import optional_float, tokens
-from ...utils.time_parser import format_timestamp, parse_query_datetime_to_timestamp
-from ..models import _NormalizedSearchTimeWindow
-from .base import KernelServiceBase
+from ...utils.runtime_payloads import tokens, optional_float
 
 logger = get_logger("A_Memorix.SearchHitProcessingService")
 
@@ -278,6 +276,7 @@ class MemorySearchHitProcessingService(KernelServiceBase):
             (allowed_chat_ids_json,),
         )
         for paragraph in paragraph_rows:
+            paragraph["metadata"] = json.loads(paragraph["metadata"] or "{}")
             scope_kind, paragraph_chat_ids = self._paragraph_scope_identity(paragraph)
             if scope_kind == "global" or (scope_kind == "chat" and paragraph_chat_ids & allowed_chat_ids):
                 paragraph_hash = str(paragraph.get("hash", "") or "").strip()
@@ -370,9 +369,7 @@ class MemorySearchHitProcessingService(KernelServiceBase):
                 if not isinstance(raw_relation_hashes, (list, tuple, set)):
                     continue
                 relation_hashes = {
-                    str(value or "").strip()
-                    for value in raw_relation_hashes
-                    if str(value or "").strip()
+                    str(value or "").strip() for value in raw_relation_hashes if str(value or "").strip()
                 }
                 if relation_hashes and relation_hashes <= scope.relation_ids:
                     filtered.append(item)

@@ -30,18 +30,18 @@ def _chat(routing_map: dict | None = None, providers: dict | None = None) -> dic
 
 
 class HostRouteTests(unittest.TestCase):
-    """memory/utils/learner/emoji 未单独配置时沿用移植前的任务。"""
+    """按照上游学习与记忆任务关系选择可用模型。"""
 
-    def test_legacy_fallbacks(self) -> None:
+    def test_source_task_fallbacks(self) -> None:
         chat = _chat()
         with patch.object(routing, "get_config_manager", return_value=_ConfigManager(chat)):
             for task, route in (
-                ("memory", "extract"),
-                ("utils", "extract"),
-                ("learner", "extract"),
+                ("memory", "utils"),
+                ("utils", "utils"),
+                ("learner", "utils"),
                 ("emoji", "vision"),
                 ("replyer", "reply"),
-                ("unknown", "extract"),
+                ("unknown", "utils"),
             ):
                 self.assertEqual(llm.resolve_route(task), route, task)
 

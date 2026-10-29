@@ -16,7 +16,6 @@ class _Chat:
         self.saved: list[dict] = []
         self.chat = {
             "provider": "main",
-            "provider_fallback": ["backup", "missing", "embed"],
             "providers": {
                 "main": {"provider_type": "chat", "type": "openai", "model": "gpt-4o"},
                 "backup": {"provider_type": "chat", "type": "deepseek", "model": "deepseek-chat"},
@@ -48,9 +47,11 @@ class ConsoleAiRoutingTests(unittest.IsolatedAsyncioTestCase):
         with chat_patch, save_patch, label_patch:
             result = await ai_providers.get_model_routing()
         data = result["data"]
+        tasks = {item["task"] for item in data["tasks"]}
+        self.assertTrue({"extract", "style"}.isdisjoint(tasks))
         self.assertEqual([item["name"] for item in data["providers"]], ["backup", "embed", "main", "whisper"])
         self.assertEqual(data["default_provider"], "main")
-        self.assertEqual(data["fallback_providers"], ["backup"])
+        self.assertNotIn("fallback_providers", data)
         reply = next(item for item in data["tasks"] if item["task"] == "reply")
         self.assertEqual((reply["provider"], reply["model"], reply["configured"]), ("backup", "deepseek-chat", True))
         voice = next(item for item in data["tasks"] if item["task"] == "voice")
@@ -109,6 +110,8 @@ class ConsoleAiRoutingTests(unittest.IsolatedAsyncioTestCase):
         store = _Chat()
         cases = [
             ("unknown", "main", "未知的模型任务"),
+            ("extract", "main", "未知的模型任务"),
+            ("style", "main", "未知的模型任务"),
             ("reply", "missing", "Provider 不存在"),
             ("reply", "embed", "只有对话 Provider 可以分配给任务"),
         ]

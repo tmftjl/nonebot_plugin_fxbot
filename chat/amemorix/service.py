@@ -6,9 +6,9 @@ from typing import Any
 
 from nonebot import logger
 
-from ._host.person_db import person_scope, resolve_person_identifier
 from .people import session_parts
 from .runtime import amemorix_runtime
+from ._host.person_db import person_scope, resolve_person_identifier
 
 
 def _request_context(tenant: str, user_id: str = "", group_id: str = "") -> tuple[str, str]:
@@ -47,7 +47,7 @@ async def search(
 
     with person_scope(tenant):
         try:
-            return await kernel.search_memory(
+            result = await kernel.search_memory(
                 KernelSearchRequest(
                     query=str(query or "").strip(),
                     limit=max(1, int(limit)),
@@ -61,6 +61,17 @@ async def search(
                     group_id=group_id,
                 )
             )
+            paragraph_hits = [
+                hit for hit in result.get("hits", []) if hit.get("type") == "paragraph" and hit.get("hash")
+            ]
+            if paragraph_hits and kernel.metadata_store is not None:
+                paragraphs = kernel.metadata_store.get_paragraphs_by_hashes([hit["hash"] for hit in paragraph_hits])
+                for hit in paragraph_hits:
+                    paragraph = paragraphs.get(hit["hash"])
+                    if paragraph is not None:
+                        hit["source"] = paragraph["source"]
+                        hit["metadata"] = {**(paragraph.get("metadata") or {}), **(hit.get("metadata") or {})}
+            return {**result, "success": not bool(result.get("error")) and bool(result.get("retrieval_ready"))}
         except Exception as exc:
             logger.opt(exception=True).warning("[A_Memorix] 记忆检索失败")
             return {"success": False, "error": f"{type(exc).__name__}: {exc}", "hits": []}
@@ -142,7 +153,8 @@ async def person_profile(tenant: str, person_id: str, *, limit: int = 10) -> dic
         return {"success": False, "error": "memory_unavailable"}
     with person_scope(tenant):
         try:
-            return await kernel.get_person_profile(person_id=person_id, chat_id=tenant, limit=max(1, int(limit)))
+            result = await kernel.get_person_profile(person_id=person_id, chat_id=tenant, limit=max(1, int(limit)))
+            return {**result, "success": not bool(result.get("error"))}
         except Exception as exc:
             logger.opt(exception=True).debug("[A_Memorix] 人物画像读取失败")
             return {"success": False, "error": f"{type(exc).__name__}: {exc}"}

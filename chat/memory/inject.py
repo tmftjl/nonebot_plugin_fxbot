@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from .state import is_ready
@@ -21,21 +20,9 @@ _EXPRESSION_CHARS = 200
 _TOTAL_CHARS = 450
 
 
-def _json_list(value: object) -> list[Any]:
-    """解析 JSON 数组；坏数据按空处理。"""
-    try:
-        items = json.loads(str(value or "[]"))
-    except (TypeError, ValueError):
-        return []
-    return items if isinstance(items, list) else []
-
-
 def _style_line(style: object) -> str:
-    """人工覆盖优先，其次摘要，最后用前几条规则兜底。"""
-    summary = str(getattr(style, "manual_override", "") or getattr(style, "summary", "") or "")
-    if not summary:
-        rules = [str(item) for item in _json_list(getattr(style, "rules", "[]")) if str(item).strip()]
-        summary = "；".join(rules[:3])
+    """仅保留用户明确设置的风格，不再注入旧的额外自动风格摘要。"""
+    summary = str(getattr(style, "manual_override", "") or "")
     if not summary:
         return ""
     return sanitize_line(f"【群风格】{summary}", 300)

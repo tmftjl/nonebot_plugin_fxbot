@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from nonebot import logger
 
 from .types import ToolError, ToolContext
@@ -9,9 +11,61 @@ from .runtime import ToolRuntime
 from .registry import tool
 from ..amemorix.runtime import amemorix_runtime
 from ..amemorix.service import search, person_profile, resolve_person
+from ..memory.repository import chat_repository
+from ..amemorix.core.image.component_paths import build_chat_external_ref
 
 _MARKER = "【长期记忆检索结果-内部参考】"
 _MODES = {"search", "time", "hybrid", "episode", "aggregate"}
+
+
+@tool(
+    name="query_image_memory",
+    title="图片记忆",
+    description="查询当前聊天中关于某张图片的记忆。",
+    parameters={
+        "type": "object",
+        "properties": {
+            "message_id": {"type": "string", "description": "包含目标图片的真实消息 ID"},
+            "component_path": {"type": "string", "description": "该消息中图片的组件路径"},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 20, "default": 8},
+        },
+        "required": ["message_id", "component_path"],
+    },
+)
+async def query_image_memory_tool(
+    context: ToolContext,
+    runtime: ToolRuntime,
+    message_id: str,
+    component_path: str,
+    limit: int = 8,
+) -> str:
+    """按当前会话真实消息解析图片，不能传入其他会话或任意文件路径。"""
+    del runtime
+    if not amemorix_runtime.available or not amemorix_runtime.config().image_memory.enabled:
+        raise ToolError("图片记忆未启用")
+    row = await chat_repository.message_by_identity(context.session_id, message_id)
+    if row is None:
+        raise ToolError("没有找到指定图片")
+    payload = json.loads(row.payload or "{}")
+    image = next(
+        (item for item in payload.get("image_memory", []) if item.get("component_path") == component_path), None
+    )
+    if image is None:
+        raise ToolError("没有找到指定图片")
+    kernel = await amemorix_runtime.get_kernel()
+    if kernel is None:
+        raise ToolError("图片记忆未启用")
+    result = await kernel.image_memory(
+        action="search",
+        content_hash=image.get("content_hash", ""),
+        current_external_ref=build_chat_external_ref(
+            chat_id=context.session_id, message_id=message_id, component_path=component_path
+        ),
+        chat_ids=[context.session_id],
+        session_id=context.session_id,
+        candidate_limit=max(1, min(20, int(limit))),
+    )
+    return json.dumps(result, ensure_ascii=False, default=str)
 
 
 def _enabled(field: str) -> bool:

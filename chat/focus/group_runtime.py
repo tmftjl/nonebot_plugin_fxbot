@@ -6,6 +6,7 @@ import json
 import time
 import asyncio
 from html import escape
+from math import ceil
 from uuid import uuid4
 from typing import Any
 from functools import partial
@@ -17,30 +18,26 @@ from nonebot import logger
 
 from .tools import WAIT_TOOL, FocusToolRouter, _failure
 from ..tools import ToolRuntime
-from ..types import ChatRequest
-from .context import FocusEntry, FocusCheckpointStore, restore_entries
+from ..types import ChatRequest, speaker_label
+from .context import FocusEntry, FocusCheckpointStore, closed_entry, restore_entries
 from ...config import get_manager as get_config_manager
 from ..service import chat_service, _memory_block
+from ..personas import DEFAULT_PERSONA
+from ...utils.tz import now
 from ..memory.models import ChatPlannerSample
 from ..replyer.prompt import recall_query, strip_images, build_persona_text, build_user_content
-from ..context_summary import SUMMARY_HEADER, compact_messages
+from ..context_summary import SUMMARY_HEADER, clear_summary, compact_messages, planner_snapshot
+from ..tools.discovery import deferred_reminder
 from ..behavior.debounce import quiet_wait
+from ..behavior.mentions import reply_at_enabled
 from ..memory.repository import chat_repository
 from ..providers.routing import fallback_provider
 
 MAX_SEEN_MESSAGES = 20000
-MAX_INTERNAL_ROUNDS = 3
+MAX_INTERNAL_ROUNDS = 16
 MAX_FAILURE_BACKOFF = 30
 WAIT_REMINDER_AFTER = 3
 _WAIT_REMINDER = "已经连续等待多次，为避免无限循环，请考虑延长等待或调用 stop 结束本轮。"
-_FOCUS_PROMPT = (
-    "你正在 Focus 共享模式下同时关注多个聊天，由你统一决定下一次发言。\n"
-    "上面的消息来自不同聊天，每条开头标了 session_id。\n"
-    "需要发言时调用 reply，并在 session_id 里填目标聊天；不要把回复正文写进普通输出。\n"
-    "其他工具也必须填写 session_id，表示在哪个聊天里执行。\n"
-    "需要继续观察时调用 wait；这一轮没有要做的事就调用 stop。\n"
-    '各聊天的记忆与人格以 <focus_reference session_id="..."> 的形式提供，只用于判断怎么回复。'
-)
 
 
 @dataclass
@@ -106,6 +103,8 @@ class FocusGroupRuntime:
         self._consecutive_waits = 0
         self._sent: list[FocusEntry] = []
         self._invalidated = False
+        self._planner_snapshot = None
+        self._generation = 0
         self._store = store or FocusCheckpointStore(scope_id)
         self._checkpoint_lock = asyncio.Lock()
         self.tools = FocusToolRouter(self)
@@ -116,12 +115,12 @@ class FocusGroupRuntime:
         if not payload:
             return
         self.entries = restore_entries(payload)
-        self._sequence = int(payload.get("sequence") or 0)
-        self._considered = {str(key): int(value) for key, value in (payload.get("considered") or {}).items()}
-        self._seen = OrderedDict((str(key), None) for key in payload.get("seen") or [])
-        self._wait_until = payload.get("wait_until")
-        self._wait_session_id = payload.get("wait_session_id")
-        self._consecutive_waits = int(payload.get("consecutive_waits") or 0)
+        self._sequence = payload["sequence"]
+        self._considered = dict(payload["considered"])
+        self._seen = OrderedDict.fromkeys(payload["seen"])
+        self._wait_until = payload["wait_until"]
+        self._wait_session_id = payload["wait_session_id"]
+        self._consecutive_waits = payload["consecutive_waits"]
         if self._wait_session_id is None or not any(
             self._wait_session_id in entry.session_ids for entry in self.entries
         ):
@@ -131,7 +130,9 @@ class FocusGroupRuntime:
         """把时间线与等待状态落盘。"""
         async with self._checkpoint_lock:
             pending = sorted((entry for batch in self._pending.values() for entry in batch), key=lambda e: e.sequence)
-            entries = [*self.entries, *pending, *self._sent]
+            entries = [
+                closed_entry(entry) for entry in [*self.entries, *pending, *self._sent, *self.tools.pending_media]
+            ]
             state = {
                 "sequence": self._sequence,
                 "considered": dict(self._considered),
@@ -175,6 +176,9 @@ class FocusGroupRuntime:
         member = self.members.pop(session_id, None)
         if member is None:
             return
+        self._generation += 1
+        self._planner_snapshot = None
+        self.tools.pending_media = [entry for entry in self.tools.pending_media if session_id not in entry.session_ids]
         pending = self._pending.pop(session_id, [])
         if not clear_context:
             self.entries.extend(pending)
@@ -183,6 +187,7 @@ class FocusGroupRuntime:
         self._last_author.pop(session_id, None)
         self._sent = [entry for entry in self._sent if session_id not in entry.session_ids]
         if clear_context:
+            clear_summary(self.scope_id)
             self.entries = [entry for entry in self.entries if session_id not in entry.session_ids]
             self._considered.pop(session_id, None)
             self._seen = OrderedDict((key, None) for key in self._seen if not key.startswith(session_id + "\0"))
@@ -207,11 +212,18 @@ class FocusGroupRuntime:
             removed = True
         if removed:
             self._invalidated = True
+            self._generation += 1
+            self._planner_snapshot = None
+            clear_summary(self.scope_id)
             await self.checkpoint()
         return removed
 
     async def purge_session(self, session_id: str) -> None:
         """丢弃某个聊天留在共享时间线上的全部痕迹。"""
+        self._generation += 1
+        self._planner_snapshot = None
+        self.tools.pending_media = [entry for entry in self.tools.pending_media if session_id not in entry.session_ids]
+        clear_summary(self.scope_id)
         self.entries = [entry for entry in self.entries if session_id not in entry.session_ids]
         self._pending.pop(session_id, None)
         self._ready.discard(session_id)
@@ -250,7 +262,7 @@ class FocusGroupRuntime:
         content = strip_images([{"role": "user", "content": build_user_content(request)}])[0]["content"]
         key = request.message_id or request.dedupe_key
         entry = FocusEntry(
-            [{"role": "user", "content": f"[{session_id}]\n{content}"}],
+            [{"role": "user", "content": f"[{session_id}]\n[msg_id: {key}]\n{content}"}],
             {session_id},
             self._sequence,
             {session_id: [[self._sequence, key]]},
@@ -299,9 +311,62 @@ class FocusGroupRuntime:
         self._consecutive_waits = 0
         return json.dumps({"ok": True, "result": "已结束整个共享组的本轮思考。"}, ensure_ascii=False), True
 
-    async def reply(self, member: FocusMember, instruction: str) -> tuple[str, bool]:
+    async def reply(
+        self, member: FocusMember, instruction: str, options: dict[str, Any] | None = None
+    ) -> tuple[str, bool]:
         """让目标聊天自己的回复模型生成并发送一条回复。"""
-        request = replace(member.request, turn_id=f"focus-{uuid4().hex}")
+        request = replace(member.request, turn_id=f"focus-{uuid4().hex}", metadata=dict(member.request.metadata))
+        if options:
+            from ..heart_flow.attachments import resolve_pictures
+
+            target = str(options.get("msg_id") or "")
+            if target != (request.message_id or request.dedupe_key):
+                row = await chat_repository.message_by_identity(member.session_id, target)
+                if row is None:
+                    raise ValueError("回复目标不属于当前会话")
+                request = replace(
+                    request,
+                    user_id=row.sender_id,
+                    user_name=row.sender_name,
+                    text=row.content.removeprefix(f"{speaker_label(row.sender_id, row.sender_name)}: "),
+                    message_id=target,
+                    images=[],
+                    source_message_ids=[target],
+                    source_author_ids=[row.sender_id],
+                )
+            request.metadata["reply_target_id"] = target
+            if style := options.get("reply_style"):
+                if style not in {"简短表达", "正常回复", "长回复"}:
+                    raise ValueError("回复风格无效")
+                request.metadata["requested_reply_style"] = style
+            attached = options.get("attach_at") or []
+            if attached and not reply_at_enabled():
+                raise ValueError("回复时 @ 用户已关闭")
+            if not isinstance(attached, list):
+                raise ValueError("提及附件无效")
+            users = []
+            for identifier in attached:
+                row = await chat_repository.message_by_identity(member.session_id, str(identifier))
+                if row is None:
+                    raise ValueError("提及目标不属于当前会话")
+                users.append(row.sender_id)
+            request.metadata["reply_at_users"] = list(dict.fromkeys(users))
+            trace = [
+                message
+                for entry in [*self.entries, *self.tools.pending_media]
+                if member.session_id in entry.session_ids
+                for message in entry.messages
+            ]
+            request.metadata["reply_pictures"] = await resolve_pictures(
+                chat_service, member.request, options.get("attach_pic"), trace
+            )
+            if attachment := options.get("attach_emoji"):
+                from ..heart_flow.emoji_tools import selected_hash
+
+                digest = selected_hash(member.request, attachment, trace)
+                if digest is None:
+                    raise ValueError("表情候选不存在")
+                request.metadata["reply_emoji"] = digest
         is_valid = partial(self.is_member_valid, member)
         runtime = ToolRuntime(
             bot=member.bot,
@@ -319,6 +384,40 @@ class FocusGroupRuntime:
             FocusEntry([{"role": "assistant", "content": f"[{member.session_id}] {text}"}], {member.session_id})
         )
         return json.dumps({"ok": True, "result": f"已发送到 {member.session_id}：{text}"}, ensure_ascii=False), False
+
+    async def emoji_tool(
+        self, member: FocusMember, name: str, reasoning: str, *, target_id: str = ""
+    ) -> tuple[str, bool]:
+        """内置表情工具沿用目标会话目录、发送适配器和成员失效检查。"""
+        from types import SimpleNamespace
+
+        from ..heart_flow import emoji_tools
+
+        if name == "show_emoji_list":
+            result, additions = await emoji_tools.show_candidates(member.request)
+            if not self.is_member_valid(member):
+                return _failure("目标聊天已失效。"), False
+            if additions:
+                self.tools.pending_media.append(FocusEntry(additions, {member.session_id}))
+        else:
+            runtime = ToolRuntime(
+                bot=member.bot,
+                event=member.event,
+                matcher=FocusMatcher(member.bot, member.target, is_valid=partial(self.is_member_valid, member)),
+            )
+            context = SimpleNamespace(
+                request=member.request, runtime=runtime, epoch=chat_service.session_store.epoch(member.session_id)
+            )
+            result = await emoji_tools.send_selected(
+                chat_service, context, reasoning or member.request.text, target_id=target_id
+            )
+            if result.get("ok") and self.is_member_valid(member):
+                description = result.get("description") or ""
+                text = f"[表情包: {description}]" if description else "[表情包]"
+                self._sent.append(
+                    FocusEntry([{"role": "assistant", "content": f"[{member.session_id}] {text}"}], {member.session_id})
+                )
+        return json.dumps(result, ensure_ascii=False), False
 
     def _finish_wait(self, reason: str) -> None:
         session_id = self._wait_session_id
@@ -406,15 +505,11 @@ class FocusGroupRuntime:
             if self._closed or self._wait_until is not None:
                 return
             source_session = self._take_ready_inputs() or source_session
-            await self._compact()
             definitions = await self.tools.refresh()
             references = await self._build_references()
             source_session = self._take_ready_inputs() or source_session
             covered = [
-                (session_id, entry.sequence)
-                for entry in self.entries
-                if entry.sequence
-                for session_id in entry.session_ids
+                (session_id, sequence) for entry in self.entries for session_id, sequence in entry.progress.items()
             ]
             features = {
                 "session_count": len({session_id for entry in self.entries for session_id in entry.session_ids}),
@@ -422,10 +517,12 @@ class FocusGroupRuntime:
             }
             tenant = self._routing_session()
             turn_id = f"focus-{uuid4().hex}"
+            generation = self._generation
             response, provider, model = await self._chat(self._build_messages(references), definitions)
             if self._closed:
                 return
-            if self._invalidated:
+            if self._invalidated or generation != self._generation:
+                self._planner_snapshot = None
                 # 生成期间有消息被撤回：丢弃基于旧上下文的响应，按新时间线重新规划
                 self._invalidated = False
                 continue
@@ -433,7 +530,8 @@ class FocusGroupRuntime:
                 self._considered[session_id] = max(self._considered.get(session_id, 0), sequence)
             for entry in self.entries:
                 entry.prune_inputs(self._considered)
-            batch = FocusEntry([response.to_message_dict()], set(self.members))
+            planner_message = {**response.to_message_dict(), "_planner_internal": True}
+            batch = FocusEntry([planner_message], set(self.members))
             self.entries.append(batch)
             try:
                 await self.checkpoint()
@@ -459,6 +557,7 @@ class FocusGroupRuntime:
             if self._sent:
                 self.entries.extend(self._sent)
                 self._sent.clear()
+            await self._compact()
             await self.checkpoint()
             if paused or not response.tool_calls:
                 if self._wait_until is None:
@@ -474,22 +573,38 @@ class FocusGroupRuntime:
 
     async def _chat(self, messages: list[dict[str, Any]], definitions: list[dict[str, Any]]) -> tuple[Any, str, str]:
         async with fallback_provider("planner", self._routing_session()) as provider:
-            response = await provider.chat(messages=messages, tools=definitions or None)
+            response = await asyncio.wait_for(
+                provider.chat(messages=messages, tools=definitions or None, temperature=0.7, max_tokens=16384), 180
+            )
+            self._planner_snapshot = planner_snapshot(provider, messages, definitions)
             return response, provider.provider_id, str(provider.get_model() or "")
 
     def _build_messages(self, references: list[str]) -> list[dict[str, Any]]:
         messages: list[dict[str, Any]] = [{"role": "system", "content": self._system_prompt()}]
+        messages.append({"role": "user", "content": f"时间：{now():%Y-%m-%d %H:%M:%S}"})
         for entry in self.entries:
             messages.extend(entry.messages)
         tail = list(references)
         if self._consecutive_waits >= WAIT_REMINDER_AFTER:
             tail.append(_WAIT_REMINDER)
+        name = str(get_config_manager().get_system()["chat"].get("persona") or DEFAULT_PERSONA)
+        tail.append(f"你需要输出对{name}发言的分析，视情况输出文本内容的分析，思考是否进行工具调用")
         if tail:
             messages.append({"role": "user", "content": "\n\n".join(tail)})
+        for session_id, member in self.members.items():
+            if reminder := deferred_reminder(member.allowed_names, session_id):
+                messages.append({"role": "user", "content": f"session_id: {session_id}\n{reminder}"})
         return messages
 
     def _system_prompt(self) -> str:
-        lines = [_FOCUS_PROMPT, "", "参与共享的聊天："]
+        from ..heart_flow.prompts import focus_planner_prompt
+
+        chat = get_config_manager().get_system()["chat"]
+        lines = [
+            focus_planner_prompt(chat.get("behavior") or {}, name=str(chat.get("persona") or DEFAULT_PERSONA)),
+            "",
+            "参与共享的聊天：",
+        ]
         for session_id, member in self.members.items():
             kind = "群聊" if member.is_group else "私聊"
             name = member.request.user_name or member.request.user_id
@@ -535,34 +650,103 @@ class FocusGroupRuntime:
             if paused or self._closed:
                 content, call_paused = _failure("本批次已暂停，此工具未执行。"), False
             else:
-                content, call_paused = await self.tools.invoke(name, arguments, source_session)
+                content, call_paused = await self.tools.invoke(
+                    name, arguments, source_session, call_id=str(call.get("id") or name), reasoning=response.content
+                )
                 paused = paused or call_paused
                 if name != WAIT_TOOL:
                     self._consecutive_waits = 0
             batch.messages.append({"role": "tool", "tool_call_id": call.get("id"), "name": name, "content": content})
             await self.checkpoint()
+        self.entries.extend(self.tools.pending_media)
+        self.tools.pending_media.clear()
         return paused
 
     async def _compact(self) -> None:
-        """超过窗口时把最旧的完整片段压成状态摘要。"""
-        if len(self.entries) <= 1:
+        """按上游轮后阈值裁切完整片段，压缩后仅向各自会话投递学习素材。"""
+        if len(self.entries) <= 1 or self._planner_snapshot is None:
             return
+        generation = self._generation
+        snapshot = list(self.entries)
         limit = self._max_context()
-        size = sum(len(entry.messages) for entry in self.entries)
+        counts = [
+            sum(
+                message.get("role") in {"user", "assistant"}
+                and not message.get("_planner_internal")
+                and not message.get("tool_calls")
+                for message in entry.messages
+            )
+            for entry in snapshot
+        ]
+        size = sum(counts)
+        if size < ceil(limit * 1.2):
+            return
+        target = max(5, int(limit * 0.2))
+        last_user = next(
+            (
+                index
+                for index in range(len(snapshot) - 1, -1, -1)
+                if any(message.get("role") == "user" for message in snapshot[index].messages)
+            ),
+            len(snapshot) - 1,
+        )
         split = 0
-        while split < len(self.entries) - 1 and size > limit:
-            size -= len(self.entries[split].messages)
+        while split < last_user and size - counts[split] >= target:
+            size -= counts[split]
             split += 1
         if split <= 0:
             return
-        old = self.entries[:split]
+        old = snapshot[:split]
+
+        def valid() -> bool:
+            """成员清空或撤回后不再接受旧快照结果。"""
+            return (
+                not self._closed
+                and generation == self._generation
+                and len(snapshot) == len(self.entries)
+                and all(original is current for original, current in zip(snapshot, self.entries, strict=True))
+            )
+
         try:
-            summary = await compact_messages(self.scope_id, [message for entry in old for message in entry.messages])
+            summary = await compact_messages(
+                self.scope_id,
+                [message for entry in old for message in entry.messages],
+                planner_request=self._planner_snapshot,
+                recent_messages=[message for entry in snapshot[split:] for message in entry.messages],
+                source_context="\n".join(
+                    f"session_ids={sorted(entry.session_ids)}; sources={entry.sources}" for entry in snapshot
+                ),
+                is_valid=valid,
+            )
         except Exception:
+            logger.opt(exception=True).warning("[ChatFocus] 上下文压缩失败，丢弃旧原文并继续规划")
             summary = ""
+        if not valid():
+            return
         related = set().union(*(entry.session_ids for entry in old))
         messages = [{"role": "system", "content": f"{SUMMARY_HEADER}\n{summary}"}] if summary else []
-        self.entries[:split] = [FocusEntry(messages, related)]
+        watermarks: dict[str, int] = {}
+        sources: dict[str, list[str]] = {}
+        inputs: dict[str, list[list[Any]]] = {}
+        for entry in old:
+            for session_id, sequence in entry.progress.items():
+                watermarks[session_id] = max(watermarks.get(session_id, 0), sequence)
+            for session_id, identifiers in entry.sources.items():
+                sources.setdefault(session_id, []).extend(identifiers)
+            for session_id, records in entry.inputs.items():
+                inputs.setdefault(session_id, []).extend(records)
+        self.entries[:split] = [FocusEntry(messages, related, inputs=inputs, sources=sources, watermarks=watermarks)]
+        self._planner_snapshot = None
+        from ..memory.trimmed import trimmed_learning
+
+        for session_id in related:
+            sources = [
+                {"role": "user", "_source_ids": entry.sources[session_id]}
+                for entry in old
+                if entry.sources.get(session_id)
+            ]
+            if sources:
+                trimmed_learning.collect(session_id, sources)
 
     def _max_context(self) -> int:
         try:

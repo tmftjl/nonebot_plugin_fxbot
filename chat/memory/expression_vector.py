@@ -244,7 +244,7 @@ async def select_by_vectors(
         return None
     by_id = {int(row.id or 0): row for row in candidates}
     try:
-        async with fallback_provider(routed_task("utils", "extract"), tenant) as provider:
+        async with fallback_provider(routed_task("fast_model", "utils"), tenant) as provider:
             response = await asyncio.wait_for(
                 provider.chat(
                     messages=[{"role": "user", "content": build_selector_prompt(query, candidates)}],

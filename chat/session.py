@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 import asyncio
+from math import ceil
 from typing import Any
 from collections import OrderedDict, deque, defaultdict
 
@@ -161,11 +162,9 @@ class ChatSessionStore:
             self._store[session_id] = deque(maxlen=0)
             return self._store[session_id]
         current = self._store.get(session_id)
-        if current is None or current.maxlen != size:
+        if current is None:
             previous = list(current or ())
-            overflow = max(len(previous) - size, 0)
-            self._dropped.setdefault(session_id, []).extend(previous[:overflow])
-            current = deque(previous[overflow:], maxlen=size)
+            current = deque(previous)
             self._store[session_id] = current
         self._trim_head(session_id, current)
         return current
@@ -180,8 +179,45 @@ class ChatSessionStore:
         return list(self._store.get(session_id, ()))
 
     def trim(self, session_id: str, limit: int) -> None:
-        """按当前上限裁剪会话历史。"""
+        """读取当前上下文配置，裁切在每轮结束后统一进行。"""
         self._deque(session_id, limit)
+
+    def process_cycle(self, session_id: str, limit: int) -> list[dict[str, Any]]:
+        """对齐 MaiBot 062d45c post_processor.py：1.2 倍触发，保留 0.2 倍且至少五条。"""
+        history = self._deque(session_id, limit)
+        if limit <= 0:
+            return []
+        messages = list(history)
+        visible = [
+            index
+            for index, message in enumerate(messages)
+            if message.get("role") in {"user", "assistant"} and not message.get("_planner_internal")
+        ]
+        if len(visible) < ceil(limit * 1.2):
+            return []
+        target = max(5, int(limit * 0.2))
+        if len(visible) <= target:
+            return []
+        boundary = visible[-target]
+        user_positions = [
+            index
+            for index, message in enumerate(messages)
+            if message.get("role") == "user" and not message.get("_planner_internal")
+        ]
+        if user_positions:
+            boundary = min(boundary, user_positions[-1])
+        spans: dict[str, list[int]] = {}
+        for index, message in enumerate(messages):
+            if turn := message.get("_logical_turn_id"):
+                spans.setdefault(str(turn), []).append(index)
+        while any(min(indices) < boundary <= max(indices) for indices in spans.values()):
+            boundary = min(min(indices) for indices in spans.values() if min(indices) < boundary <= max(indices))
+        if boundary <= 0:
+            return []
+        removed = messages[:boundary]
+        self._store[session_id] = deque(messages[boundary:])
+        self._dropped.setdefault(session_id, []).extend(removed)
+        return removed
 
     def take_dropped(self, session_id: str) -> list[dict[str, Any]]:
         """取走因窗口或孤立工具结果被挤掉的消息，供上下文压缩使用。"""
@@ -197,10 +233,6 @@ class ChatSessionStore:
         history = self._deque(session_id, limit)
         if history.maxlen == 0:
             return
-        if history.maxlen is not None:
-            combined = [*history, *messages]
-            overflow = max(len(combined) - history.maxlen, 0)
-            self._dropped.setdefault(session_id, []).extend(combined[:overflow])
         history.extend(messages)
         self._trim_head(session_id, history)
 

@@ -150,18 +150,6 @@ class LastValidSystemConfigTests(unittest.TestCase):
         self.assertEqual(self.proxy.storage.read(strict=True), invalid)
         self.assertEqual(self.proxy.history_storage.read(strict=True), self.valid)
 
-    def test_valid_bootstrap_migration_preserves_membership_and_security(self) -> None:
-        legacy = deepcopy(self.valid)
-        legacy["chat"]["web_search"] = {"api_key": "legacy-key"}
-        self.proxy.storage.write(legacy)
-        self.manager.bootstrap()
-        migrated = self.manager.get_system()
-        self.assertEqual(migrated["membership"], self.valid["membership"])
-        self.assertEqual(migrated["system"], self.valid["system"])
-        self.assertNotIn("web_search", migrated["chat"])
-        self.assertEqual(migrated["chat"]["model_routing"]["web_search"], "deepseek")
-        self.assertEqual(self.proxy.history_storage.read(strict=True), migrated)
-
     def test_invalid_history_refuses_default_fallback(self) -> None:
         self.proxy.save(self.valid)
         self._write_bad('{"chat": {"max_context_size": -1}}')

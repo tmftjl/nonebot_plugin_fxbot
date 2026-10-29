@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+import re
 import json
-import asyncio
 import unittest
 from uuid import uuid4
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 from fastapi import HTTPException
 from sqlalchemy import update
@@ -16,22 +16,20 @@ from src.plugins.nonebot_plugin_fxbot.chat.memory import (
     state as memory_state,
     config as config_module,
     migrate,
-    expression as expression_module,
 )
+from src.plugins.nonebot_plugin_fxbot.chat.providers import LLMResponse
 from src.plugins.nonebot_plugin_fxbot.console.routes import chat as chat_routes
 from src.plugins.nonebot_plugin_fxbot.chat.memory.inject import learning_context
 from src.plugins.nonebot_plugin_fxbot.chat.memory.models import ChatMessage, utc_now_naive
 from src.plugins.nonebot_plugin_fxbot.chat.memory.expression import (
     ExpressionItem,
     text_hash,
-    parse_review,
     merge_candidates,
     learn_expressions,
     parse_expressions,
     build_learn_prompt,
-    expression_job_tick,
 )
-from src.plugins.nonebot_plugin_fxbot.chat.memory.repository import TenantJobState, chat_repository
+from src.plugins.nonebot_plugin_fxbot.chat.memory.repository import chat_repository
 
 U1 = "50001"
 U2 = "50002"
@@ -51,8 +49,8 @@ def _message(seq: int, content: str, sender: str = U1, name: str = "小明") -> 
     return message
 
 
-def _learn_payload(*items: dict[str, Any]) -> dict[str, Any]:
-    return {"expressions": list(items)}
+def _learn_payload(*items: dict[str, Any]) -> list[dict[str, Any]]:
+    return [{**item, "id": item.get("source_seq", "")} for item in items]
 
 
 def _approve_all(count: int) -> dict[str, Any]:
@@ -86,7 +84,7 @@ class _FakeConfig:
                     "groups": self.groups,
                 },
                 "jargon": {"learning_list": [], "groups": []},
-                "model_routing": {"extract": ""},
+                "model_routing": {"learner": ""},
             }
         }
 
@@ -113,6 +111,18 @@ class _QueueProvider:
             raise payload
         return payload
 
+    async def chat(self, messages, **kwargs):
+        payload = await self.chat_json(messages, None)
+        if isinstance(payload, list):
+            match = re.search(r"\[id:(\d+)\]", messages[0]["content"])
+            payload = [{**item, "id": item.get("id") or (match.group(1) if match else "")} for item in payload]
+        if isinstance(payload, dict) and "results" in payload:
+            results = payload["results"]
+            if len(results) > 1:
+                self.payloads[:0] = [{"suitable": item["approved"]} for item in results[1:]]
+            payload = {"suitable": bool(results[0]["approved"])} if results else {}
+        return LLMResponse(content=json.dumps(payload, ensure_ascii=False))
+
 
 class ParseExpressionTests(unittest.TestCase):
     """表达解析只保留有情境、有说法且不含敏感信息的条目。"""
@@ -125,43 +135,42 @@ class ParseExpressionTests(unittest.TestCase):
 
     def test_valid_payload_is_normalized(self) -> None:
         parsed = parse_expressions(
-            {
-                "expressions": [
-                    {
-                        "situation": "别人在炫耀时",
-                        "style": "笑死，又来",
-                        "type": "tone",
-                        "source_seq": 21,
-                    },
-                    {
-                        "situation": "别人在炫耀时",
-                        "style": "笑死，又来",
-                        "type": "phrase",
-                        "source_seq": 21,
-                    },
-                    {"situation": "密码 abc123", "style": "笑死", "type": "phrase"},
-                    {"situation": "无关情境", "style": "无关说法", "type": "unknown", "source_seq": 999},
-                ]
-            },
+            [
+                {
+                    "situation": "别人在炫耀时",
+                    "style": "笑死，又来",
+                    "type": "tone",
+                    "id": 21,
+                },
+                {
+                    "situation": "别人在炫耀时",
+                    "style": "笑死，又来",
+                    "type": "phrase",
+                    "id": 21,
+                },
+                {"situation": "密码 abc123", "style": "笑死", "type": "phrase"},
+                {"situation": "无关情境", "style": "无关说法", "type": "unknown", "id": 999},
+            ],
             self.messages,
         )
 
         self.assertIsNotNone(parsed)
         self.assertEqual(
             [(item.situation, item.style, item.type, item.source_seq) for item in parsed],
-            [("别人在炫耀时", "笑死，又来", "tone", 21), ("无关情境", "无关说法", "phrase", 0)],
+            [("别人在炫耀时", "笑死，又来", "tone", 21)],
         )
 
     def test_invalid_payload_returns_none_and_empty_is_valid(self) -> None:
         self.assertIsNone(parse_expressions("not json", self.messages))
         self.assertIsNone(parse_expressions({}, self.messages))
-        self.assertEqual(parse_expressions({"expressions": []}, self.messages), [])
+        self.assertIsNone(parse_expressions({"expressions": []}, self.messages))
+        self.assertEqual(parse_expressions([], self.messages), [])
 
     def test_prompt_carries_seq_and_rules(self) -> None:
         prompt = build_learn_prompt(self.messages)
 
-        self.assertIn("[21]", prompt[1]["content"])
-        self.assertIn("情境", prompt[0]["content"])
+        self.assertIn("[id:21]", prompt[0]["content"])
+        self.assertIn("场景", prompt[0]["content"])
 
 
 class MergeExpressionTests(unittest.TestCase):
@@ -176,11 +185,11 @@ class MergeExpressionTests(unittest.TestCase):
         new_items, updates = merge_candidates(items, [])
 
         self.assertEqual(len(new_items), 1)
-        self.assertAlmostEqual(new_items[0]["count"], 0.012)
+        self.assertAlmostEqual(new_items[0]["count"], 2)
         self.assertEqual(new_items[0]["learn"], 2)
         self.assertEqual(updates, {})
 
-    def test_fuzzy_similar_expression_merges(self) -> None:
+    def test_similar_expression_is_stored_separately(self) -> None:
         class _Row:
             id = 9
             situation = "别人在群里炫耀成绩时"
@@ -192,9 +201,9 @@ class MergeExpressionTests(unittest.TestCase):
             [_Row()],
         )
 
-        self.assertEqual(new_items, [])
-        self.assertAlmostEqual(updates[9][0], 0.012)
-        self.assertEqual(updates[9][1], 1)
+        self.assertEqual(len(new_items), 1)
+        self.assertAlmostEqual(new_items[0]["count"], 1)
+        self.assertEqual(updates, {})
 
     def test_different_expression_is_new(self) -> None:
         class _Row:
@@ -212,7 +221,7 @@ class MergeExpressionTests(unittest.TestCase):
         self.assertEqual(new_items[0]["situation"], "今天晚饭吃什么")
         self.assertEqual(updates, {})
 
-    def test_existing_count_updates_and_is_capped(self) -> None:
+    def test_existing_count_increases_without_cap(self) -> None:
         class _Row:
             id = 7
             situation = "别人在群里炫耀成绩时"
@@ -225,7 +234,7 @@ class MergeExpressionTests(unittest.TestCase):
         )
 
         self.assertEqual(new_items, [])
-        self.assertAlmostEqual(updates[7][0], 5.0)
+        self.assertAlmostEqual(updates[7][0], 5.998)
         self.assertEqual(updates[7][1], 1)
 
 
@@ -290,15 +299,15 @@ class _ExpressionTestCase(unittest.IsolatedAsyncioTestCase):
 class ExpressionLearningTests(_ExpressionTestCase):
     """40 条触发、隐私开关、失败不推进游标、复审与跨批次合并。"""
 
-    async def test_first_batch_needs_40_messages(self) -> None:
-        await self._seed_many(39)
+    async def test_first_batch_needs_10_messages(self) -> None:
+        await self._seed_many(9)
         provider = _QueueProvider(_learn_payload({"situation": "炫耀时", "style": "笑死"}), _approve_all(1))
 
         with _config():
             self.assertFalse(await learn_expressions(self.tenant, provider=provider))
 
         self.assertEqual(provider.calls, 0)
-        await self._seed("第40楼 这也太离谱了")
+        await self._seed("第10楼 这也太离谱了")
         with _config():
             self.assertTrue(await learn_expressions(self.tenant, provider=provider))
         self.assertEqual(provider.calls, 2)
@@ -427,57 +436,9 @@ class ExpressionLearningTests(_ExpressionTestCase):
         with _config():
             self.assertTrue(await learn_expressions(self.tenant, provider=second))
 
-        [row] = await chat_repository.list_expressions(self.tenant)
-        self.assertAlmostEqual(row.count, 0.012)
-        self.assertEqual(row.learn_count, 2)
-
-    async def test_expression_job_tick_processes_due_tenant_once(self) -> None:
-        await self._seed_many(40)
-        provider = _QueueProvider(
-            _learn_payload({"situation": "炫耀时", "style": "笑死"}),
-            _approve_all(1),
-        )
-        snapshot = [row for row in await chat_repository.scheduling_snapshot() if row.tenant == self.tenant]
-
-        with (
-            _config(),
-            patch.object(chat_repository, "scheduling_snapshot", new=AsyncMock(return_value=snapshot)),
-        ):
-            self.assertEqual(await expression_job_tick(provider=provider), 1)
-            self.assertEqual(await expression_job_tick(provider=provider), 0)
-
-        self.assertEqual(provider.calls, 2)
-
-    async def test_expression_job_tick_limits_concurrency_not_tenants(self) -> None:
-        """并发上限只限制同时运行的任务；所有到期租户都会被尝试。"""
-        states = [
-            TenantJobState(tenant="test:new", last_message_id=30, message_count=300, learn_enabled=True),
-            TenantJobState(tenant="test:mid", last_message_id=20, message_count=300, learn_enabled=True),
-            TenantJobState(tenant="test:old", last_message_id=10, message_count=300, learn_enabled=None),
-            TenantJobState(tenant="test:off", last_message_id=40, message_count=300, learn_enabled=False),
-        ]
-        seen: list[str] = []
-        running = 0
-        peak = 0
-
-        async def fake_learn(tenant: str, **_: Any) -> bool:
-            nonlocal running, peak
-            seen.append(tenant)
-            running += 1
-            peak = max(peak, running)
-            await asyncio.sleep(0)
-            running -= 1
-            return True
-
-        with (
-            patch.object(expression_module, "expression_config", return_value={"max_expression_learner": 1}),
-            patch.object(chat_repository, "scheduling_snapshot", new=AsyncMock(return_value=states)),
-            patch.object(expression_module, "learn_expressions", new=fake_learn),
-        ):
-            self.assertEqual(await expression_job_tick(), 3)
-
-        self.assertEqual(seen, ["test:new", "test:mid", "test:old"])
-        self.assertEqual(peak, 1)
+        rows = await chat_repository.list_expressions(self.tenant)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual([row.count for row in rows], [1, 1])
 
     async def test_expression_result_is_dropped_when_evidence_retracted_during_call(self) -> None:
         """模型调用期间证据被撤回时，结果与游标都不落库。"""
@@ -507,15 +468,17 @@ class ExpressionInjectionTests(_ExpressionTestCase):
     """只注入已复审表达；阈值、权重、预算、使用计数与租户隔离。"""
 
     async def test_checked_expression_is_injected(self) -> None:
-        await self._save_expressions([{"situation": "别人在群里炫耀成绩时", "style": "笑死，又来", "count": 1.0}])
+        await self._save_expressions(
+            [{"situation": "别人在群里炫耀成绩时", "style": f"笑死，又来{index}", "count": 1.0} for index in range(10)]
+        )
 
         with _config():
             block = await learning_context(self.tenant, query="别人在群里炫耀成绩，你怎么看")
 
         self.assertIn("【表达参考】", block)
         self.assertIn("笑死，又来", block)
-        [row] = await chat_repository.list_expressions(self.tenant)
-        self.assertEqual(row.use_count, 1)
+        rows = await chat_repository.list_expressions(self.tenant)
+        self.assertEqual(sum(row.use_count for row in rows), 5)
 
     async def test_unchecked_and_rejected_are_not_injected(self) -> None:
         await self._save_expressions(
@@ -540,7 +503,7 @@ class ExpressionInjectionTests(_ExpressionTestCase):
 
     async def test_injection_cap_is_five(self) -> None:
         await self._save_expressions(
-            [{"situation": "别人在群里炫耀成绩时", "style": f"笑死，又来{index}"} for index in range(6)]
+            [{"situation": "别人在群里炫耀成绩时", "style": f"笑死，又来{index}"} for index in range(10)]
         )
 
         with _config():
@@ -572,7 +535,7 @@ class ExpressionInjectionTests(_ExpressionTestCase):
 
         self.assertEqual(block, "")
 
-    async def test_checked_only_requires_manual_review(self) -> None:
+    async def test_checked_only_filters_before_minimum_pool_size(self) -> None:
         await self._save_expressions([{"situation": "别人在群里炫耀成绩时", "style": "笑死，又来", "count": 1.0}])
         [row] = await chat_repository.list_expressions(self.tenant)
         self.assertTrue(await chat_repository.review_expression(self.tenant, int(row.id or 0), False))
@@ -583,12 +546,14 @@ class ExpressionInjectionTests(_ExpressionTestCase):
 
         with _config(checked_only=True):
             block = await learning_context(self.tenant, query="别人在群里炫耀成绩，你怎么看")
-        self.assertIn("笑死，又来", block)
+        self.assertNotIn("【表达参考】", block)
         self.assertNotIn("就这", block)
 
         with _config():
             block = await learning_context(self.tenant, query="别人在群里炫耀成绩，你怎么看")
-        self.assertIn("就这", block)
+        self.assertNotIn("【表达参考】", block)
+        manual = await chat_repository.list_expressions(self.tenant, manual_only=True)
+        self.assertEqual([item.style for item in manual], ["笑死，又来"])
 
     async def test_shared_expression_group_merges_tenants(self) -> None:
         sibling = f"onebot11:{uuid4().hex}:group:{uuid4().hex}"
@@ -601,13 +566,14 @@ class ExpressionInjectionTests(_ExpressionTestCase):
                 {
                     "situation": "别人在群里炫耀成绩时",
                     "situation_hash": text_hash("别人在群里炫耀成绩时"),
-                    "style": "笑死，又来",
-                    "style_hash": text_hash("笑死，又来"),
+                    "style": f"笑死，又来{index}",
+                    "style_hash": text_hash(f"笑死，又来{index}"),
                     "type": "phrase",
                     "count": 1.0,
                     "checked": True,
                     "rejected": False,
                 }
+                for index in range(10)
             ],
             {},
             cursor_seq=1,
@@ -757,7 +723,7 @@ class ExpressionInvalidationTests(_ExpressionTestCase):
             self.assertTrue(await learn_expressions(self.tenant, provider=provider))
 
         [row] = await chat_repository.list_expressions(self.tenant)
-        self.assertAlmostEqual(row.count, 1.006)
+        self.assertAlmostEqual(row.count, 2)
         self.assertEqual(row.learn_count, 2)
 
         async with base_models.async_maker() as session:  # type: ignore[misc]
@@ -772,11 +738,3 @@ class ExpressionInvalidationTests(_ExpressionTestCase):
         self.assertAlmostEqual(row.count, 1.0)
         self.assertEqual(row.learn_count, 1)
         self.assertEqual(json.loads(row.contributions), [])
-
-
-class ReviewParseTests(unittest.TestCase):
-    """复审结果按候选下标对齐，缺项视为不通过。"""
-
-    def test_parse_review_defaults_missing_to_rejected(self) -> None:
-        self.assertEqual(parse_review({"results": [{"index": 1, "approved": True}]}, 2), [True, False])
-        self.assertIsNone(parse_review({}, 2))

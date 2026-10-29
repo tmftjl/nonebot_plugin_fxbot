@@ -174,12 +174,15 @@ class GeminiProvider(ChatProvider):
         model: str | None = None,
         temperature: float = 0.7,
         tools: list[dict[str, Any]] | None = None,
+        max_tokens: int | None = None,
     ) -> AsyncGenerator[LLMResponse, None]:
         """执行 Gemini 流式对话请求。"""
         system_instruction, contents = self._convert_to_gemini_format(messages)
         config = types.GenerateContentConfig(
             system_instruction=system_instruction,
             temperature=temperature,
+            max_output_tokens=max_tokens,
+            tools=self._convert_tools_to_gemini_format(tools),
         )
 
         try:
@@ -189,15 +192,25 @@ class GeminiProvider(ChatProvider):
                 config=config,
             )
             full_content = ""
+            calls: list[dict[str, Any]] = []
             async for chunk in stream:
-                if chunk.text:
-                    full_content += chunk.text
-                    yield LLMResponse(
-                        role="assistant",
-                        content=chunk.text,
-                        is_stream_chunk=True,
-                    )
-            yield LLMResponse(role="assistant", content=full_content)
+                for candidate in chunk.candidates or []:
+                    for part in candidate.content.parts or []:
+                        if part.text:
+                            full_content += part.text
+                            yield LLMResponse(role="assistant", content=part.text, is_stream_chunk=True)
+                        elif part.function_call:
+                            calls.append(
+                                {
+                                    "id": part.function_call.id or f"call-{len(calls)}",
+                                    "type": "function",
+                                    "function": {
+                                        "name": part.function_call.name,
+                                        "arguments": json.dumps(dict(part.function_call.args)),
+                                    },
+                                }
+                            )
+            yield LLMResponse(role="assistant", content=full_content, tool_calls=calls)
         except Exception as exc:
             logger.error(f"[{self.provider_id}] Gemini stream 失败: {exc}")
             raise

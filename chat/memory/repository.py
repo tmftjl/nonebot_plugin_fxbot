@@ -211,7 +211,12 @@ class ChatRepository:
         entries: list[tuple[datetime, int, dict[str, object]]] = []
         for row in messages:
             if row.content:
-                entries.append((row.occurred_at or row.ingested_at, 0, {"role": "user", "content": row.content}))
+                message: dict[str, object] = {"role": "user", "content": row.content}
+                if row.platform_message_id:
+                    message["_source_ids"] = [row.platform_message_id]
+                if row.sender_id:
+                    message["_sender_id"] = row.sender_id
+                entries.append((row.occurred_at or row.ingested_at, 0, message))
         for row in items:
             if row.content:
                 entries.append((row.created_at, 1, {"role": "assistant", "content": row.content}))
@@ -609,6 +614,127 @@ class ChatRepository:
         return list((await session.execute(statement)).scalars().all())
 
     @with_session
+    async def save_jargon_batch(
+        self,
+        session: AsyncSession,
+        tenant: str,
+        candidates: dict[str, list[int]],
+        *,
+        cursor_seq: int,
+        expected_cursor: int,
+        evidence_ids: tuple[int, ...],
+    ) -> bool:
+        """独立保存黑话候选、证据与游标，重复批次和已撤回证据不写入。"""
+        if await self._evidence_stale(session, tenant, evidence_ids):
+            return False
+        cursors = await ChatJobCursor.select_rows(tenant=tenant, job="jargon", session=session)
+        cursor = cursors[0] if cursors else None
+        if (int(cursor.cursor_seq) if cursor else 0) != expected_cursor:
+            return False
+        for term, identifiers in candidates.items():
+            rows = await ChatJargon.select_rows(tenant=tenant, term=term, session=session)
+            if rows:
+                row = rows[0]
+                previous = json.loads(row.evidence or "[]")
+                row.evidence = json.dumps(list(dict.fromkeys([*previous, *identifiers]))[-100:])
+                row.count += 1
+                row.learn_count += 1
+                row.last_seen = utc_now_naive()
+                row.source_batch_id = f"jargon:{min(evidence_ids)}:{cursor_seq}"
+            else:
+                session.add(
+                    ChatJargon(
+                        tenant=tenant,
+                        term=term,
+                        normalized=term.casefold(),
+                        status="pending",
+                        evidence=json.dumps(identifiers),
+                        source_batch_id=f"jargon:{min(evidence_ids)}:{cursor_seq}",
+                    )
+                )
+        if cursor is None:
+            session.add(ChatJobCursor(tenant=tenant, job="jargon", cursor_seq=cursor_seq))
+        else:
+            cursor.cursor_seq = cursor_seq
+        return True
+
+    @with_session
+    async def jargon_evidence(self, session: AsyncSession, tenant: str, identifiers: list[int]) -> list[ChatMessage]:
+        """只读取当前会话中仍可见的黑话证据消息。"""
+        statement = select(ChatMessage).where(
+            ChatMessage.tenant == tenant,
+            ChatMessage.id.in_(identifiers),
+            ChatMessage.deleted.is_(False),
+        )
+        return list((await session.execute(statement)).scalars().all())
+
+    @with_session
+    async def learning_sources(
+        self,
+        session: AsyncSession,
+        tenant: str,
+        identifiers: list[str],
+        dedupe_keys: list[str],
+        contents: list[str] | None = None,
+    ) -> list[ChatMessage]:
+        """把裁切上下文映射回当前会话的真实人类消息。"""
+        statement = (
+            select(ChatMessage)
+            .where(
+                ChatMessage.tenant == tenant,
+                ChatMessage.kind == "user",
+                ChatMessage.deleted.is_(False),
+                ChatMessage.platform_message_id.in_(identifiers)
+                | ChatMessage.dedupe_key.in_(dedupe_keys)
+                | (ChatMessage.platform_message_id.is_(None) & ChatMessage.content.in_(contents or [])),
+            )
+            .order_by(ChatMessage.id)
+        )
+        return list((await session.execute(statement)).scalars().all())
+
+    @with_session
+    async def message_by_identity(self, session: AsyncSession, tenant: str, identity: str) -> ChatMessage | None:
+        """只解析当前会话内未撤回的原始消息。"""
+        statement = (
+            select(ChatMessage)
+            .where(
+                ChatMessage.tenant == tenant,
+                ChatMessage.deleted.is_(False),
+                (ChatMessage.platform_message_id == identity) | (ChatMessage.dedupe_key == identity),
+            )
+            .order_by(ChatMessage.id.desc())
+            .limit(1)
+        )
+        return (await session.execute(statement)).scalars().first()
+
+    @with_session
+    async def save_jargon_inference(
+        self,
+        session: AsyncSession,
+        tenant: str,
+        identifier: int,
+        *,
+        expected_count: int,
+        meaning: str,
+        accepted: bool,
+    ) -> bool:
+        """释义只应用到仍存在且计数未变的当前会话候选。"""
+        rows = await ChatJargon.select_rows(tenant=tenant, id=identifier, session=session)
+        if not rows or rows[0].count != expected_count:
+            return False
+        row = rows[0]
+        evidence = tuple(int(value) for value in json.loads(row.evidence or "[]"))
+        if await self._evidence_stale(session, tenant, evidence):
+            return False
+        row.last_inference_count = expected_count
+        if accepted and meaning:
+            row.meaning = meaning
+            row.status = "active"
+        elif not row.meaning:
+            row.status = "rejected"
+        return True
+
+    @with_session
     async def mark_jargon_used(
         self, session: AsyncSession, tenant: str, terms: list[str], *, tenants: list[str] | None = None
     ) -> None:
@@ -974,7 +1100,7 @@ class ChatRepository:
         return list((await session.execute(statement)).scalars().all())
 
     @with_session
-    async def list_unanalyzed_emoji(self, session: AsyncSession, *, limit: int = 20) -> list[ChatEmoji]:
+    async def list_unanalyzed_emoji(self, session: AsyncSession) -> list[ChatEmoji]:
         """清理任务：读取还没识别成功的表情，供定期补识别。"""
         statement = (
             select(ChatEmoji)
@@ -984,7 +1110,6 @@ class ChatRepository:
                 ChatEmoji.vlm_processed.is_(False),
             )
             .order_by(ChatEmoji.created_at.asc())
-            .limit(limit)
         )
         return list((await session.execute(statement)).scalars().all())
 
@@ -1037,20 +1162,19 @@ class ChatRepository:
         latency_ms: int,
         error: str = "",
     ) -> None:
-        """写入一条轮次追踪；调用方负责截断字段。"""
-        session.add(
-            ChatTrace(
-                tenant=tenant,
-                turn_id=str(turn_id or ""),
-                trigger_kind=str(trigger_kind or ""),
-                request_preview=str(request_preview or "")[:200],
-                injected=str(injected or "{}")[:4000],
-                budget=str(budget or "{}")[:1000],
-                provider=str(provider or "")[:100],
-                latency_ms=max(0, int(latency_ms)),
-                error=str(error or "")[:500],
-            )
-        )
+        """同一逻辑轮次更新同一条追踪，阶段 JSON 保持完整。"""
+        statement = select(ChatTrace).where(ChatTrace.tenant == tenant, ChatTrace.turn_id == turn_id)
+        row = (await session.execute(statement)).scalars().first()
+        if row is None:
+            row = ChatTrace(tenant=tenant, turn_id=str(turn_id or ""))
+            session.add(row)
+        row.trigger_kind = str(trigger_kind or "")
+        row.request_preview = str(request_preview or "")[:200]
+        row.injected = str(injected or "{}")[:4000]
+        row.budget = str(budget or "{}")
+        row.provider = str(provider or "")[:100]
+        row.latency_ms = max(0, int(latency_ms))
+        row.error = str(error or "")[:500]
 
     @with_session
     async def update_trace(
@@ -1061,6 +1185,7 @@ class ChatRepository:
         *,
         budget: dict[str, Any],
         latency_ms: int = 0,
+        total_latency_ms: int | None = None,
         error: str = "",
     ) -> None:
         """合并同一租户轮次的追踪信息并累加耗时与错误。"""
@@ -1074,7 +1199,10 @@ class ChatRepository:
                 merged = {}
             merged.update(budget)
             row.budget = json.dumps(merged, ensure_ascii=False)
-            row.latency_ms += max(0, int(latency_ms))
+            if total_latency_ms is None:
+                row.latency_ms += max(0, int(latency_ms))
+            else:
+                row.latency_ms = max(0, int(total_latency_ms))
             if error:
                 row.error = "\n".join(filter(None, (row.error, error)))
 

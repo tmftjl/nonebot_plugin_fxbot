@@ -6,41 +6,26 @@
 
 from __future__ import annotations
 
-import asyncio
-import hashlib
 import json
 import time
-from datetime import datetime
+import asyncio
+import hashlib
 from typing import Any
+from datetime import datetime, timezone
 
-from json_repair import repair_json
 from nonebot import logger
+from json_repair import repair_json
 
-from ...utils.tz import to_naive_utc
-from ._host.llm import LLMServiceClient
-from ._host.person_db import make_person_id, person_scope
-from .messages import count_messages, sender_messages
-from .people import remember_person, session_parts
+from .people import session_parts, remember_person
 from .runtime import amemorix_runtime
-from .service import ingest_summary, ingest_text
-
-FACT_PROMPT = """你要从用户原始发言中提取“关于{person_name}的稳定事实”。
-
-目标人物：{person_name}
-用户原始发言证据：
-{evidence}
-
-机器人回复：
-{reply}
-
-请只提取满足以下条件的事实：
-1. 事实值必须能被“目标人物原始发言”直接支持，不能只来自机器人回复。
-2. 明确是关于目标人物本人的信息。
-3. 具有相对稳定性，可以作为长期记忆保存。
-4. 用简洁中文陈述句表达，并改写成第三人称。
-5. 不确定、猜测、反问、临时安排、机器人的建议都不要提取。
-
-严格输出 JSON 数组，每项包含 fact、evidence_message_id、evidence_quote。证据片段必须逐字摘自目标人物原始发言。没有可写入的事实时输出 []。"""
+from .service import ingest_text, ingest_summary
+from .messages import count_messages, recent_messages
+from ._host.llm import LLMServiceClient
+from ...utils.tz import to_naive_utc
+from ..memory.prompts import learning_prompt
+from ._host.person_db import person_scope, make_person_id
+from ..memory.repository import chat_repository
+from ._host.message_service import get_messages_by_time_in_chat
 
 
 class ChatWriteback:
@@ -56,6 +41,14 @@ class ChatWriteback:
     async def start(self) -> None:
         if self._stopping:
             return
+        from ..memory.trimmed import trimmed_learning
+        from .image_writeback import image_writeback
+
+        trimmed_learning.stopping = False
+        from ..behavior.turn_scheduler import normal_scheduler
+
+        normal_scheduler.stopping = False
+        await image_writeback.start()
         if self._summary_task is None or self._summary_task.done():
             self._summary_task = asyncio.create_task(self._summary_loop(), name="amemorix_summary_writeback")
         if self._fact_task is None or self._fact_task.done():
@@ -63,6 +56,13 @@ class ChatWriteback:
 
     async def stop(self) -> None:
         self._stopping = True
+        from ..memory.trimmed import trimmed_learning
+        from .image_writeback import image_writeback
+        from ..behavior.turn_scheduler import normal_scheduler
+
+        await normal_scheduler.stop()
+        await trimmed_learning.stop()
+        await image_writeback.stop()
         for task in (self._summary_task, self._fact_task):
             if task is None:
                 continue
@@ -109,6 +109,7 @@ class ChatWriteback:
         user_name: str,
         group_id: str,
         reply_text: str,
+        reply_to_message_id: str = "",
         occurred_at: datetime | None = None,
     ) -> None:
         if not str(reply_text or "").strip() or self._ephemeral(reply_text):
@@ -124,6 +125,7 @@ class ChatWriteback:
                 "user_name": user_name,
                 "group_id": group_id,
                 "reply_text": str(reply_text),
+                "reply_to_message_id": str(reply_to_message_id or ""),
                 "occurred_at": occurred_at,
             },
             "人物事实",
@@ -189,7 +191,7 @@ class ChatWriteback:
             tenant,
             external_id=f"chat_auto_summary:{tenant}:{total}",
             text="",
-            time_end=float(end_time.timestamp()) if end_time else None,
+            time_end=end_time.replace(tzinfo=timezone.utc).timestamp() if end_time else None,
             metadata={
                 "generate_from_chat": True,
                 "context_length": context_length,
@@ -209,9 +211,7 @@ class ChatWriteback:
             logger.warning(f"[A_Memorix] 聊天摘要写回失败: tenant={tenant} detail={result.get('detail', '')}")
             return
         self._states[tenant] = total
-        logger.info(
-            f"[A_Memorix] 聊天摘要写回成功: tenant={tenant} total={total} context_length={context_length}"
-        )
+        logger.info(f"[A_Memorix] 聊天摘要写回成功: tenant={tenant} total={total} context_length={context_length}")
 
     async def _checkpoint(self, tenant: str, total: int) -> int:
         kernel = await amemorix_runtime.get_kernel()
@@ -251,14 +251,27 @@ class ChatWriteback:
         )
         occurred_at = item.get("occurred_at")
         before = to_naive_utc(occurred_at) if isinstance(occurred_at, datetime) else None
-        evidence = await sender_messages(tenant, user_id, 3, before=before)
+        evidence, context = await _collect_evidence(tenant, user_id, str(item.get("reply_to_message_id") or ""), before)
         if not evidence:
             return
-        evidence_text = "\n".join(
+        evidence_text = "目标用户原始发言（事实值必须来自这里）：\n" + "\n".join(
             f"- [消息ID: {row['message_id']}] {row['content']}" if row["message_id"] else f"- {row['content']}"
             for row in evidence
         )
-        prompt = FACT_PROMPT.format(person_name=name, evidence=evidence_text, reply=item["reply_text"])
+        target_ids = {row["message_id"] for row in evidence if row["message_id"]}
+        context_lines = [
+            f"- {row['sender_name'] or row['sender_id']}: {row['content']}"
+            + (" [目标用户发言]" if row["message_id"] in target_ids else "")
+            for row in context[:8]
+            if str(row["content"]).strip()
+        ]
+        if context_lines:
+            evidence_text += "\n\n邻近上下文（只用于理解省略、追问和指代，不能单独作为事实来源）：\n" + "\n".join(
+                context_lines
+            )
+        prompt = learning_prompt(
+            "person_fact_writeback", person_name=name, evidence=evidence_text, reply=item["reply_text"]
+        )
         completion = await self._fact_client.generate_response(prompt)
         facts = _parse_facts(str(getattr(completion, "response", "") or ""))
         if not facts:
@@ -295,6 +308,31 @@ class ChatWriteback:
         content = str(text or "").strip()
         markers = ("哈哈", "好的", "收到", "嗯嗯", "晚安", "早安", "拜拜", "谢谢", "在吗", "？")
         return len(content) <= 8 and any(marker in content for marker in markers)
+
+
+async def _collect_evidence(
+    tenant: str, user_id: str, reply_to: str, before: datetime | None
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """优先使用回复目标，否则从最近六条用户发言中寻找目标人物。"""
+    if reply_to:
+        target = await chat_repository.message_by_identity(tenant, reply_to)
+        if target is not None and str(target.sender_id) == user_id and str(target.content or "").strip():
+            evidence = [{"message_id": str(target.platform_message_id or target.id or ""), "content": target.content}]
+            end_time = before.replace(tzinfo=timezone.utc).timestamp() if before is not None else time.time()
+            neighbors = await asyncio.to_thread(get_messages_by_time_in_chat, tenant, 0, end_time, 8)
+            context = [
+                {
+                    "message_id": message.message_id,
+                    "sender_id": message.message_info.user_info.user_id,
+                    "sender_name": message.message_info.user_info.user_nickname,
+                    "content": message.processed_plain_text,
+                }
+                for message in neighbors
+            ]
+            return evidence, context
+    context = await recent_messages(tenant, 6, before=before)
+    evidence = [row for row in context if row["sender_id"] == user_id and str(row["content"]).strip()]
+    return evidence[-3:], context
 
 
 def _parse_facts(raw: str) -> list[str]:

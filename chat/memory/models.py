@@ -184,6 +184,8 @@ class ChatJargon(BaseIDModel, table=True):
     term: str = Field(nullable=False)
     normalized: str = Field(default="", nullable=False)
     meaning: str = Field(default="", nullable=False)
+    evidence: str = Field(default="[]", nullable=False)
+    last_inference_count: int = Field(default=0, nullable=False)
     count: int = Field(default=1, nullable=False)
     status: str = Field(default="active", nullable=False)
     source_batch_id: str = Field(default="", nullable=False)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import asyncio
 import unittest
 
@@ -10,6 +11,7 @@ from src.plugins.nonebot_plugin_fxbot.chat.replyer import generator
 from src.plugins.nonebot_plugin_fxbot.chat.tools.types import ToolError, ToolContext
 from src.plugins.nonebot_plugin_fxbot.chat.tools.search import tool_search_tool
 from src.plugins.nonebot_plugin_fxbot.chat.tools.runtime import ToolRuntime
+from src.plugins.nonebot_plugin_fxbot.chat.tools.discovery import sync_discovered, deferred_reminder
 
 _DEFERRED = "test_deferred_mute"
 _VISIBLE = "test_visible_ping"
@@ -66,35 +68,21 @@ class ToolSearchTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ToolError):
             await tool_search_tool(ToolContext(), ToolRuntime(), query=" ")
 
-
-class HistoryTraceTest(unittest.TestCase):
-    """工具轨迹入历史：没发出去的正文不算说过的话。"""
-
-    def test_unsent_content_is_dropped(self) -> None:
-        trace = [
-            {"role": "assistant", "content": "我查一下", "tool_calls": [{"id": "call-1"}]},
-            {"role": "tool", "tool_call_id": "call-1", "name": _VISIBLE, "content": "结果"},
+    async def test_discovery_expires_when_search_call_leaves_context(self) -> None:
+        session = f"tool-context-{id(self)}"
+        context = ToolContext(session_id=session, metadata={"allowed_tools": [_DEFERRED]})
+        text = await tool_search_tool(context, ToolRuntime(), query="禁言")
+        history = [
+            {"role": "assistant", "tool_calls": [{"id": "search-call", "function": {"name": "tool_search"}}]},
+            {"role": "tool", "tool_call_id": "search-call", "content": json.dumps({"ok": True, "result": text})},
         ]
-        kept = generator.history_trace(trace)
-        self.assertEqual(kept[0]["content"], "")
-        self.assertEqual(kept[0]["tool_calls"], [{"id": "call-1"}])
-        self.assertEqual(kept[1]["content"], "结果")
-
-    def test_provider_native_data_is_dropped(self) -> None:
-        trace = [
-            {
-                "role": "assistant",
-                "content": "我查一下",
-                "tool_calls": [{"id": "call-1"}],
-                "provider_data": {"vertex_parts": [{"text": "我查一下"}]},
-            },
-            {"role": "tool", "tool_call_id": "call-1", "name": _VISIBLE, "content": "结果"},
-        ]
-        self.assertNotIn("provider_data", generator.history_trace(trace)[0])
-
-    def test_single_message_is_kept_as_is(self) -> None:
-        trace = [{"role": "assistant", "content": "我查一下", "tool_calls": [{"id": "call-1"}]}]
-        self.assertEqual(generator.history_trace(trace), trace)
+        sync_discovered(session, history)
+        self.assertTrue(generator.visible_tools({_DEFERRED}, session))
+        self.assertFalse(deferred_reminder({_DEFERRED}, session))
+        sync_discovered(session, history[1:])
+        self.assertFalse(generator.visible_tools({_DEFERRED}, session))
+        self.assertIn(_DEFERRED, deferred_reminder({_DEFERRED}, session))
+        self.assertNotIn(_VISIBLE, deferred_reminder({_DEFERRED}, session))
 
 
 if __name__ == "__main__":

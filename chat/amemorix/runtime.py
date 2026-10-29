@@ -6,9 +6,9 @@ import asyncio
 
 from nonebot import logger
 
+from .paths import package_root
 from ._host.host_config import load_amemorix_config
 from .core.runtime.sdk_memory_kernel import SDKMemoryKernel
-from .paths import package_root
 
 
 class AMemorixRuntime:
@@ -17,10 +17,11 @@ class AMemorixRuntime:
         self._lock = asyncio.Lock()
         self._started = False
         self._error = ""
+        self._stopping = False
 
     @property
     def available(self) -> bool:
-        return self._kernel is not None
+        return self._kernel is not None and not self._stopping and not self._error
 
     @property
     def error(self) -> str:
@@ -33,7 +34,7 @@ class AMemorixRuntime:
         """按配置启动内核；关闭或启动失败都只降级记忆。"""
         async with self._lock:
             if self._started:
-                return self._kernel is not None
+                return self.available
             self._started = True
             cfg = load_amemorix_config()
             if not cfg.plugin.enabled:
@@ -52,6 +53,8 @@ class AMemorixRuntime:
             return True
 
     async def get_kernel(self) -> SDKMemoryKernel | None:
+        if self._stopping or self._error:
+            return None
         if self._kernel is None and not self._started:
             await self.start()
         return self._kernel
@@ -59,14 +62,22 @@ class AMemorixRuntime:
     async def stop(self) -> None:
         async with self._lock:
             kernel = self._kernel
-            self._kernel = None
-            self._started = False
             if kernel is None:
+                self._started = False
+                self._error = ""
                 return
+            self._stopping = True
             try:
                 await kernel.shutdown()
-            except Exception:
+            except Exception as exc:
+                self._error = f"{type(exc).__name__}: {exc}"
                 logger.opt(exception=True).warning("[A_Memorix] 内核关闭失败")
+            else:
+                self._kernel = None
+                self._started = False
+                self._error = ""
+            finally:
+                self._stopping = False
 
 
 amemorix_runtime = AMemorixRuntime()

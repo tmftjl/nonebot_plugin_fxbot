@@ -9,7 +9,6 @@ from io import BytesIO
 from uuid import uuid4
 from types import SimpleNamespace
 from pathlib import Path
-from datetime import timedelta
 from unittest.mock import AsyncMock, patch
 
 from PIL import Image
@@ -22,7 +21,6 @@ from src.plugins.nonebot_plugin_fxbot.chat.memory import migrate
 from src.plugins.nonebot_plugin_fxbot.chat.service import ChatService
 from src.plugins.nonebot_plugin_fxbot.chat.session import ChatSessionStore
 from src.plugins.nonebot_plugin_fxbot.console.routes import chat as chat_routes
-from src.plugins.nonebot_plugin_fxbot.chat.memory.models import utc_now_naive
 from src.plugins.nonebot_plugin_fxbot.chat.message_receive import sender as sender_module
 from src.plugins.nonebot_plugin_fxbot.chat.memory.repository import chat_repository
 from src.plugins.nonebot_plugin_fxbot.config.system_defaults import (
@@ -78,7 +76,7 @@ class EmojiDbTests(unittest.IsolatedAsyncioTestCase):
         )
         patcher.start()
 
-    async def test_save_duplicate_and_pick(self) -> None:
+    async def test_save_duplicate_and_catalog(self) -> None:
         row = await emoji_module.save_emoji(self.tenant, _PNG, description="开心大笑", tags=["开心"])
         self.assertTrue(Path(row.path).exists())
         again = await emoji_module.save_emoji(self.tenant, _PNG, description="换了描述", tags=["开心"])
@@ -86,8 +84,7 @@ class EmojiDbTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(again.description, "换了描述")
         self.assertEqual(len(await chat_repository.list_emoji(self.tenant)), 1)
 
-        picked = await emoji_module.pick_emoji(self.tenant, "今天真开心")
-        self.assertIsNotNone(picked)
+        [picked] = await emoji_module.emoji_catalog(self.tenant)
         self.assertEqual(picked.hash, row.hash)
 
     async def test_collage_returns_numbered_grid(self) -> None:
@@ -100,21 +97,8 @@ class EmojiDbTests(unittest.IsolatedAsyncioTestCase):
         uri = emoji_module.emoji_collage(rows)
         self.assertTrue(uri and uri.startswith("data:image/png;base64,"))
         with Image.open(BytesIO(base64.b64decode(uri.split(",", 1)[1]))) as image:
-            self.assertEqual(image.size, (emoji_module._COLLAGE_TILE * 2, emoji_module._COLLAGE_TILE))
+            self.assertEqual(image.size, (emoji_module._COLLAGE_TILE, emoji_module._COLLAGE_TILE * 2 + 12))
         self.assertIsNone(emoji_module.emoji_collage([]))
-
-    async def test_cooldown_blocks_reuse(self) -> None:
-        row = await emoji_module.save_emoji(self.tenant, _PNG, description="开心大笑")
-        now = utc_now_naive()
-        await chat_repository.mark_emoji_used(self.tenant, row.hash, now=now)
-
-        self.assertIsNone(await emoji_module.pick_emoji(self.tenant, "开心", now=now + timedelta(minutes=1)))
-        picked = await emoji_module.pick_emoji(self.tenant, "开心", now=now + emoji_module.EMOJI_COOLDOWN)
-        self.assertIsNotNone(picked)
-
-    async def test_unmatched_returns_none(self) -> None:
-        await emoji_module.save_emoji(self.tenant, _PNG, description="happy")
-        self.assertIsNone(await emoji_module.pick_emoji(self.tenant, "zzzz"))
 
     async def test_rejects_non_image_and_removes_file(self) -> None:
         with self.assertRaises(ValueError):
@@ -150,19 +134,18 @@ class ServiceEmojiTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_send_emoji_once(self) -> None:
-        row = SimpleNamespace(tenant="tenant", hash="hash", path="x.png")
+        row = SimpleNamespace(tenant="tenant", hash="hash", path="x.png", description="开心")
         matcher = SimpleNamespace(sent=[], send=AsyncMock())
         service = ChatService(ChatSessionStore())
         with (
-            patch.object(sender_module, "emoji_config", return_value={}),
-            patch.object(sender_module, "pick_emoji", new=AsyncMock(return_value=row)),
+            patch.object(sender_module, "emoji_by_hash", new=AsyncMock(return_value=row)),
             patch.object(sender_module, "mark_used", new=AsyncMock()) as used,
             patch.object(sender_module, "build_message", return_value="built"),
             patch.object(sender_module, "build_message_segment", return_value="segment"),
         ):
             await service._send_emoji(
                 self._request(),
-                ChatResponse(text="干净文本", epoch=0),
+                ChatResponse(text="干净文本", epoch=0, metadata={"attach_emoji": "hash"}),
                 ToolRuntime(bot=object()),
                 matcher,
                 1,
@@ -172,18 +155,21 @@ class ServiceEmojiTests(unittest.IsolatedAsyncioTestCase):
         used.assert_awaited_once_with(row)
 
     async def test_send_failure_is_swallowed(self) -> None:
-        row = SimpleNamespace(tenant="tenant", hash="hash", path="x.png")
+        row = SimpleNamespace(tenant="tenant", hash="hash", path="x.png", description="开心")
         matcher = SimpleNamespace(send=AsyncMock(side_effect=RuntimeError("bad")))
         service = ChatService(ChatSessionStore())
         with (
-            patch.object(sender_module, "emoji_config", return_value={}),
-            patch.object(sender_module, "pick_emoji", new=AsyncMock(return_value=row)),
+            patch.object(sender_module, "emoji_by_hash", new=AsyncMock(return_value=row)),
             patch.object(sender_module, "mark_used", new=AsyncMock()) as used,
             patch.object(sender_module, "build_message", return_value="built"),
             patch.object(sender_module, "build_message_segment", return_value="segment"),
         ):
             await service._send_emoji(
-                self._request(), ChatResponse(text="x", epoch=0), ToolRuntime(bot=object()), matcher, 1
+                self._request(),
+                ChatResponse(text="x", epoch=0, metadata={"attach_emoji": "hash"}),
+                ToolRuntime(bot=object()),
+                matcher,
+                1,
             )
 
         used.assert_not_awaited()

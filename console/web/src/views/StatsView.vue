@@ -441,7 +441,6 @@ onMounted(() => {
 
       <el-table
         v-if="usage.tasks.length"
-        v-loading="usageLoading"
         :data="usage.tasks"
         row-key="task_name"
         class="usage-table"

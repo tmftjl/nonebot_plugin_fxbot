@@ -545,7 +545,7 @@ onMounted(() => {
           <div v-if="!routing?.tasks.length" class="task-empty">暂无任务</div>
         </aside>
 
-        <section v-loading="routingLoading" class="panel task-main">
+        <section class="panel task-main">
           <template v-if="currentTask">
             <div class="task-title-row">
               <div>
@@ -605,21 +605,6 @@ onMounted(() => {
               </div>
             </div>
 
-            <div class="form-block">
-              <div class="form-label">故障转移顺序</div>
-              <div class="fallback-row">
-                <el-tag
-                  v-for="name in routing?.fallback_providers || []"
-                  :key="name"
-                  size="small"
-                  effect="plain"
-                >
-                  {{ name }}
-                </el-tag>
-                <span v-if="!routing?.fallback_providers?.length" class="form-hint">未配置备用 Provider</span>
-              </div>
-              <div class="form-hint">主 Provider 调用失败时按此顺序尝试；顺序在系统配置的 provider_fallback 中维护。</div>
-            </div>
           </template>
           <el-empty v-else description="暂无功能任务" />
         </section>
@@ -1019,12 +1004,6 @@ onMounted(() => {
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.fallback-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
 }
 
 .form-row {

@@ -24,7 +24,6 @@ from src.plugins.nonebot_plugin_fxbot.chat.tools.store import ToolResultStore
 from src.plugins.nonebot_plugin_fxbot.chat.tools.read_result import read_tool_result_tool
 from src.plugins.nonebot_plugin_fxbot.config.system_defaults import (
     SYSTEM_DEFAULTS,
-    migrate_system_config,
     validate_system_config,
 )
 
@@ -49,7 +48,7 @@ def _mock_service(handler) -> WebSearchService:
 
 
 class WebConfigTests(unittest.TestCase):
-    """chat.web 的校验、兼容迁移与运行时快照。"""
+    """chat.web 的校验与运行时快照。"""
 
     def _payload(self, **overrides: object) -> dict[str, object]:
         value: dict[str, object] = {
@@ -87,28 +86,6 @@ class WebConfigTests(unittest.TestCase):
         payload["chat"]["model_routing"] = {"web_search": "other"}  # type: ignore[index]
         with self.assertRaisesRegex(ValueError, "不存在的联网服务"):
             validate_system_config(payload)
-
-    def test_migrates_legacy_web_search(self) -> None:
-        raw = {"chat": {"web_search": {"base_url": "", "api_key": " old "}, "model_routing": {}}}
-        self.assertTrue(migrate_system_config(raw))
-        self.assertNotIn("web_search", raw["chat"])
-        services = raw["chat"]["web"]["services"]
-        self.assertEqual(services[0]["name"], "deepseek")
-        self.assertEqual(services[0]["api_key"], "old")
-        self.assertEqual(services[0]["adapter"], "deepseek")
-        self.assertEqual(raw["chat"]["model_routing"]["web_search"], "deepseek")
-
-    def test_migration_without_key_only_drops_legacy(self) -> None:
-        raw = {"chat": {"web_search": {"base_url": "https://x", "api_key": ""}}}
-        self.assertTrue(migrate_system_config(raw))
-        self.assertNotIn("web_search", raw["chat"])
-        self.assertNotIn("services", raw["chat"].get("web", {}))
-
-    def test_migration_is_idempotent(self) -> None:
-        self.assertFalse(migrate_system_config({"chat": {}}))
-        raw = {"chat": {"web_search": {"api_key": "k"}, "web": {"services": [{"name": "deepseek"}]}}}
-        self.assertTrue(migrate_system_config(raw))
-        self.assertEqual(len(raw["chat"]["web"]["services"]), 1)
 
     def test_defaults_have_web_and_routing(self) -> None:
         chat = SYSTEM_DEFAULTS["chat"]

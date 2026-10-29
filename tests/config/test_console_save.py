@@ -35,7 +35,6 @@ class ConsoleConfigSaveTests(unittest.IsolatedAsyncioTestCase):
         self.valid = deepcopy(SYSTEM_DEFAULTS)
         self.valid["chat"].update(
             provider="main",
-            provider_fallback=["backup"],
             providers={
                 "main": {"provider_type": "chat"},
                 "backup": {"provider_type": "chat"},
@@ -63,8 +62,6 @@ class ConsoleConfigSaveTests(unittest.IsolatedAsyncioTestCase):
             ({"provider": 1}, "chat.provider"),
             ({"provider": "stt"}, "chat.provider"),
             ({"providers": []}, "chat.providers"),
-            ({"provider_fallback": ["missing"]}, "chat.provider_fallback"),
-            ({"provider_fallback": ["embed"]}, "chat.provider_fallback"),
             ({"model_routing": {"reply": "missing"}}, "chat.model_routing.reply"),
             ({"model_routing": {"reply": "embed"}}, "chat.model_routing.reply"),
             ({"model_routing": {"voice": "main"}}, "chat.model_routing.voice"),
@@ -221,7 +218,7 @@ class ConsoleConfigSaveTests(unittest.IsolatedAsyncioTestCase):
 
     def test_empty_references_and_web_service_routing_remain_valid(self) -> None:
         updated = deepcopy(self.valid)
-        updated["chat"].update(provider="", provider_fallback=[], providers={})
+        updated["chat"].update(provider="", providers={})
         updated["chat"]["model_routing"] = {"reply": "", "web_search": "search"}
         updated["chat"]["web"]["services"] = [{"name": "search", "adapter": "deepseek"}]
         self.manager.save_console_configs({"system": updated})

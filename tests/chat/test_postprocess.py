@@ -3,18 +3,19 @@
 from __future__ import annotations
 
 import unittest
-from datetime import datetime, timezone, timedelta
+from datetime import timezone, timedelta
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, patch
 
 from src.plugins.nonebot_plugin_fxbot.chat import service as service_module
 from src.plugins.nonebot_plugin_fxbot.chat.types import ChatRequest
 from src.plugins.nonebot_plugin_fxbot.chat.memory import state as memory_state
-from src.plugins.nonebot_plugin_fxbot.chat.replyer import prompt as prompt_module
 from src.plugins.nonebot_plugin_fxbot.chat.service import ChatService
 from src.plugins.nonebot_plugin_fxbot.chat.session import ChatSessionStore
 from src.plugins.nonebot_plugin_fxbot.chat.providers import LLMResponse, provider_manager
 from src.plugins.nonebot_plugin_fxbot.chat.behavior.postprocess import postprocess_reply
+
+from .support import ReplyPipelineTests
 
 _CST = timezone(timedelta(hours=8))
 
@@ -50,28 +51,6 @@ class PostprocessReplyTests(unittest.TestCase):
         self.assertEqual(postprocess_reply("  （以上）  "), "")
 
 
-class TimeHintTests(unittest.TestCase):
-    """按北京时间给出时段，深夜与早上附带语气提示。"""
-
-    def _hint(self, value: datetime) -> str:
-        with patch.object(prompt_module, "now", return_value=value):
-            return prompt_module.time_hint()
-
-    def test_deep_night(self) -> None:
-        self.assertEqual(
-            self._hint(datetime(2026, 10, 27, 23, 14, tzinfo=_CST)),
-            "\n\n现在：2026-10-27 23:14 周二，深夜。语气轻，不要主动问早或道晚安。",
-        )
-        self.assertIn("深夜", self._hint(datetime(2026, 10, 27, 3, 0, tzinfo=_CST)))
-
-    def test_morning_and_afternoon(self) -> None:
-        self.assertIn("早上。可以自然地问候。", self._hint(datetime(2026, 10, 27, 7, 0, tzinfo=_CST)))
-        self.assertEqual(
-            self._hint(datetime(2026, 10, 27, 14, 0, tzinfo=_CST)),
-            "\n\n现在：2026-10-27 14:00 周二，下午。",
-        )
-
-
 class _Config:
     """按测试需要返回行为开关。"""
 
@@ -91,6 +70,7 @@ class _Config:
                 "provider": "",
                 "behavior": self.behavior,
                 "response_post_process": self.post_process,
+                "response_splitter": {"enable": False},
             }
         }
 
@@ -101,12 +81,12 @@ class _Provider:
     def __init__(self) -> None:
         self.messages: list[dict[str, object]] = []
 
-    async def chat(self, messages: list[dict[str, object]], tools: object = None) -> LLMResponse:
+    async def chat(self, messages: list[dict[str, object]], tools: object = None, **kwargs) -> LLMResponse:
         self.messages = messages
         return LLMResponse(content="友利奈绪(3226795632): 答：你好（以上）")
 
 
-class PostprocessWiringTests(unittest.IsolatedAsyncioTestCase):
+class PostprocessWiringTests(ReplyPipelineTests):
     """清理文本进入历史，generated_text 保留模型原文。"""
 
     async def _process(
@@ -139,9 +119,9 @@ class PostprocessWiringTests(unittest.IsolatedAsyncioTestCase):
             await ChatService(store).mark_sent(_request(), response)
         self.assertEqual(store.get("tenant")[-1], {"role": "assistant", "content": "你好"})
 
-    async def test_time_hint_is_injected(self) -> None:
+    async def test_replyer_uses_source_reference_instruction(self) -> None:
         _response, provider, _store = await self._process({})
-        self.assertIn("现在：", str(provider.messages[0]["content"]))
+        self.assertIn("你可以参考【回复信息参考】中的信息", str(provider.messages[0]["content"]))
 
     async def test_post_process_can_be_disabled(self) -> None:
         response, _provider, _store = await self._process(post_process={"enable_response_post_process": False})

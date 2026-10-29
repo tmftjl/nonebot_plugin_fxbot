@@ -1,15 +1,13 @@
 from __future__ import annotations
 
+import time
+import asyncio
 from typing import List
 
-import asyncio
-import time
-
-from ...._host.async_work import run_sync_work
-from ...._host.logger import get_logger
-
-from ...storage import VectorStoreIntegrityError
 from .base import KernelServiceBase
+from ...storage import VectorStoreIntegrityError
+from ...._host.logger import get_logger
+from ...._host.async_work import run_sync_work
 
 logger = get_logger("A_Memorix.SDKMemoryKernel")
 
@@ -63,6 +61,11 @@ class MemoryRuntimeLifecycleService(KernelServiceBase):
             except BaseException as exc:
                 logger.warning(f"初始化失败后的任务管理器清理异常: {exc}")
 
+        if self.sparse_index is not None:
+            try:
+                self.sparse_index.unload()
+            except BaseException as exc:
+                logger.warning(f"初始化失败后的稀疏连接清理异常: {exc}")
         if self.metadata_store is not None:
             try:
                 self.metadata_store.close()
@@ -229,6 +232,8 @@ class MemoryRuntimeLifecycleService(KernelServiceBase):
                 )
             self._set_runtime_capability("sparse", sparse_enabled)
         except Exception as exc:
+            if self.sparse_index is not None:
+                self.sparse_index.unload()
             self.sparse_index = None
             self._set_runtime_capability("sparse", False)
             logger.exception(f"[sdk] 稀疏通道初始化失败，其他检索通道继续运行: {exc}")
@@ -374,8 +379,12 @@ class MemoryRuntimeLifecycleService(KernelServiceBase):
                 self._persist()
         finally:
             try:
-                if metadata_store is not None:
-                    metadata_store.close()
+                try:
+                    if self.sparse_index is not None:
+                        self.sparse_index.unload()
+                finally:
+                    if metadata_store is not None:
+                        metadata_store.close()
             finally:
                 # persist 或 close 失败时也要先废弃可写引用，再释放跨进程锁。
                 self._clear_runtime_references()

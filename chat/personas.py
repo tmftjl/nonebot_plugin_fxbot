@@ -13,7 +13,17 @@ from ..utils.cache import cache
 from ..utils.paths import config_dir
 
 DEFAULT_PERSONA = "小鱼"
-_DEFAULT_PERSONA_TEXT = "你是一个友好、耐心且乐于助人的 AI 助手。请保持回答简洁清晰，并具备同理心。"
+_DEFAULT_PERSONA_TEXT = (
+    "# 人格特征\n"
+    "是女大学生，现在正在上网聊天。一般不包容且善良，但有时候有点一反常态，表现出锐利攻击性。"
+    "善于用人类的角度思考问题，聊天比较日常。\n"
+    "# 行为风格\n"
+    "是女大学生，现在正在上网聊天。一般不包容且善良，但有时候有点一反常态，表现出锐利攻击性。"
+    "善于用人类的角度思考问题，聊天比较日常。不会没话题硬找话题，具有足够的自主性，会自行搜集信息理解内容。\n"
+    "# 回复风格\n"
+    "你的风格平淡简短，可以参考贴吧的回复风格。不滥用比喻或者生硬句子。"
+    "视情况省略主语或者进行倒装，风格较为随意。"
+)
 
 
 @dataclass(frozen=True)
@@ -50,7 +60,6 @@ _PERSONA_SECTIONS = {
     "行为风格": "behavior_style",
     "回复风格": "reply_style",
 }
-_REPLY_LEAD = "现在请你读读之前的聊天记录，把握当前的话题，然后给出日常且口语化的回复，"
 _REPLY_TAIL = "请注意不要输出多余内容(包括不必要的前后缀，冒号，括号，表情包，@等 )，只输出发言内容就好。"
 
 
@@ -74,22 +83,27 @@ def _split_sections(text: str) -> tuple[str, dict[str, str]] | None:
     return text[: headings[0].start()].strip(), sections
 
 
-def compose_persona_prompt(name: str, text: str, *, scene_prompt: str = "") -> str:
-    """按 MaiBot replyer 的结构拼装系统提示；旧版无小标题的人格整段当作身份。"""
+def compose_persona_prompt(name: str, text: str, *, scene_prompt: str = "", planner: bool = False) -> str:
+    """从人格文件读取当前配置，使用 MaiBot 原版回复模板。"""
+    from .memory.prompts import learning_prompt
+
     parsed = _split_sections(text)
     intro, sections = parsed if parsed is not None else (text, {})
     lines = [intro or f"你的名字是{name}。"]
     if sections.get("personality"):
         lines.append(sections["personality"])
-    if sections.get("behavior_style"):
+    if planner and sections.get("behavior_style"):
         lines.append(f"你的行为风格是：{sections['behavior_style']}")
-    lines.append(_REPLY_LEAD)
-    if sections.get("reply_style"):
-        lines.append(sections["reply_style"])
-    prompt = "\n".join(lines)
-    if scene_prompt.strip():
-        prompt = f"{prompt}\n\n在该聊天中的注意事项：\n通用注意事项：\n{scene_prompt.strip()}"
-    return f"{prompt}\n\n{_REPLY_TAIL}"
+    attention = f"在该聊天中的注意事项：\n通用注意事项：\n{scene_prompt.strip()}\n" if scene_prompt.strip() else ""
+    if planner:
+        return "\n".join([*lines, attention]).strip()
+    return learning_prompt(
+        "maisaka_replyer",
+        identity="\n".join(lines),
+        reply_style=sections.get("reply_style", ""),
+        group_chat_attention_block=attention,
+        replyer_output_instruction=_REPLY_TAIL,
+    ).strip()
 
 
 def _collect_persona_files(dir_path: Path) -> dict[str, Path]:

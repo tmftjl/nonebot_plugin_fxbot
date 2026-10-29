@@ -21,8 +21,6 @@ def _event(*, group_id: str | None = "g1", user_id: str = "u1") -> SimpleNamespa
 def _cfg(**timing: object) -> dict[str, object]:
     values: dict[str, object] = {
         "message_debounce_mode": "natural",
-        "private_reply_paused": False,
-        "private_reply_pause_rules": [],
         "mentioned_bot_reply": True,
         "inevitable_at_reply": True,
     }
@@ -37,33 +35,8 @@ def _cfg(**timing: object) -> dict[str, object]:
     }
 
 
-class PrivatePauseTests(unittest.TestCase):
-    """全局暂停与单用户规则。"""
-
-    def test_global_pause(self) -> None:
-        cfg = _cfg(private_reply_paused=True)
-        self.assertTrue(router._private_paused(cfg, _bot(), _event(group_id=None)))
-
-    def test_rule_overrides_global(self) -> None:
-        cfg = _cfg(
-            private_reply_paused=True,
-            private_reply_pause_rules=[{"platform": "test", "user_id": "u1", "paused": False}],
-        )
-        self.assertFalse(router._private_paused(cfg, _bot(), _event(group_id=None)))
-
-    def test_rule_matches_user_and_platform(self) -> None:
-        rules = [
-            {"platform": "other", "user_id": "u1", "paused": True},
-            {"platform": "test", "user_id": "u1", "paused": True},
-        ]
-        self.assertTrue(router._private_paused(_cfg(private_reply_pause_rules=rules), _bot(), _event(group_id=None)))
-        self.assertFalse(
-            router._private_paused(_cfg(private_reply_pause_rules=rules), _bot(), _event(group_id=None, user_id="u2"))
-        )
-
-
 class MatchContextTests(unittest.TestCase):
-    """必回复开关与暂停私聊的路由结果。"""
+    """必回复开关与私聊启用状态的路由结果。"""
 
     def test_at_mention_toggle(self) -> None:
         with (
@@ -81,9 +54,11 @@ class MatchContextTests(unittest.TestCase):
             self.assertTrue(router._match_context(_cfg(), _bot(), _event()))
             self.assertFalse(router._match_context(_cfg(mentioned_bot_reply=False), _bot(), _event()))
 
-    def test_paused_private_does_not_reach_ai(self) -> None:
+    def test_enabled_private_reaches_ai(self) -> None:
         self.assertTrue(router._match_context(_cfg(), _bot(), _event(group_id=None)))
-        self.assertFalse(router._match_context(_cfg(private_reply_paused=True), _bot(), _event(group_id=None)))
+        config = _cfg()
+        config["private_enabled"] = False
+        self.assertFalse(router._match_context(config, _bot(), _event(group_id=None)))
 
     def test_context_record_covers_disabled_forcing(self) -> None:
         with (
@@ -92,7 +67,6 @@ class MatchContextTests(unittest.TestCase):
         ):
             self.assertFalse(router._should_record_context(_cfg(), _bot(), _event()))
             self.assertTrue(router._should_record_context(_cfg(inevitable_at_reply=False), _bot(), _event()))
-        self.assertTrue(router._should_record_context(_cfg(private_reply_paused=True), _bot(), _event(group_id=None)))
         self.assertFalse(router._should_record_context(_cfg(), _bot(), _event(group_id=None)))
 
 
@@ -102,7 +76,8 @@ class ReplyTimingConfigTests(unittest.TestCase):
     def test_defaults(self) -> None:
         timing = SYSTEM_DEFAULTS["chat"]["reply_timing"]
         self.assertEqual(timing["message_debounce_mode"], "natural")
-        self.assertFalse(timing["private_reply_paused"])
+        self.assertNotIn("private_reply_paused", timing)
+        self.assertNotIn("private_reply_pause_rules", timing)
         self.assertTrue(timing["mentioned_bot_reply"])
         self.assertTrue(timing["inevitable_at_reply"])
 
@@ -112,8 +87,6 @@ class ReplyTimingConfigTests(unittest.TestCase):
                 "chat": {
                     "reply_timing": {
                         "message_debounce_mode": "steady",
-                        "private_reply_paused": True,
-                        "private_reply_pause_rules": [{"platform": "", "user_id": "u1", "paused": True}],
                         "mentioned_bot_reply": False,
                         "inevitable_at_reply": False,
                     }
@@ -122,10 +95,7 @@ class ReplyTimingConfigTests(unittest.TestCase):
         )
         for timing in (
             {"message_debounce_mode": "slow"},
-            {"private_reply_paused": 1},
             {"mentioned_bot_reply": "yes"},
-            {"private_reply_pause_rules": [{"user_id": ""}]},
-            {"private_reply_pause_rules": [{"user_id": "u1", "paused": "yes"}]},
         ):
             with self.subTest(timing=timing), self.assertRaises(ValueError):
                 validate_system_config({"chat": {"reply_timing": timing}})

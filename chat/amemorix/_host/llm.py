@@ -7,6 +7,7 @@ A_Memorix 只认识 MaiBot 的任务模型抽象（``TaskConfig`` / ``LLMService
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Dict, List, Optional
 from dataclasses import field, dataclass
 
@@ -20,20 +21,31 @@ TASK_ROUTES: Dict[str, str] = {
     "memory": "memory",
     "utils": "utils",
     "learner": "learner",
-    "lpmm_entity_extract": "extract",
-    "lpmm_rdf_build": "extract",
+    "lpmm_entity_extract": "utils",
+    "lpmm_rdf_build": "utils",
     "replyer": "reply",
     "tool_use": "reply",
     "planner": "planner",
     "emoji": "emoji",
 }
 ROUTE_FALLBACKS: Dict[str, str] = {
-    "memory": "extract",
-    "utils": "extract",
-    "learner": "extract",
+    "memory": "utils",
+    "learner": "utils",
     "emoji": "vision",
 }
-DEFAULT_ROUTE = "extract"
+DEFAULT_ROUTE = "utils"
+
+
+def _task_defaults(task_name: str, model_list: List[str] | None = None) -> TaskConfig:
+    """沿用 MaiBot 默认任务参数，模型选择由 FxBot 路由提供。"""
+    temperature = {"utils": 0.5, "memory": 0.3, "replyer": 1.0, "fast_model": 0.3}.get(task_name, 0.7)
+    return TaskConfig(
+        model_list=model_list or [],
+        temperature=temperature,
+        max_tokens=16384 if task_name == "planner" else 8192,
+        hard_timeout={"memory": 240.0, "replyer": 240.0, "planner": 180.0}.get(task_name, 120.0),
+        selection_strategy="random" if task_name in {"utils", "memory", "replyer", "planner"} else "balance",
+    )
 
 
 @dataclass
@@ -136,11 +148,11 @@ def get_available_models() -> Dict[str, Any]:
     models: Dict[str, Any] = {}
     for task_name in ("memory", "utils", "learner", "lpmm_entity_extract", "lpmm_rdf_build"):
         model = _route_model(resolve_route(task_name))
-        models[task_name] = TaskConfig(model_list=[model or "auto"])
+        models[task_name] = _task_defaults(task_name, [model or "auto"])
     for task_name in ("planner", "replyer", "tool_use", "emoji"):
         model = _route_model(resolve_route(task_name))
         if model:
-            models[task_name] = TaskConfig(model_list=[model])
+            models[task_name] = _task_defaults(task_name, [model])
     return models
 
 
@@ -177,7 +189,7 @@ class LLMServiceClient:
         **_kwargs: Any,
     ) -> LLMCompletion:
         options = options or LLMGenerationOptions()
-        task_config = self._orchestrator.model_for_task
+        task_config = self._orchestrator.model_for_task or _task_defaults(self.task_name)
         model = ""
         if task_config is not None:
             candidates = [str(item).strip() for item in getattr(task_config, "model_list", []) or []]
@@ -185,13 +197,16 @@ class LLMServiceClient:
 
         temperature = options.temperature
         if temperature is None:
-            temperature = float(getattr(task_config, "temperature", 0.7) or 0.7)
+            temperature = float(task_config.temperature)
         max_tokens = options.max_tokens
         if max_tokens is None and task_config is not None:
             max_tokens = int(getattr(task_config, "max_tokens", 0) or 0) or None
 
         chat_messages = messages or [{"role": "user", "content": prompt or ""}]
-        async with fallback_provider(resolve_route(self.task_name), self.session_id) as provider:
+        async with (
+            asyncio.timeout(task_config.hard_timeout),
+            fallback_provider(resolve_route(self.task_name), self.session_id) as provider,
+        ):
             response = await provider.chat(
                 chat_messages,
                 model=model or None,

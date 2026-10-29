@@ -10,7 +10,7 @@ from nonebot import logger
 
 from .store import tool_result_store
 from ..capabilities import condense_threshold, capabilities_config
-from ..providers.routing import routed_task, fallback_provider
+from ..providers.routing import fallback_provider
 
 MAX_TOOL_RESULT_CHARS = 6000
 TOOL_RESULT_CONDENSE_INPUT_MAX_CHARS = 20000
@@ -104,7 +104,7 @@ async def condense_tool_result(
         {"role": "user", "content": build_tool_result_condense_task(tool_name, arguments, content)},
     ]
     try:
-        async with fallback_provider(routed_task("utils", "extract"), session_id) as provider:
+        async with fallback_provider("utils", session_id) as provider:
             response = await asyncio.wait_for(
                 provider.chat(messages=messages, temperature=0.3, max_tokens=1024),
                 timeout=timeout,

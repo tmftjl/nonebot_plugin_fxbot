@@ -141,12 +141,13 @@ class SummaryDiscardTests(unittest.IsolatedAsyncioTestCase):
                 return None
 
         with (
-            patch.object(summary_module, "routed_task", return_value="utils"),
-            patch.object(summary_module, "fallback_provider", lambda *a, **k: _Lease(_Provider())),
+            patch.object(summary_module.provider_manager, "lease_snapshot", lambda *a, **k: _Lease(_Provider())),
             patch.object(summary_module, "planner_config", return_value={"context_summary_max_chars": 6000}),
         ):
             summary = await summary_module.compact_messages(
-                TENANT, [{"role": "user", "content": "旧消息", "_source_ids": ["11"]}]
+                TENANT,
+                [{"role": "user", "content": "旧消息", "_source_ids": ["11"]}],
+                planner_request=summary_module.PlannerRequestSnapshot([], [], "planner", {}, "model"),
             )
 
         self.assertTrue(summary)

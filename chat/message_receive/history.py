@@ -50,7 +50,7 @@ async def hydrate(service: Any, session_id: str, limit: int) -> None:
         except Exception:
             logger.opt(exception=True).warning("[Chat] 历史恢复失败，本轮从内存开始")
             return
-        service.session_store.append_many(session_id, history, limit=limit)
+        service.session_store.append_many(session_id, history[-limit:], limit=limit)
         service.session_store.mark_hydrated(session_id)
 
 
@@ -66,7 +66,10 @@ def _message_row(request: ChatRequest, content: str) -> ChatMessage:
         sender_id=request.user_id,
         sender_name=request.user_name,
         content=content,
-        payload=json.dumps({"has_image": True}) if request.images else "{}",
+        payload=json.dumps(
+            {"has_image": bool(request.images), "image_memory": request.metadata.get("image_memory", [])},
+            ensure_ascii=False,
+        ),
         source="live",
         dedupe_key=request.dedupe_key,
         occurred_at=to_naive_utc(request.occurred_at),
@@ -102,14 +105,36 @@ async def _track_message(
     )
 
 
+async def _prepare_image_memory(request: ChatRequest) -> None:
+    """原始图片缓存只准备一次，避免等待后重新规划反复下载。"""
+    if request.metadata.get("image_memory") or request.metadata.get("history_recorded"):
+        return
+    from ..amemorix.image_writeback import image_writeback
+
+    request.metadata["image_memory"] = await image_writeback.prepare(
+        request.session_id, request.metadata.get("raw_images", request.images), request.metadata.get("raw_image_paths")
+    )
+
+
+async def _enqueue_image_memory(request: ChatRequest) -> None:
+    """原图和原始消息均已持久化后登记可恢复的图片任务。"""
+    if not request.metadata.get("image_memory"):
+        return
+    from ..amemorix.image_writeback import image_writeback
+
+    await image_writeback.enqueue(request.session_id, request.message_id or request.dedupe_key)
+
+
 async def persist_batch(requests: list[ChatRequest]) -> None:
     """缓冲里的原始消息逐条落库；合并内容只作为本轮 user 条目。"""
     for request in requests:
         if not history_enabled(request.is_group):
             continue
         content = strip_images([{"role": "user", "content": build_user_content(request)}])[0]["content"]
+        await _prepare_image_memory(request)
         try:
             await chat_repository.append_message(_message_row(request, str(content)), generation=request.accepted_epoch)
+            await _enqueue_image_memory(request)
         except Exception:
             logger.opt(exception=True).warning("[Chat] 缓冲消息落库失败，跳过剩余消息")
             return
@@ -127,6 +152,7 @@ async def persist_turn_start(request: ChatRequest, content: str, epoch: int) -> 
     """写入用户消息、轮次和用户条目；失败只降级本轮持久化。"""
     if not memory_state.is_ready() or not history_enabled(request.is_group):
         return None
+    await _prepare_image_memory(request)
     if request.accepted_epoch is None:
         request.accepted_epoch = epoch
     payload = json.dumps({"has_image": True}) if request.images else "{}"
@@ -155,6 +181,7 @@ async def persist_turn_start(request: ChatRequest, content: str, epoch: int) -> 
         if message_id is not None:
             # 等待后重新规划会再次走到这里，原始消息不再重复落库
             request.metadata["history_recorded"] = True
+            await _enqueue_image_memory(request)
         await chat_repository.append_turn_item(
             ChatTurnItem(
                 tenant=request.session_id,
@@ -402,6 +429,7 @@ async def record_group_message(
     message_id: str | None = None,
     reply_to_message_id: str | None = None,
     occurred_at: datetime | None = None,
+    memory_images: list[tuple[str, str | bytes]] | None = None,
 ) -> None:
     """记录群聊或私聊的上下文消息，图片同样转成文字描述写入历史。"""
     if limit <= 0:
@@ -416,6 +444,9 @@ async def record_group_message(
         lines.append(line)
     lines.extend(placeholders)
     entry: dict[str, Any] = {"role": "user", "content": "\n".join(lines)}
+    entry["_sender_id"] = user_id
+    if images:
+        entry["_image_sources"] = images
     if message_id:
         # 只给运行时用的来源标记；撤回通知按平台消息 ID 找到并丢弃这一条
         entry["_source_ids"] = [str(message_id)]
@@ -423,7 +454,12 @@ async def record_group_message(
         service.session_store.append(session_id, entry, limit=limit)
     row_id: int | None = None
     if memory_state.is_ready():
-        payload = json.dumps({"has_image": True}) if has_image or images else "{}"
+        from ..amemorix.image_writeback import image_writeback
+
+        memory_sources = [source for _, source in memory_images] if memory_images is not None else images
+        memory_paths = [path for path, _ in memory_images] if memory_images is not None else None
+        image_items = await image_writeback.prepare(session_id, memory_sources, memory_paths)
+        payload = json.dumps({"has_image": bool(has_image or images), "image_memory": image_items}, ensure_ascii=False)
         try:
             row_id = await chat_repository.append_message(
                 ChatMessage(
@@ -444,6 +480,8 @@ async def record_group_message(
             )
         except Exception:
             logger.opt(exception=True).warning("[Chat] 群聊消息落库失败，本轮仅用内存历史")
+        if row_id is not None and image_items:
+            await image_writeback.enqueue(session_id, message_id or dedupe_key)
     if row_id is not None:
         group_id = session_id.partition(":group:")[2] if ":group:" in session_id else ""
         await _track_message(session_id, platform, user_id, user_name, group_id, occurred_at)
@@ -456,6 +494,8 @@ async def record_group_message(
             logger.opt(exception=True).debug("[Chat] 群聊图片描述跳过：Provider 不可用")
             logger.warning(f"[Chat] 群聊图片描述跳过：Provider 不可用（{type(exc).__name__}）")
         else:
+            if any(descriptions):
+                entry["_image_descriptions"] = list(descriptions)
             entry["content"] = "\n".join(
                 lines[: -len(images)] + [f"[图片: {desc}]" if desc else "[图片]" for desc in descriptions]
             )

@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, patch
 
 from src.plugins.nonebot_plugin_fxbot.chat import router, service as service_module, commands, message_adapter
 from src.plugins.nonebot_plugin_fxbot.chat.types import ChatRequest, ChatResponse
-from src.plugins.nonebot_plugin_fxbot.chat.replyer import prompt as prompt_module, generator
+from src.plugins.nonebot_plugin_fxbot.chat.replyer import generator
 from src.plugins.nonebot_plugin_fxbot.chat.service import ChatService
 from src.plugins.nonebot_plugin_fxbot.chat.session import ChatSessionStore
 from src.plugins.nonebot_plugin_fxbot.chat.behavior import debounce, reply_gate
@@ -27,6 +27,8 @@ from src.plugins.nonebot_plugin_fxbot.chat.behavior.reply_gate import (
     set_proactive_switch,
 )
 from src.plugins.nonebot_plugin_fxbot.adapter.platforms.onebot12 import OneBotV12MessageAdapter
+
+from .support import RouterUnitTests
 
 
 def _pick(overrides: dict[str, object]) -> dict[str, object]:
@@ -305,7 +307,7 @@ def _chat_cfg() -> dict[str, object]:
     }
 
 
-class RouterEnforcementTests(unittest.IsolatedAsyncioTestCase):
+class RouterEnforcementTests(RouterUnitTests):
     """普通群消息的路由只采样一次，通过后绕过 _match_context。"""
 
     def _patches(self, gate: _Gate, *, switch: bool | None = True) -> tuple[object, ...]:
@@ -320,16 +322,16 @@ class RouterEnforcementTests(unittest.IsolatedAsyncioTestCase):
             patch.object(router, "_has_image", return_value=False),
         )
 
-    async def test_gate_pass_lets_ai_fallback_bypass_context_match(self) -> None:
+    async def test_gate_decision_is_deferred_until_scheduler(self) -> None:
         gate = _Gate()
         patches = self._patches(gate)
         with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7]:
             event = _make_event()
-            self.assertFalse(await router._context_rule(_make_bot(), event))
-            self.assertTrue(getattr(event, router._PROACTIVE_ATTR, False))
-            self.assertTrue(await router._ai_fallback_rule(_make_bot(), event))
-        self.assertEqual(gate.observed[0][0][0], ["msg:m1"])
-        self.assertEqual(gate.triggered, 1)
+            self.assertTrue(await router._context_rule(_make_bot(), event))
+            self.assertFalse(getattr(event, router._PROACTIVE_ATTR, False))
+            self.assertFalse(await router._ai_fallback_rule(_make_bot(), event))
+        self.assertEqual(gate.observed, [])
+        self.assertEqual(gate.triggered, 0)
 
     async def test_gate_fail_keeps_context_history(self) -> None:
         gate = _Gate(would_trigger=False)
@@ -341,7 +343,7 @@ class RouterEnforcementTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(await router._ai_fallback_rule(_make_bot(), event))
         self.assertEqual(gate.triggered, 0)
 
-    async def test_unset_or_off_switch_never_passes(self) -> None:
+    async def test_unset_switch_uses_default_enabled_and_off_blocks(self) -> None:
         for switch in (None, False):
             with self.subTest(switch=switch):
                 gate = _Gate()
@@ -382,6 +384,8 @@ class RouterEnforcementTests(unittest.IsolatedAsyncioTestCase):
         gate = _Gate()
         service = SimpleNamespace(
             session_store=ChatSessionStore(),
+            queue_message=AsyncMock(return_value=False),
+            record_group_message=AsyncMock(),
             process_and_send=AsyncMock(return_value=False),
             ensure_hydrated=AsyncMock(),
         )
@@ -403,7 +407,7 @@ class RouterEnforcementTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(gate.forced, [])
 
 
-class TriggerOrderTests(unittest.IsolatedAsyncioTestCase):
+class TriggerOrderTests(RouterUnitTests):
     """序号按到达顺序分配：适配慢的旧消息不能拿到更新的序号。"""
 
     async def test_slow_adaptation_does_not_take_the_newer_seq(self) -> None:
@@ -435,6 +439,8 @@ class TriggerOrderTests(unittest.IsolatedAsyncioTestCase):
         service = SimpleNamespace(
             session_store=store,
             ensure_hydrated=AsyncMock(),
+            queue_message=AsyncMock(return_value=False),
+            record_group_message=AsyncMock(),
             process_and_send=AsyncMock(side_effect=process_and_send),
         )
         matcher = SimpleNamespace(finish=AsyncMock())
@@ -549,11 +555,6 @@ class ServiceRestrictionTests(unittest.IsolatedAsyncioTestCase):
             names, tools = await generator.allowed_tools(SimpleNamespace(), proactive=True)
         self.assertEqual(names, {"web_search"})
         self.assertEqual([tool["function"]["name"] for tool in tools], ["web_search"])
-
-    async def test_scene_hint_marks_proactive(self) -> None:
-        hint = prompt_module.scene_hint(_request("proactive"), "小助手")
-        self.assertIn("主动接话", hint)
-        self.assertIn("不要 @ 人", hint)
 
     async def test_empty_proactive_turn_records_idle(self) -> None:
         service = ChatService(ChatSessionStore())

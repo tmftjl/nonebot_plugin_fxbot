@@ -6,13 +6,12 @@ import json
 import asyncio
 import unittest
 from typing import Any
+from functools import partial
 from unittest.mock import AsyncMock, patch
 
 from src.plugins.nonebot_plugin_fxbot.chat import service as service_module, context_summary as summary_module
 from src.plugins.nonebot_plugin_fxbot.chat.types import ChatRequest
-from src.plugins.nonebot_plugin_fxbot.chat.planner import Plan
 from src.plugins.nonebot_plugin_fxbot.chat.session import ChatSessionStore
-from src.plugins.nonebot_plugin_fxbot.chat.heart_flow import plan_flow
 from src.plugins.nonebot_plugin_fxbot.chat.replyer.prompt import assemble_messages
 from src.plugins.nonebot_plugin_fxbot.config.system_defaults import (
     SYSTEM_DEFAULTS,
@@ -97,12 +96,13 @@ class SummaryTextTests(unittest.TestCase):
             {"role": "assistant", "content": "", "tool_calls": [{"function": {"name": "web_search"}}]},
             {"role": "tool", "content": "不该出现的结果"},
         ]
-        prompt = summary_module.build_summary_messages("旧摘要", messages, 3000)
+        snapshot = summary_module.PlannerRequestSnapshot([], [], "test", {}, "test")
+        prompt = summary_module.build_snapshot_messages(snapshot, "旧摘要", messages, [], 3000)
         body = prompt[-1]["content"]
         self.assertIn("旧摘要", body)
         self.assertIn("周六爬山吗", body)
         self.assertIn("web_search", body)
-        self.assertNotIn("不该出现的结果", body)
+        self.assertIn("不该出现的结果", body)
         self.assertIn("3000", body)
 
     def test_render_keeps_categories_and_dedupes(self) -> None:
@@ -121,9 +121,13 @@ class SummaryTextTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "超过字符预算"):
             summary_module.render_state(_STATE, 10)
 
-    def test_parse_tolerates_fences(self) -> None:
+    def test_parse_rejects_fences_and_non_state_fields(self) -> None:
         text = "```json\n" + json.dumps(_STATE, ensure_ascii=False) + "\n```"
-        self.assertIn("当前话题", summary_module.parse_state(text, 6000))
+        with self.assertRaises(ValueError):
+            summary_module.parse_state(text, 6000)
+        self.assertIn("当前话题", summary_module.parse_state(json.dumps(_STATE), 6000))
+        with self.assertRaises(ValueError):
+            summary_module.parse_state(json.dumps({**_STATE, "tool_calls": []}), 6000)
         with self.assertRaises(ValueError):
             summary_module.parse_state("没有 JSON", 6000)
 
@@ -133,18 +137,22 @@ class CompactTests(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self) -> None:
         summary_module.clear_summary(TENANT)
+        self.snapshot = summary_module.PlannerRequestSnapshot(
+            messages=[{"role": "system", "content": "原始 Planner 人格"}],
+            tools=[{"type": "function", "function": {"name": "reply"}}],
+            provider_id="successful-planner",
+            provider_config={"model": "snapshot-model"},
+            model="snapshot-model",
+        )
+        self.compact = partial(summary_module.compact_messages, planner_request=self.snapshot)
 
     async def test_success_updates_summary(self) -> None:
         provider = _Provider(json.dumps(_STATE, ensure_ascii=False))
         with (
-            patch.object(summary_module, "routed_task", return_value="utils") as routed,
-            patch.object(summary_module, "fallback_provider", lambda *a, **k: _Lease(provider)),
+            patch.object(summary_module.provider_manager, "lease_snapshot", lambda *a, **k: _Lease(provider)),
             patch.object(summary_module, "planner_config", return_value={"context_summary_max_chars": 6000}),
         ):
-            summary = await summary_module.compact_messages(
-                TENANT, [{"role": "user", "content": "小明(ID:1): 周六爬山吗"}]
-            )
-        routed.assert_called_once_with("utils", "extract")
+            summary = await self.compact(TENANT, [{"role": "user", "content": "小明(ID:1): 周六爬山吗"}])
         self.assertIn("当前话题", summary)
         self.assertEqual(summary_module.current_summary(TENANT), summary)
         self.assertIn("周六爬山吗", provider.calls[0][-1]["content"])
@@ -153,17 +161,16 @@ class CompactTests(unittest.IsolatedAsyncioTestCase):
         summary_module._summaries[TENANT] = "上一份摘要"
         broken = _Provider("不是 JSON")
         with (
-            patch.object(summary_module, "routed_task", return_value="utils"),
-            patch.object(summary_module, "fallback_provider", lambda *a, **k: _Lease(broken)),
+            patch.object(summary_module.provider_manager, "lease_snapshot", lambda *a, **k: _Lease(broken)),
             patch.object(summary_module, "planner_config", return_value={"context_summary_max_chars": 6000}),
             patch.object(summary_module, "logger"),
         ):
             self.assertEqual(
-                await summary_module.compact_messages(TENANT, [{"role": "user", "content": "旧"}]),
+                await self.compact(TENANT, [{"role": "user", "content": "旧"}]),
                 "上一份摘要",
             )
             self.assertEqual(
-                await summary_module.compact_messages(TENANT, [{"role": "user", "content": "旧"}]),
+                await self.compact(TENANT, [{"role": "user", "content": "旧"}]),
                 "上一份摘要",
             )
 
@@ -189,8 +196,9 @@ class CompactTests(unittest.IsolatedAsyncioTestCase):
                     provider = _Provider()
                     with (
                         patch.object(provider, "chat", delayed_chat),
-                        patch.object(summary_module, "routed_task", return_value="utils"),
-                        patch.object(summary_module, "fallback_provider", lambda *a, **k: _Lease(provider)),
+                        patch.object(
+                            summary_module.provider_manager, "lease_snapshot", lambda *a, **k: _Lease(provider)
+                        ),
                         patch.object(
                             summary_module, "planner_config", return_value={"context_summary_max_chars": 6000}
                         ),
@@ -202,7 +210,7 @@ class CompactTests(unittest.IsolatedAsyncioTestCase):
                         ),
                     ):
                         task = asyncio.create_task(
-                            summary_module.compact_messages(
+                            self.compact(
                                 TENANT, [{"role": "user", "content": "旧消息", "_source_ids": ["old-message"]}]
                             )
                         )
@@ -241,8 +249,9 @@ class DroppedMessageTests(unittest.TestCase):
             [{"role": "user", "content": text} for text in ("一", "二", "三", "四")],
             limit=3,
         )
-        self.assertEqual([item["content"] for item in store.take_dropped(TENANT)], ["一"])
-        self.assertEqual([item["content"] for item in store.get(TENANT)], ["二", "三", "四"])
+        store.process_cycle(TENANT, 3)
+        self.assertEqual(store.take_dropped(TENANT), [])
+        self.assertEqual([item["content"] for item in store.get(TENANT)], ["一", "二", "三", "四"])
         self.assertEqual(store.take_dropped(TENANT), [])
 
     def test_leading_non_user_is_captured(self) -> None:
@@ -260,7 +269,8 @@ class DroppedMessageTests(unittest.TestCase):
         for text in ("一", "二", "三"):
             store.append(TENANT, {"role": "user", "content": text}, limit=5)
         store.trim(TENANT, 2)
-        self.assertEqual([item["content"] for item in store.take_dropped(TENANT)], ["一"])
+        store.process_cycle(TENANT, 2)
+        self.assertEqual(store.take_dropped(TENANT), [])
 
     def test_clear_forgets_dropped(self) -> None:
         store = ChatSessionStore()
@@ -289,11 +299,13 @@ class DroppedMessageTests(unittest.TestCase):
         store.append_many(TENANT, messages, limit=60)
         result = {"role": "assistant", "content": "result"}
         store.append(TENANT, result, limit=20)
-        self.assertEqual(store.get(TENANT), [*messages[-19:], result])
-        self.assertEqual(store.take_dropped(TENANT), messages[:-19])
+        self.assertEqual(store.get(TENANT), [*messages, result])
+        store.process_cycle(TENANT, 20)
+        self.assertEqual(store.get(TENANT), [*messages[-4:], result])
+        self.assertEqual(store.take_dropped(TENANT), messages[:-4])
         store.append(TENANT, result)
-        self.assertEqual(store.get(TENANT), [*messages[-18:], result, result])
-        self.assertEqual(store.take_dropped(TENANT), [messages[-19]])
+        self.assertEqual(store.get(TENANT), [*messages[-4:], result, result])
+        self.assertEqual(store.take_dropped(TENANT), [])
 
     def test_clear_forgets_session_limit(self) -> None:
         store = ChatSessionStore()
@@ -301,8 +313,18 @@ class DroppedMessageTests(unittest.TestCase):
         store.append_many(TENANT, messages, limit=60)
         store.clear(TENANT)
         store.append_many(TENANT, messages)
-        self.assertEqual(store.get(TENANT), messages[-20:])
-        self.assertEqual(store.take_dropped(TENANT), messages[:-20])
+        store.process_cycle(TENANT, 20)
+        self.assertEqual(store.get(TENANT), messages[-5:])
+        self.assertEqual(store.take_dropped(TENANT), messages[:-5])
+
+    def test_default_threshold_and_trim_target(self) -> None:
+        store = ChatSessionStore()
+        messages = [{"role": "user", "content": str(index)} for index in range(36)]
+        store.append_many(TENANT, messages[:35], limit=30)
+        self.assertEqual(store.process_cycle(TENANT, 30), [])
+        store.append(TENANT, messages[-1], limit=30)
+        self.assertEqual(store.process_cycle(TENANT, 30), messages[:30])
+        self.assertEqual(store.get(TENANT), messages[-6:])
 
 
 class AssembleSummaryTests(unittest.TestCase):
@@ -315,50 +337,6 @@ class AssembleSummaryTests(unittest.TestCase):
         self.assertTrue(system[1].startswith(summary_module.SUMMARY_HEADER))
         self.assertIn("周末", system[1])
         self.assertEqual(assemble_messages(_request(), [], "", "", "你好")[0]["role"], "user")
-
-
-class SteeringTests(unittest.IsolatedAsyncioTestCase):
-    """快速反应模式下失效轮次立即取消规划。"""
-
-    async def test_stale_plan_is_cancelled(self) -> None:
-        calls = {"count": 0}
-
-        def alive() -> bool:
-            calls["count"] += 1
-            return calls["count"] < 2
-
-        async def slow_plan(*_args: Any, **_kwargs: Any) -> Plan:
-            await asyncio.sleep(30)
-            return Plan("text_reply")
-
-        with (
-            patch.object(plan_flow, "steering_enabled", return_value=True),
-            patch.object(plan_flow, "request_plan", new=slow_plan),
-        ):
-            plan = await plan_flow.request_plan_with_steering(object(), [], [], default_wait=60, hint="", alive=alive)
-        self.assertIsNone(plan)
-        self.assertGreaterEqual(calls["count"], 2)
-
-    async def test_fresh_plan_returns_result(self) -> None:
-        with (
-            patch.object(plan_flow, "steering_enabled", return_value=True),
-            patch.object(plan_flow, "request_plan", new=AsyncMock(return_value=Plan("wait"))),
-        ):
-            plan = await plan_flow.request_plan_with_steering(
-                object(), [], [], default_wait=60, hint="", alive=lambda: True
-            )
-        self.assertEqual(plan.action, "wait")
-
-    async def test_steering_off_skips_polling(self) -> None:
-        with (
-            patch.object(plan_flow, "steering_enabled", return_value=False),
-            patch.object(plan_flow, "request_plan", new=AsyncMock(return_value=Plan("no_reply"))) as request_plan,
-        ):
-            plan = await plan_flow.request_plan_with_steering(
-                object(), [], [], default_wait=60, hint="", alive=lambda: False
-            )
-        self.assertEqual(plan.action, "no_reply")
-        request_plan.assert_awaited_once()
 
 
 if __name__ == "__main__":

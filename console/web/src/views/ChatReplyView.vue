@@ -14,6 +14,7 @@ import type {
   ChatReplyGateObservation,
   ChatHealth,
   ChatTrace,
+  ChatTraceStage,
 } from '@/types/api'
 
 const TAB_KEY = 'fxbot-chat-reply-tab'
@@ -168,7 +169,7 @@ const loadTraces = async () => {
   }
 }
 
-const traceInjected = (row: ChatTrace) => {
+const traceInjected = (row: Pick<ChatTrace, 'injected'>) => {
   const injected = row.injected || {}
   const parts: string[] = []
   if (injected.style) parts.push('风格')
@@ -180,7 +181,7 @@ const traceInjected = (row: ChatTrace) => {
   return parts.join(' · ') || '无注入'
 }
 
-const traceBudget = (row: ChatTrace) => {
+const traceBudget = (row: Pick<ChatTrace, 'budget'>) => {
   const budget = row.budget || {}
   const parts: string[] = []
   if (budget.max_context_size !== undefined) {
@@ -192,9 +193,9 @@ const traceBudget = (row: ChatTrace) => {
   return parts.join(' · ') || '—'
 }
 
-const traceSend = (row: ChatTrace) => {
+const traceSend = (row: Pick<ChatTrace, 'budget'>) => {
   const send = row.budget?.send
-  if (!send) return '未记录'
+  if (!send) return '未发送'
   const status =
     send.failed_index !== null && send.failed_index !== undefined
       ? `第 ${send.failed_index + 1} 段失败`
@@ -204,6 +205,15 @@ const traceSend = (row: ChatTrace) => {
           ? '部分送达'
           : '已送达'
   return `${status} · ${send.sent_parts}/${send.total_parts} 段 · ${send.send_ms ?? 0} ms`
+}
+
+const traceStages = (row: ChatTrace): ChatTraceStage[] =>
+  Array.isArray(row.budget?.stages) ? row.budget.stages : []
+
+const traceTiming = (row: ChatTrace) => {
+  const timings = row.budget?.timings
+  if (!timings) return ''
+  return `Planner ${timings.planner_ms} ms · 回复生成 ${timings.replyer_ms} ms · 发送 ${timings.send_ms} ms · 其他处理 ${timings.other_ms} ms`
 }
 
 const loadCurrent = async () => {
@@ -291,7 +301,7 @@ onMounted(() => {
             Planner 每次调用记录首轮动作；label 为 1 表示决定回复，0 表示保持安静或等待。当前样本：回复
             {{ plannerLabelCounts.replies }} 条，不回复 {{ plannerLabelCounts.silent }} 条。
           </div>
-          <el-table v-loading="plannerLoading" :data="plannerSamples" row-key="id" empty-text="暂无规划样本">
+          <el-table :data="plannerSamples" row-key="id" empty-text="暂无规划样本">
             <el-table-column label="时间" min-width="170">
               <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
             </el-table-column>
@@ -354,7 +364,6 @@ onMounted(() => {
             </el-tag>
           </div>
           <el-table
-            v-loading="gateLoading"
             :data="replyGate.observations"
             empty-text="暂无门控观察；收到普通群消息后生成"
           >
@@ -408,9 +417,38 @@ onMounted(() => {
             <el-button :icon="Refresh" :loading="traceLoading" @click="loadTraces">刷新</el-button>
           </div>
           <div class="tenant-help">
-            每轮记录实际注入的长期记忆、群学习参考、预算与耗时；只保留最近 7 天，正文预览截断 200 字。
+            每轮对话一条记录，展开查看 Planner、回复生成与发送阶段；总耗时包含各阶段，不重复相加。记录保留 7 天。
           </div>
-          <el-table v-loading="traceLoading" :data="traces" row-key="id" empty-text="暂无轮次追踪">
+          <el-table :data="traces" row-key="id" empty-text="暂无轮次追踪">
+            <el-table-column type="expand">
+              <template #default="{ row }">
+                <div class="trace-detail">
+                  <p v-if="traceTiming(row)" class="trace-timing">{{ traceTiming(row) }}</p>
+                  <el-table v-if="traceStages(row).length" :data="traceStages(row)" size="small">
+                    <el-table-column type="index" label="顺序" width="65" />
+                    <el-table-column prop="label" label="阶段" width="130" />
+                    <el-table-column prop="provider" label="提供方" min-width="160" />
+                    <el-table-column label="耗时" width="100">
+                      <template #default="{ row: stage }">{{ stage.duration_ms }} ms</template>
+                    </el-table-column>
+                    <el-table-column label="详情" min-width="260">
+                      <template #default="{ row: stage }">
+                        <template v-if="stage.kind === 'send'">{{ traceSend({ budget: { send: stage.send } }) }}</template>
+                        <template v-else-if="stage.kind === 'replyer'">
+                          {{ traceBudget({ budget: stage.budget || {} }) }} · {{ traceInjected({ injected: stage.injected || {} }) }}
+                        </template>
+                        <template v-else>行动决策</template>
+                        <div v-if="stage.target_message_id">目标消息：{{ stage.target_message_id }}</div>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="结果" min-width="160">
+                      <template #default="{ row: stage }">{{ stage.error || '已完成' }}</template>
+                    </el-table-column>
+                  </el-table>
+                  <span v-else class="form-hint">此记录没有阶段明细</span>
+                </div>
+              </template>
+            </el-table-column>
             <el-table-column label="时间" min-width="170">
               <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
             </el-table-column>
@@ -430,7 +468,7 @@ onMounted(() => {
             <el-table-column label="提供方" width="110">
               <template #default="{ row }">{{ row.provider || '—' }}</template>
             </el-table-column>
-            <el-table-column label="耗时" width="90">
+            <el-table-column label="本轮总耗时" width="120">
               <template #default="{ row }">{{ row.latency_ms }} ms</template>
             </el-table-column>
             <el-table-column label="错误" min-width="160" show-overflow-tooltip>
@@ -446,6 +484,15 @@ onMounted(() => {
 <style scoped lang="scss">
 .chat-reply-view {
   padding: 24px 28px 32px;
+}
+
+.trace-detail {
+  padding: 12px 24px;
+}
+
+.trace-timing {
+  margin: 0 0 12px;
+  color: var(--color-text-secondary);
 }
 
 .tenant-panel {

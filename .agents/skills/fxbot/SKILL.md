@@ -13,7 +13,7 @@ Source code is the sole source of truth for implementation details. Before editi
 
 This skill covers the framework, console, membership system, and repository-wide standards. When changing a built-in subplugin under `plugins/`, also read `../fxbot-subplugin/SKILL.md`. When changing AI memory or group-chat behavior under `chat/`, also read `../fxbot-ai-chat/SKILL.md`; cross-cutting work must follow all applicable skills.
 
-Do not split standards into more skills based on source directories. `fxbot-ai-chat` exists because AI chat has a staged implementation plan, not because `chat/` is a directory. Discover concrete interfaces, commands, configuration fields, and page structure from the source when doing the work.
+Do not split standards into more skills based on source directories. `fxbot-ai-chat` covers the chat subsystem's persistence, planning and sending boundaries. Discover concrete interfaces, commands, configuration fields, and page structure from the source when doing the work; historical phase plans do not establish current behavior.
 
 Explicit user instructions define the requested scope and outcome. Apply this skill to implementation choices unless the user explicitly asks to change one of these repository standards; never use the skill to expand authorization or scope.
 

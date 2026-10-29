@@ -4,15 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import unittest
+from copy import deepcopy
 from types import SimpleNamespace
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, patch
 
 from src.plugins.nonebot_plugin_fxbot.chat import router, service as service_module, message_adapter as adapter_module
 from src.plugins.nonebot_plugin_fxbot.chat.types import ChatRequest
 from src.plugins.nonebot_plugin_fxbot.chat.session import ChatSessionStore
 from src.plugins.nonebot_plugin_fxbot.chat.behavior import debounce
+from src.plugins.nonebot_plugin_fxbot.chat.providers import LLMResponse
 from src.plugins.nonebot_plugin_fxbot.config.system_defaults import SYSTEM_DEFAULTS, validate_system_config
 from src.plugins.nonebot_plugin_fxbot.adapter.platforms.onebot12 import OneBotV12MessageAdapter
+
+from .support import RouterUnitTests
 
 
 def _event(text: str) -> SimpleNamespace:
@@ -61,7 +66,44 @@ def _voice_event() -> SimpleNamespace:
     return event
 
 
-class VoiceRuleTests(unittest.IsolatedAsyncioTestCase):
+class IgnoredCommandTests(RouterUnitTests):
+    """命令前缀消息既不触发回复，也不通过群历史入口保存。"""
+
+    async def test_prefix_message_with_image_never_reaches_chat_or_history(self) -> None:
+        config = {**SYSTEM_DEFAULTS["chat"], "command_prefixes": ["#", "gs", ""]}
+        for group_id in (None, "group"):
+            for text in ("#测试", "  #测试", "gs查询"):
+                with self.subTest(group_id=group_id, text=text):
+                    event = _event(text)
+                    event.group_id = group_id
+                    with (
+                        patch.object(router, "should_process_fxbot_message", return_value=True),
+                        patch.object(router, "_chat_cfg", return_value=config),
+                        patch.object(router, "_match_context", return_value=True),
+                        patch.object(router, "_should_record_context", return_value=True),
+                        patch.object(router, "_has_image", return_value=True),
+                        patch.object(adapter_module, "get_platform_adapter", return_value=OneBotV12MessageAdapter()),
+                    ):
+                        self.assertFalse(await router._ai_fallback_rule(object(), event))
+                        self.assertFalse(await router._context_rule(object(), event))
+
+    async def test_direct_history_entry_rejects_prefix_without_touching_storage(self) -> None:
+        service = service_module.ChatService(ChatSessionStore())
+        config = SimpleNamespace(get_system=lambda: {"chat": {**SYSTEM_DEFAULTS["chat"], "command_prefixes": ["#"]}})
+        with (
+            patch.object(service_module, "get_config_manager", return_value=config),
+            patch.object(service, "_hydrate", new=AsyncMock()) as hydrate,
+            patch.object(service_module.history_module, "record_group_message", new=AsyncMock()) as record,
+        ):
+            await service.record_group_message(
+                "own", "user", "测试", "  #查询", is_group=True, images=["image"], has_image=True
+            )
+        hydrate.assert_not_awaited()
+        record.assert_not_awaited()
+        self.assertEqual(service.session_store.get("own"), [])
+
+
+class VoiceRuleTests(RouterUnitTests):
     """纯语音没有文字，但要在适配阶段放行并转写。"""
 
     async def test_voice_only_message_reaches_adaptation(self) -> None:
@@ -119,8 +161,8 @@ def _request(count: int) -> ChatRequest:
     )
 
 
-class ContextHistoryLimitTests(unittest.IsolatedAsyncioTestCase):
-    """暂停私聊与普通群聊按各自上限记录上下文。"""
+class ContextHistoryLimitTests(RouterUnitTests):
+    """无需回复的群消息按群聊上限记录上下文。"""
 
     async def test_context_uses_session_history_limit(self) -> None:
         for is_group, private_limit, group_limit in ((False, 2, 0), (True, 0, 2), (False, 0, 2), (True, 2, 0)):
@@ -132,7 +174,6 @@ class ContextHistoryLimitTests(unittest.IsolatedAsyncioTestCase):
                     "private_enabled": True,
                     "max_private_context_size": private_limit,
                     "max_context_size": group_limit,
-                    "reply_timing": {"private_reply_paused": True},
                 }
                 limit = group_limit if is_group else private_limit
                 with (
@@ -158,14 +199,14 @@ class ContextHistoryLimitTests(unittest.IsolatedAsyncioTestCase):
                         event = _event(f"消息{message_id}")
                         event.group_id = "g1" if is_group else None
                         event.message_id = message_id
-                        self.assertEqual(await router._context_rule(object(), event), limit > 0)
-                        if limit > 0:
+                        self.assertEqual(await router._context_rule(object(), event), is_group and limit > 0)
+                        if is_group and limit > 0:
                             await router._handle_context(object(), event)
                     history = service.session_store.get(router.event_identity(object(), event).session_id)
-                self.assertEqual(len(history), limit)
-                if limit > 0:
-                    self.assertTrue(history[0]["content"].endswith("消息2"))
-                    self.assertTrue(history[1]["content"].endswith("消息3"))
+                self.assertEqual(len(history), 3 if is_group and limit > 0 else 0)
+                if is_group and limit > 0:
+                    self.assertTrue(history[0]["content"].endswith("消息1"))
+                    self.assertTrue(history[-1]["content"].endswith("消息3"))
 
 
 class ImageThresholdTests(unittest.IsolatedAsyncioTestCase):
@@ -207,6 +248,86 @@ async def _later(value: list[str], delay: float = 0.0) -> list[str]:
     if delay:
         await asyncio.sleep(delay)
     return value
+
+
+class ImageDescriptionPipelineTests(unittest.IsolatedAsyncioTestCase):
+    """图片入历史后，后续生成请求不再重复调用视觉模型。"""
+
+    async def test_recorded_picture_is_recognized_once_across_generation_requests(self) -> None:
+        config = deepcopy(SYSTEM_DEFAULTS["chat"])
+        config["model_routing"]["vision"] = "test-vision"
+        config["response_splitter"]["enable"] = False
+        request = _request(1)
+        request.message_id = "picture"
+        request.metadata["history_recorded"] = True
+        service = service_module.ChatService(ChatSessionStore())
+        provider = SimpleNamespace(chat=AsyncMock(return_value=LLMResponse(content="看到一只猫")), provider_id="test")
+
+        @asynccontextmanager
+        async def lease(*args):
+            yield provider
+
+        with (
+            patch.object(
+                service_module, "get_config_manager", return_value=SimpleNamespace(get_system=lambda: {"chat": config})
+            ),
+            patch.object(service_module.memory_state, "is_ready", return_value=False),
+            patch.object(service, "_hydrate", AsyncMock()),
+            patch.object(service_module.history_module, "fallback_provider", lease),
+            patch.object(
+                service_module.history_module, "describe_sources", AsyncMock(return_value=["一只猫"])
+            ) as describe,
+            patch.object(
+                service_module, "_describe_images", AsyncMock(side_effect=AssertionError("重复识图"))
+            ) as repeated,
+            patch.object(service_module, "_memory_block", AsyncMock(return_value="")),
+            patch.object(service_module.generator, "allowed_tools", AsyncMock(return_value=(set(), []))),
+            patch.object(service, "_persist_turn_start", AsyncMock(return_value=None)),
+            patch.object(service, "_persist_turn_end", AsyncMock(return_value=None)),
+        ):
+            await service.record_group_message(
+                request.session_id,
+                request.user_id,
+                request.user_name,
+                request.text,
+                is_group=request.is_group,
+                images=request.images,
+                message_id=request.message_id,
+            )
+            for _ in range(2):
+                await service._process_with_provider(request, None, provider, "test", focus_instruction="描述图片")
+            self.assertEqual(provider.chat.await_count, 2)
+            self.assertIn("一只猫", str(provider.chat.await_args.kwargs["messages"]))
+            describe.assert_awaited_once()
+            repeated.assert_not_awaited()
+
+
+class ImageDescriptionReuseTests(unittest.TestCase):
+    """已识别图片在同一消息的规划和回复阶段复用，不混用其他图片或消息。"""
+
+    def test_current_history_description_is_reused(self) -> None:
+        request = _request(1)
+        request.message_id = "picture"
+        history = [{"role": "user", "_source_ids": ["picture"], "_image_descriptions": ["一只猫"]}]
+        self.assertEqual(service_module._cached_image_descriptions(request, history), ["一只猫"])
+        request.message_id = "different-picture"
+        self.assertIsNone(service_module._cached_image_descriptions(request, history))
+
+    def test_replyer_can_reuse_current_turn_descriptions(self) -> None:
+        request = _request(1)
+        request.metadata["recognized_images"] = {"sources": list(request.images), "descriptions": ["一只猫"]}
+        self.assertEqual(service_module._cached_image_descriptions(request, []), ["一只猫"])
+        request.images = ["different-image"]
+        self.assertIsNone(service_module._cached_image_descriptions(request, []))
+
+    def test_failed_or_ambiguous_history_description_is_not_reused(self) -> None:
+        request = _request(1)
+        request.message_id = "picture"
+        history = [{"role": "user", "_source_ids": ["picture"], "_image_descriptions": [""]}]
+        self.assertIsNone(service_module._cached_image_descriptions(request, history))
+        history[0]["_image_descriptions"] = ["一只猫"]
+        request.batched = True
+        self.assertIsNone(service_module._cached_image_descriptions(request, history))
 
 
 class WaitDescriptionsTests(unittest.IsolatedAsyncioTestCase):
@@ -291,6 +412,25 @@ class VisualConfigTests(unittest.TestCase):
 
 class OversizedImageTests(unittest.IsolatedAsyncioTestCase):
     """过大图片按配置压缩或丢弃。"""
+
+    async def test_model_data_url_can_be_loaded_again_for_history_description(self) -> None:
+        data = self._noisy_png(24)
+        with patch.object(adapter_module, "_fetch_remote_image", new=AsyncMock()) as fetch:
+            first = await adapter_module.load_images([data])
+            self.assertEqual(len(first), 1)
+            self.assertEqual(await adapter_module.load_image_bytes(first[0]), data)
+            self.assertEqual(await adapter_module.load_images(first), first)
+        fetch.assert_not_awaited()
+
+    async def test_inline_images_enforce_type_encoding_and_size(self) -> None:
+        import base64
+
+        for source in ("data:text/plain;base64,SGVsbG8=", "data:image/png,raw", "data:image/png;base64,???"):
+            with self.subTest(source=source), self.assertRaises(ValueError):
+                await adapter_module.load_image_bytes(source)
+        source = "data:image/png;base64," + base64.b64encode(self._noisy_png(24)).decode("ascii")
+        with self.assertRaises(adapter_module.ResponseTooLargeError):
+            await adapter_module.load_image_bytes(source, limit=100)
 
     @staticmethod
     def _noisy_png(side: int = 600) -> bytes:

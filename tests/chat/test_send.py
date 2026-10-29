@@ -133,6 +133,41 @@ class SenderAliveTests(unittest.IsolatedAsyncioTestCase):
             trigger_kind="mention",
         )
 
+    async def test_first_segment_is_sent_before_typing_wait(self) -> None:
+        events = []
+        service = SimpleNamespace(
+            session_store=ChatSessionStore(),
+            is_current=lambda *args: True,
+            is_latest=lambda *args: True,
+            mark_sending=AsyncMock(),
+            mark_sent=AsyncMock(),
+            mark_send_failed=AsyncMock(),
+            mark_send_aborted=AsyncMock(),
+        )
+
+        async def send(message):
+            events.append(("send", message))
+
+        async def wait(seconds):
+            events.append(("wait", seconds))
+
+        matcher = SimpleNamespace(send=send)
+        with (
+            patch.object(sender_module, "parts", return_value=["第一段", "第二段"]),
+            patch.object(sender_module, "typing_time", return_value=3),
+            patch.object(sender_module.asyncio, "sleep", new=wait),
+            patch.object(
+                sender_module, "apply_typo", side_effect=lambda text: SimpleNamespace(text=text, correction="")
+            ),
+            patch.object(sender_module, "send_voice", AsyncMock()),
+            patch.object(sender_module, "send_emoji", AsyncMock()),
+            patch.object(sender_module.chat_writeback, "on_reply"),
+        ):
+            await sender_module._send_parts(
+                service, self._request(), ChatResponse(text="第一段第二段"), None, matcher, {"sent_parts": 0}
+            )
+        self.assertEqual(events, [("send", "第一段"), ("wait", 3), ("send", "第二段")])
+
     async def test_send_parts_returns_delivered_typo_text(self) -> None:
         for outcome in ("success", "first_failure", "second_failure", "superseded", "empty"):
             with self.subTest(outcome=outcome):
@@ -200,8 +235,7 @@ class SenderAliveTests(unittest.IsolatedAsyncioTestCase):
         matcher = SimpleNamespace(send=AsyncMock())
         pick = AsyncMock()
         with (
-            patch.object(sender_module, "pick_emoji", pick),
-            patch.object(sender_module, "emoji_config", return_value={"use_new_send_logic": False}),
+            patch.object(sender_module, "emoji_by_hash", pick),
         ):
             await sender_module.send_emoji(
                 service_module.chat_service,

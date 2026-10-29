@@ -1,10 +1,9 @@
 from __future__ import annotations
 
+import time
+import asyncio
 from io import BytesIO
 from typing import Any, Dict, Optional, Protocol
-
-import asyncio
-import time
 
 import numpy as np
 
@@ -48,7 +47,7 @@ class HostImageEmbedder:
         self._next_probe_at = 0.0
 
     async def _request(self, image_bytes: bytes, *, mime_type: str, session_id: str = "") -> Dict[str, Any]:
-        from ...._host.llm import EmbeddingServiceClient
+        from ..._host.llm import EmbeddingServiceClient
 
         result = await EmbeddingServiceClient(
             task_name=self.task_name,

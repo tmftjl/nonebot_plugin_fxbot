@@ -14,7 +14,8 @@ dependencies = [
     "httpx[socks]",
     "openai>=1.0.0",
     "fastapi",
-    "Pillow>=9.2",
+    "Pillow>=10.1",
+    "numpy",
     "playwright>=1.40",
     "psutil>=5.9.0",
     "arclet-alconna>=1.8.35,<2.0",
@@ -39,4 +40,4 @@ where = [".."]
 include = ["nonebot_plugin_fxbot*"]
 
 [tool.setuptools.package-data]
-nonebot_plugin_fxbot = ["resources/**/*"]
+nonebot_plugin_fxbot = ["resources/**/*", "chat/prompts/*.prompt", "chat/amemorix/prompts/**/*.prompt"]

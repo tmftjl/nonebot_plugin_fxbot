@@ -301,7 +301,7 @@ def _all_config_tab() -> dict[str, Any]:
                         "label": "忽略命令前缀",
                         "component": "GTags",
                         "default": SYSTEM_DEFAULTS["chat"]["command_prefixes"],
-                        "helpMessage": "以这些前缀开头的消息不会进入 AI 对话，也不会记录成群聊上下文。",
+                        "helpMessage": "以这些前缀开头的消息（忽略开头空白）不进入 AI 对话，也不计入群聊或私聊历史。",
                     },
                     {
                         "field": "persona",
@@ -320,15 +320,6 @@ def _all_config_tab() -> dict[str, Any]:
                         "componentProps": {
                             "options": [{"label": "自动（第一个对话 Provider）", "value": ""}, *providers],
                         },
-                    },
-                    {
-                        "field": "provider_fallback",
-                        "label": "备用 Provider",
-                        "component": "GTags",
-                        "default": SYSTEM_DEFAULTS["chat"]["provider_fallback"],
-                        "helpMessage": (
-                            "主 Provider 超时、5xx 或网络错误时按顺序尝试，最多两个候选；工具已执行后不切换。"
-                        ),
                     },
                     {
                         "field": "max_context_size",
@@ -433,18 +424,16 @@ def _all_config_tab() -> dict[str, Any]:
                 "category": "能力",
                 "schemas": [
                     _routing_field("reply", "回复", providers),
-                    _routing_field("extract", "抽取", providers),
-                    _routing_field("style", "群风格", providers),
                     _routing_field("planner", "规划", providers),
                     _routing_field("vision", "图片描述", providers),
-                    _routing_field("memory", "长期记忆", providers, "留空沿用抽取模型。"),
-                    _routing_field("utils", "通用工具", providers, "留空沿用抽取模型。"),
-                    _routing_field("learner", "表达学习", providers, "留空沿用抽取模型。"),
+                    _routing_field("memory", "长期记忆", providers, "留空由记忆调用方选择可用模型。"),
+                    _routing_field("utils", "通用工具", providers),
+                    _routing_field("learner", "表达学习", providers, "留空沿用通用工具模型。"),
                     _routing_field(
                         "fast_model",
                         "快速模型",
                         providers,
-                        "模型断句使用；留空沿用回复模型。",
+                        "表达选择、模型断句使用；留空沿用通用工具模型。",
                     ),
                     _routing_field("emoji", "表情管理", providers, "留空沿用规划模型。"),
                     {
@@ -593,33 +582,12 @@ def _all_config_tab() -> dict[str, Any]:
                 "category": "能力",
                 "schemas": [
                     {
-                        "field": "mode",
-                        "label": "规划模式",
-                        "component": "Select",
-                        "default": SYSTEM_DEFAULTS["chat"]["planner"]["mode"],
-                        "helpMessage": "simple 保持现有单次回复；complex 才调用 Planner。",
-                        "componentProps": {
-                            "options": [
-                                {"label": "简单（不规划）", "value": "simple"},
-                                {"label": "复杂（先规划）", "value": "complex"},
-                            ],
-                        },
-                    },
-                    {
-                        "field": "wait_seconds",
-                        "label": "wait 动作等待",
-                        "component": "InputNumber",
-                        "default": SYSTEM_DEFAULTS["chat"]["planner"]["wait_seconds"],
-                        "helpMessage": "Planner 选择 wait 时等待的秒数；期间新消息会进入历史。",
-                        "componentProps": {"min": 30, "max": 120},
-                    },
-                    {
                         "field": "context_summary_max_chars",
                         "label": "状态摘要上限（字）",
                         "component": "InputNumber",
                         "default": SYSTEM_DEFAULTS["chat"]["planner"]["context_summary_max_chars"],
                         "helpMessage": (
-                            "历史超出窗口被挤掉时，用 utils 模型把旧消息压缩成状态摘要，"
+                            "聊天历史达到裁切阈值时，将较早的对话压缩成状态摘要，"
                             "之后随每一轮上下文一起发送；摘要最多多少字。"
                         ),
                         "componentProps": {"min": 1000, "max": 8000, "step": 500},
@@ -630,8 +598,8 @@ def _all_config_tab() -> dict[str, Any]:
                         "component": "Switch",
                         "default": SYSTEM_DEFAULTS["chat"]["planner"]["passive_replyer"],
                         "helpMessage": (
-                            "开启后，复杂模式的规划器在决定发言时写出本轮发言指导，"
-                            "正文仍由回复模型生成；关闭时规划器只选动作。"
+                            "开启后，Planner 不调用工具而输出正文时，将正文作为指导交给回复模型；"
+                            "关闭时通过 reply 工具发言。普通对话始终先进入 Planner。"
                         ),
                     },
                 ],
@@ -724,29 +692,6 @@ def _all_config_tab() -> dict[str, Any]:
                         "default": SYSTEM_DEFAULTS["chat"]["reply_timing"]["talk_value"],
                         "helpMessage": "群聊里主动说话的频率，越小越安静；群级开关用 #主动 开/关。",
                         "componentProps": {"min": 0, "max": 1, "step": 0.1},
-                    },
-                    {
-                        "field": "private_reply_paused",
-                        "label": "暂停私聊回复",
-                        "component": "Switch",
-                        "default": SYSTEM_DEFAULTS["chat"]["reply_timing"]["private_reply_paused"],
-                        "helpMessage": "私聊仍维护历史，但不进入思考；可在下方按用户覆盖。",
-                    },
-                    {
-                        "field": "private_reply_pause_rules",
-                        "label": "单个私聊暂停规则",
-                        "component": "GListForm",
-                        "default": SYSTEM_DEFAULTS["chat"]["reply_timing"]["private_reply_pause_rules"],
-                        "helpMessage": "按用户覆盖全局暂停设置；命中后不再跟随全局。",
-                        "componentProps": {
-                            "schemas": [
-                                _input_field("platform", "平台", "留空表示任意平台"),
-                                _input_field("user_id", "用户 ID", required=True),
-                                _switch_field("paused", "暂停回复"),
-                            ],
-                            "titleField": "user_id",
-                            "addLabel": "添加暂停规则",
-                        },
                     },
                     {
                         "field": "mentioned_bot_reply",
@@ -1110,7 +1055,9 @@ def _all_config_tab() -> dict[str, Any]:
                         "label": "断句方式",
                         "component": "Select",
                         "default": SYSTEM_DEFAULTS["chat"]["response_splitter"]["mode"],
-                        "helpMessage": "rule 按标点断句；llm 让当前回复模型按语义断句，失败回退规则。",
+                        "helpMessage": (
+                            "rule 按标点断句；llm 使用快速模型（留空用通用工具模型）按语义断句，失败回退规则。"
+                        ),
                         "componentProps": {
                             "options": [
                                 {"label": "规则", "value": "rule"},

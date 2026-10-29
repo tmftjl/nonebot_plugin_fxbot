@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
-from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -170,9 +169,7 @@ class VectorCandidatesTests(unittest.IsolatedAsyncioTestCase):
         await vector_module.vector_candidates("早上好呀", self.rows, index_path=self.index_path, pool_size=50)
         switched = _EmbeddingProvider(self.provider.vectors)
         switched.model_name = "other-embed"
-        with patch.object(
-            vector_module.provider_manager, "get_embedding_provider", AsyncMock(return_value=switched)
-        ):
+        with patch.object(vector_module.provider_manager, "get_embedding_provider", AsyncMock(return_value=switched)):
             await vector_module.vector_candidates("早上好呀", self.rows, index_path=self.index_path, pool_size=50)
 
         self.assertEqual(switched.calls, [["问候 | 早上好", "告别 | 拜拜"], ["早上好呀"]])
@@ -239,23 +236,19 @@ class SimpleProvider:
 
 
 class SelectExpressionsTests(unittest.IsolatedAsyncioTestCase):
-    """开关关闭走模糊匹配，开启且召回成功时不再走模糊匹配。"""
+    """普通模式使用计数抽样，向量模式使用召回结果。"""
 
     def setUp(self) -> None:
         self.rows = [_row(1, "问候", "早上好")]
 
-    async def test_disabled_uses_fuzzy(self) -> None:
-        fuzzy = SimpleNamespace(select=AsyncMock(return_value=[self.rows[0]]))
+    async def test_disabled_requires_ten_candidates(self) -> None:
         with (
             patch.object(expression_module, "expression_vector_config", return_value={"enabled": False}),
-            patch.object(expression_module, "FuzzySelector", return_value=fuzzy),
         ):
             selected = await expression_module.select_expressions(TENANT, "早上好", self.rows)
-        self.assertEqual(selected, [self.rows[0]])
-        fuzzy.select.assert_awaited_once()
+        self.assertEqual(selected, [])
 
     async def test_enabled_prefers_vector(self) -> None:
-        fuzzy = SimpleNamespace(select=AsyncMock())
         with (
             patch.object(
                 expression_module,
@@ -263,23 +256,18 @@ class SelectExpressionsTests(unittest.IsolatedAsyncioTestCase):
                 return_value={"enabled": True, "index_path": "x.json", "candidate_pool_size": 10},
             ),
             patch.object(expression_module, "select_by_vectors", AsyncMock(return_value=[self.rows[0]])) as vector,
-            patch.object(expression_module, "FuzzySelector", return_value=fuzzy),
         ):
             selected = await expression_module.select_expressions(TENANT, "早上好", self.rows)
         self.assertEqual(selected, [self.rows[0]])
         vector.assert_awaited_once()
-        fuzzy.select.assert_not_awaited()
 
     async def test_vector_none_falls_back(self) -> None:
-        fuzzy = SimpleNamespace(select=AsyncMock(return_value=[self.rows[0]]))
         with (
             patch.object(expression_module, "expression_vector_config", return_value={"enabled": True}),
             patch.object(expression_module, "select_by_vectors", AsyncMock(return_value=None)),
-            patch.object(expression_module, "FuzzySelector", return_value=fuzzy),
         ):
             selected = await expression_module.select_expressions(TENANT, "早上好", self.rows)
-        self.assertEqual(selected, [self.rows[0]])
-        fuzzy.select.assert_awaited_once()
+        self.assertEqual(selected, [])
 
 
 if __name__ == "__main__":

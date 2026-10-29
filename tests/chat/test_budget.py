@@ -13,6 +13,8 @@ from src.plugins.nonebot_plugin_fxbot.chat.session import ChatSessionStore
 from src.plugins.nonebot_plugin_fxbot.chat.providers import LLMResponse
 from src.plugins.nonebot_plugin_fxbot.chat.replyer.prompt import truncate_content as _truncate_content
 
+from .support import ReplyPipelineTests
+
 TENANT = "test:chat-budget"
 
 
@@ -53,7 +55,7 @@ class _Provider:
         """已生成次数。"""
         return len(self.prompts)
 
-    async def chat(self, messages: list[dict[str, Any]], tools: Any = None) -> LLMResponse:
+    async def chat(self, messages: list[dict[str, Any]], tools: Any = None, **kwargs) -> LLMResponse:
         self.prompts.append(list(messages))
         return LLMResponse(content="收到")
 
@@ -92,7 +94,7 @@ class TruncateContentTests(unittest.TestCase):
         self.assertEqual(_truncate_content(content, 10), content)
 
 
-class BudgetIntegrationTests(unittest.IsolatedAsyncioTestCase):
+class BudgetIntegrationTests(ReplyPipelineTests):
     """上下文上限在真实请求构造里生效。"""
 
     def setUp(self) -> None:
@@ -108,7 +110,7 @@ class BudgetIntegrationTests(unittest.IsolatedAsyncioTestCase):
         ):
             await self.service._process_with_provider(_request(text), None, provider, "provider")
 
-    async def test_only_the_latest_messages_reach_the_prompt(self) -> None:
+    async def test_context_is_retained_until_cycle_boundary(self) -> None:
         for role, content in (
             ("user", "旧问题"),
             ("assistant", "旧回答"),
@@ -122,7 +124,7 @@ class BudgetIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
         contents = _contents(provider.prompts[0])
         self.assertIn("新问题", contents)
-        self.assertNotIn("旧问题", contents)
+        self.assertIn("旧问题", contents)
         self.assertEqual(provider.calls, 1)
 
     async def test_current_message_is_truncated_but_history_keeps_full_text(self) -> None:
@@ -130,7 +132,7 @@ class BudgetIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
         await self._run(provider, _Config(), "啊" * 4500)
 
-        current = _contents(provider.prompts[0])[-1]
+        current = next(text for text in _contents(provider.prompts[0]) if text.startswith("用户40001: "))
         self.assertTrue(current.startswith("用户40001: "))
         self.assertEqual(len(current), 4000)
         self.assertTrue(current.endswith("…"))

@@ -192,11 +192,14 @@ class VertexAIProvider(ChatProvider):
         model: str | None = None,
         temperature: float = 0.7,
         tools: list[dict[str, Any]] | None = None,
+        max_tokens: int | None = None,
     ) -> AsyncGenerator[LLMResponse, None]:
         """执行 Vertex AI 流式对话请求。"""
         model_name = model or self.model_name
         request_body = self._convert_to_vertex_format(messages)
         request_body["generationConfig"] = {"temperature": temperature}
+        if max_tokens is not None:
+            request_body["generationConfig"]["maxOutputTokens"] = max_tokens
         if tools_config := self._convert_tools_to_vertex_format(tools):
             request_body["tools"] = [tools_config]
 
@@ -204,22 +207,25 @@ class VertexAIProvider(ChatProvider):
             client = await get_shared_async_client()
             async with client.stream(
                 "POST",
-                f"{self._build_endpoint(model_name, stream=True)}?key={self.api_key}",
+                f"{self._build_endpoint(model_name, stream=True)}?alt=sse&key={self.api_key}",
                 json=request_body,
                 headers={"Content-Type": "application/json"},
                 timeout=self.timeout,
             ) as response:
                 response.raise_for_status()
                 full_content = ""
+                calls: list[dict[str, Any]] = []
+                original_parts: list[dict[str, Any]] = []
                 async for line in response.aiter_lines():
-                    if not line.strip():
+                    if not line.startswith("data:"):
                         continue
                     try:
-                        data = json.loads(line)
+                        data = json.loads(line[5:].strip())
                     except json.JSONDecodeError:
                         logger.warning(f"[{self.provider_id}] 无法解析流式响应: {line}")
                         continue
                     for part in data.get("candidates", [{}])[0].get("content", {}).get("parts", []):
+                        original_parts.append(part)
                         if "text" in part:
                             full_content += part["text"]
                             yield LLMResponse(
@@ -227,7 +233,24 @@ class VertexAIProvider(ChatProvider):
                                 content=part["text"],
                                 is_stream_chunk=True,
                             )
-                yield LLMResponse(role="assistant", content=full_content)
+                        elif "functionCall" in part:
+                            function = part["functionCall"]
+                            calls.append(
+                                {
+                                    "id": function.get("id") or f"call-{len(calls)}",
+                                    "type": "function",
+                                    "function": {
+                                        "name": function.get("name"),
+                                        "arguments": json.dumps(function.get("args", {})),
+                                    },
+                                }
+                            )
+                yield LLMResponse(
+                    role="assistant",
+                    content=full_content,
+                    tool_calls=calls,
+                    provider_data={"vertex_parts": original_parts},
+                )
         except httpx.HTTPStatusError as exc:
             logger.error(f"[{self.provider_id}] Stream HTTP 错误: {exc.response.status_code}")
             raise

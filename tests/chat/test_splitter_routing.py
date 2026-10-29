@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import unittest
 from typing import Any
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, patch
@@ -13,6 +12,8 @@ from src.plugins.nonebot_plugin_fxbot.chat.types import ChatRequest
 from src.plugins.nonebot_plugin_fxbot.chat.service import ChatService
 from src.plugins.nonebot_plugin_fxbot.chat.session import ChatSessionStore
 from src.plugins.nonebot_plugin_fxbot.chat.providers import LLMResponse, routing as routing_module
+
+from .support import ReplyPipelineTests
 
 TENANT = "test:splitter-routing"
 TEXT = "第一句。第二句。"
@@ -62,8 +63,8 @@ class _Provider:
         return LLMResponse(content=self.reply)
 
 
-class SplitterRoutingTests(unittest.IsolatedAsyncioTestCase):
-    """配置了快速模型时断句用它，否则沿用回复模型。"""
+class SplitterRoutingTests(ReplyPipelineTests):
+    """配置了快速模型时断句用它，否则沿用 utils。"""
 
     def setUp(self) -> None:
         self.service = ChatService(ChatSessionStore())
@@ -97,9 +98,9 @@ class SplitterRoutingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fast.calls, 1)
         self.assertEqual(reply.calls, 1)
 
-    async def test_unconfigured_falls_back_to_reply_provider(self) -> None:
+    async def test_unconfigured_falls_back_to_utils_provider(self) -> None:
         reply, fast, leased = await self._run("")
 
-        self.assertEqual(leased, [])
-        self.assertEqual(fast.calls, 0)
-        self.assertEqual(reply.calls, 2)
+        self.assertEqual(leased, ["utils"])
+        self.assertEqual(fast.calls, 1)
+        self.assertEqual(reply.calls, 1)

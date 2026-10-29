@@ -49,7 +49,9 @@ class OpenAIProvider(ChatProvider):
         """执行一次 OpenAI 对话请求。"""
         params: dict[str, Any] = {
             "model": model or self.model_name,
-            "messages": messages,
+            "messages": [
+                {key: value for key, value in message.items() if not key.startswith("_")} for message in messages
+            ],
             "temperature": temperature,
         }
         if tools:
@@ -87,32 +89,53 @@ class OpenAIProvider(ChatProvider):
         model: str | None = None,
         temperature: float = 0.7,
         tools: list[dict[str, Any]] | None = None,
+        max_tokens: int | None = None,
     ) -> AsyncGenerator[LLMResponse, None]:
         """执行 OpenAI 流式对话请求。"""
         params: dict[str, Any] = {
             "model": model or self.model_name,
-            "messages": messages,
+            "messages": [
+                {key: value for key, value in message.items() if not key.startswith("_")} for message in messages
+            ],
             "temperature": temperature,
             "stream": True,
         }
         if tools:
             params["tools"] = tools
 
+        if max_tokens is not None:
+            params["max_tokens"] = max_tokens
         try:
             stream = await self.client.chat.completions.create(**params)
             full_content = ""
-            async for chunk in stream:
-                if not chunk.choices:
-                    continue
-                delta = chunk.choices[0].delta
-                if delta.content:
-                    full_content += delta.content
-                    yield LLMResponse(
-                        role="assistant",
-                        content=delta.content,
-                        is_stream_chunk=True,
-                    )
-            yield LLMResponse(role="assistant", content=full_content)
+            calls: dict[int, dict[str, Any]] = {}
+            try:
+                async for chunk in stream:
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
+                    for fragment in delta.tool_calls or []:
+                        call = calls.setdefault(
+                            fragment.index,
+                            {"id": "", "type": "function", "function": {"name": "", "arguments": ""}},
+                        )
+                        if fragment.id:
+                            call["id"] = fragment.id
+                        if fragment.function:
+                            call["function"]["name"] += fragment.function.name or ""
+                            call["function"]["arguments"] += fragment.function.arguments or ""
+                    if delta.content:
+                        full_content += delta.content
+                        yield LLMResponse(role="assistant", content=delta.content, is_stream_chunk=True)
+            finally:
+                await stream.close()
+            tool_calls = [calls[index] for index in sorted(calls)]
+            yield LLMResponse(
+                role="assistant",
+                content=full_content,
+                tool_calls=tool_calls,
+                tool_call_ids=[call["id"] for call in tool_calls],
+            )
         except Exception as exc:
             logger.error(f"[{self.provider_id}] Stream 请求失败: {exc}")
             raise

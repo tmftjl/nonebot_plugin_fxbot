@@ -3,43 +3,32 @@
 from __future__ import annotations
 
 import json
-import asyncio
+import random
 import hashlib
 from typing import Any
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
 from nonebot import logger
-from rapidfuzz import fuzz
+from json_repair import repair_json
 
 from .state import is_ready
 from .config import expression_config, tenant_learn_enabled, expression_vector_config
 from .models import ChatMessage, ChatExpression
+from .prompts import learning_prompt
 from .learning import tenant_target, learning_flags
 from .filtering import SENSITIVE, should_learn, sanitize_line
-from .repository import TenantJobState, chat_repository
+from .repository import chat_repository
 from .expression_vector import select_by_vectors
 from ..providers.routing import routed_task, fallback_provider
 
 _BATCH_SIZE = 40
-_MAX_ITEMS = 12
-_COUNT_STEP = 0.006
-_COUNT_CAP = 5.0
-_MERGE_THRESHOLD = 75
-_SELECT_THRESHOLD = 0.75
+_MIN_MESSAGES = 10
+_MAX_ITEMS = 20
+_COUNT_STEP = 1.0
 # MaiBot `src/chat/replyer/maisaka_expression_selector.py` MAX_SELECTED_EXPRESSIONS
 _MAX_INJECTED = 5
 _EXPRESSION_TYPES = frozenset({"phrase", "tone", "structure", "emoji"})
-
-_LEARN_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {"expressions": {"type": "array"}},
-}
-_REVIEW_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {"results": {"type": "array"}},
-}
-_tick_lock: asyncio.Lock | None = None
 
 
 @dataclass(frozen=True)
@@ -59,7 +48,7 @@ def normalize(text: object) -> str:
 
 def text_hash(text: object) -> str:
     """情境与说法的稳定指纹。"""
-    return hashlib.sha1(normalize(text).encode("utf-8")).hexdigest()
+    return hashlib.sha1(str(text or "").strip().encode("utf-8")).hexdigest()
 
 
 def expression_batch_id(seq_start: int, seq_end: int) -> str:
@@ -69,30 +58,19 @@ def expression_batch_id(seq_start: int, seq_end: int) -> str:
 
 def build_learn_prompt(messages: list[ChatMessage]) -> list[dict[str, Any]]:
     """构造表达抽取消息；只包含本批次可信的人类消息。"""
-    lines = []
-    for message in messages:
-        name = message.sender_name or "用户"
-        lines.append(f"[{int(message.id or 0)}] {name}({message.sender_id}): {message.content}")
-    system = (
-        "你是群聊表达分析器。只输出 JSON，不要解释。\n"
-        "从给定的人类消息中提炼可以复用的说话方式：situation 是当时的情境或话题，"
-        "style 是这个群里自然的说法或语气，type 取 phrase/tone/structure/emoji 之一。\n"
-        "只写群成员真实使用或明显偏好的表达，不要编造，不要评价个人，"
-        "不要包含联系方式、链接、密码、令牌、身份证、银行卡、手机号、住址。\n"
-        f"最多 {_MAX_ITEMS} 条；situation 要能用来匹配当前话题，style 要短。\n"
-        "如果这批消息没有可复用的表达，返回空数组。\n"
-        '输出格式：{"expressions":[{"situation":"","style":"","type":"phrase","source_seq":1}]}'
-    )
-    return [{"role": "system", "content": system}, {"role": "user", "content": "\n".join(lines)}]
+    lines = [
+        f"[id:{int(message.id or 0)}] USER {message.sender_name or '用户'}: {message.content}" for message in messages
+    ]
+    return [{"role": "user", "content": learning_prompt("learn_style", chat_str="\n".join(lines))}]
 
 
 def parse_expressions(data: object, messages: list[ChatMessage]) -> list[ExpressionItem] | None:
     """校验模型输出；无法解析返回 None，合法空结果返回空列表。"""
-    if not isinstance(data, dict):
+    if not isinstance(data, list):
         return None
-    raw_items = data.get("expressions")
-    if not isinstance(raw_items, list):
-        return None
+    raw_items = data
+    if len(raw_items) > _MAX_ITEMS:
+        return []
     by_id = {int(message.id): message for message in messages if message.id is not None}
     items: list[ExpressionItem] = []
     seen: set[tuple[str, str]] = set()
@@ -101,6 +79,8 @@ def parse_expressions(data: object, messages: list[ChatMessage]) -> list[Express
             continue
         situation = sanitize_line(raw.get("situation"), 60)
         style = sanitize_line(raw.get("style"), 60)
+        if style.startswith("使用"):
+            style = style[2:].strip()
         if not situation or not style or SENSITIVE.search(situation) or SENSITIVE.search(style):
             continue
         key = (normalize(situation), normalize(style))
@@ -108,8 +88,12 @@ def parse_expressions(data: object, messages: list[ChatMessage]) -> list[Express
             continue
         seen.add(key)
         kind = str(raw.get("type") or "phrase").strip().lower()
-        seq_text = str(raw.get("source_seq") or "").strip()
+        seq_text = str(raw.get("id") or "").strip()
         source_seq = int(seq_text) if seq_text.isdigit() and int(seq_text) in by_id else 0
+        if not source_seq:
+            continue
+        if any(marker in situation or marker in style for marker in ("SELF", "[图片", "[表情包")):
+            continue
         items.append(
             ExpressionItem(
                 situation=situation,
@@ -128,7 +112,8 @@ async def request_expressions(
     prompt = build_learn_prompt(messages)
     for attempt in range(2):
         try:
-            data = await provider.chat_json(prompt, _LEARN_SCHEMA, model=model or None)
+            response = await provider.chat(messages=prompt, model=model or None, max_tokens=8192)
+            data = json.loads(repair_json(response.content))
         except Exception as exc:
             logger.opt(exception=True).debug(
                 f"[ChatExpression] 表达调用失败（第 {attempt + 1} 次）: {type(exc).__name__}"
@@ -145,55 +130,35 @@ async def request_expressions(
     return None
 
 
-def build_review_prompt(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """构造一次批次复审提示；新条目只复审这一次。"""
-    lines = [f"{index}. 情境：{item['situation']}；说法：{item['style']}" for index, item in enumerate(items, start=1)]
-    system = (
-        "你是表达复审器。判断每条“情境→说法”是否值得让机器人参考。\n"
-        "值得：群内自然、可复用、不冒犯、不含隐私或广告。\n"
-        "不值得：个人信息、攻击侮辱、广告、过于通用或生硬、依赖具体事实。\n"
-        '只输出 JSON：{"results":[{"index":1,"approved":true}]}'
-    )
-    return [{"role": "system", "content": system}, {"role": "user", "content": "\n".join(lines)}]
-
-
-def parse_review(data: object, count: int) -> list[bool] | None:
-    """把复审结果对齐到候选下标；缺项按不通过处理。"""
-    if not isinstance(data, dict) or not isinstance(data.get("results"), list):
-        return None
-    approved = [False] * max(0, count)
-    for item in data["results"]:
-        if not isinstance(item, dict):
-            continue
-        try:
-            index = int(item.get("index"))
-        except (TypeError, ValueError):
-            continue
-        if 1 <= index <= count:
-            approved[index - 1] = bool(item.get("approved"))
-    return approved
-
-
 async def request_review(provider: Any, items: list[dict[str, Any]], *, model: str = "") -> list[bool] | None:
     """调用复审模型；失败返回 None，由调用方决定是否保留未复审条目。"""
     if not items:
         return []
-    prompt = build_review_prompt(items)
-    for attempt in range(2):
+    criteria = "\n".join(
+        [
+            "1. 表达方式或言语风格是否与使用条件或使用情景匹配",
+            "2. 允许部分语法错误或口语化或缺省出现",
+            "3. 表达方式不能太过特指，需要具有泛用性",
+            "4. 一般不涉及具体的人名或名称",
+        ]
+    )
+    decisions = []
+    for item in items:
         try:
-            data = await provider.chat_json(prompt, _REVIEW_SCHEMA, model=model or None)
+            prompt = learning_prompt(
+                "expression_evaluation", situation=item["situation"], style=item["style"], criteria_list=criteria
+            )
+            response = await provider.chat(
+                messages=[{"role": "user", "content": prompt}], model=model or None, max_tokens=8192
+            )
+            data = json.loads(repair_json(response.content))
         except Exception as exc:
-            logger.opt(exception=True).debug(f"[ChatExpression] 复审失败（第 {attempt + 1} 次）: {type(exc).__name__}")
-            continue
-        if isinstance(data, str):
-            try:
-                data = json.loads(data)
-            except json.JSONDecodeError:
-                data = None
-        parsed = parse_review(data, len(items))
-        if parsed is not None:
-            return parsed
-    return None
+            logger.opt(exception=True).debug(f"[ChatExpression] 表达复审失败: {type(exc).__name__}")
+            return None
+        if not isinstance(data, dict) or not isinstance(data.get("suitable"), bool):
+            return None
+        decisions.append(data["suitable"])
+    return decisions
 
 
 def merge_candidates(
@@ -230,7 +195,7 @@ def merge_candidates(
             }
             pool.append(target)
             new_items.append(target)
-        target["count"] = min(_COUNT_CAP, float(target["count"]) + _COUNT_STEP)
+        target["count"] = float(target["count"]) + _COUNT_STEP
         target["learn"] = int(target["learn"]) + 1
         target["merged"] = True
     updates = {
@@ -242,26 +207,13 @@ def merge_candidates(
 
 
 def _best_match(item: ExpressionItem, pool: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """先按指纹精确匹配，再按情境与说法的模糊相似度合并。"""
+    """只合并情境与表达均完全一致的记录。"""
     situation_hash = text_hash(item.situation)
     style_hash = text_hash(item.style)
     for row in pool:
         if text_hash(row["situation"]) == situation_hash and text_hash(row["style"]) == style_hash:
             return row
-    needle_situation = normalize(item.situation)
-    needle_style = normalize(item.style)
-    best: dict[str, Any] | None = None
-    best_score = (-1, -1.0)
-    for row in pool:
-        situation_score = fuzz.partial_ratio(needle_situation, normalize(row["situation"]))
-        style_score = fuzz.partial_ratio(needle_style, normalize(row["style"]))
-        if situation_score < _MERGE_THRESHOLD or style_score < _MERGE_THRESHOLD:
-            continue
-        score = (min(situation_score, style_score), (situation_score + style_score) / 2)
-        if score > best_score:
-            best = row
-            best_score = score
-    return best
+    return None
 
 
 def _clean_messages(messages: list[ChatMessage], tenant: str) -> list[ChatMessage]:
@@ -280,12 +232,18 @@ async def _lease(tenant: str, provider: Any):
     if provider is not None:
         yield provider
         return
-    async with fallback_provider(routed_task("learner", "extract"), tenant) as leased:
+    async with fallback_provider(routed_task("learner", "utils"), tenant) as leased:
         yield leased
 
 
-async def learn_expressions(tenant: str, *, provider: Any = None, cfg: dict[str, Any] | None = None) -> bool:
-    """每 40 条人类消息学习一批；成功提交返回 True。"""
+async def learn_expressions(
+    tenant: str,
+    *,
+    provider: Any = None,
+    cfg: dict[str, Any] | None = None,
+    messages: list[ChatMessage] | None = None,
+) -> bool:
+    """累计至少 10 条消息后学习一批；成功提交返回 True。"""
     if not is_ready():
         return False
     config = cfg or expression_config()
@@ -297,8 +255,14 @@ async def learn_expressions(tenant: str, *, provider: Any = None, cfg: dict[str,
         return False
     cursor = await chat_repository.get_cursor(tenant, "expression")
     after = int(cursor.cursor_seq) if cursor else 0
-    raw = await chat_repository.messages_after(tenant, after, limit=_BATCH_SIZE)
-    if len(raw) < _BATCH_SIZE:
+    raw = (
+        await chat_repository.messages_after(tenant, after, limit=_BATCH_SIZE)
+        if messages is None
+        else sorted(
+            (message for message in messages if int(message.id or 0) > after), key=lambda message: int(message.id or 0)
+        )
+    )
+    if len(raw) < _MIN_MESSAGES:
         return False
     seq_end = int(raw[-1].id or 0)
     clean = _clean_messages(raw, tenant)
@@ -357,32 +321,8 @@ async def learn_expressions(tenant: str, *, provider: Any = None, cfg: dict[str,
     )
 
 
-class FuzzySelector:
-    """按情境相似度乘计数权重取 top-k。"""
-
-    async def select(
-        self, tenant: str, query: str, rows: list[ChatExpression], limit: int, *, provider: Any = None
-    ) -> list[ChatExpression]:
-        needle = normalize(query)
-        if not needle or limit <= 0:
-            return []
-        scored: list[tuple[float, int, ChatExpression]] = []
-        for row in rows:
-            if not row.checked or row.rejected:
-                continue
-            similarity = fuzz.partial_ratio(needle, normalize(row.situation)) / 100
-            if similarity < _SELECT_THRESHOLD:
-                continue
-            weight = min(float(row.count), _COUNT_CAP) / _COUNT_CAP
-            if weight <= 0:
-                continue
-            scored.append((similarity * weight, int(row.id or 0), row))
-        scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
-        return [row for _, _, row in scored[:limit]]
-
-
 async def select_expressions(tenant: str, query: str, rows: list[ChatExpression]) -> list[ChatExpression]:
-    """表达选择：开启向量时先召回再由模型筛选，否则按模糊相似度取 top-k。"""
+    """向量模式召回后筛选；普通模式按 MaiBot 的计数权重抽样直接注入。"""
     active = [row for row in rows if row.checked and not row.rejected]
     if not active:
         return []
@@ -401,7 +341,40 @@ async def select_expressions(tenant: str, query: str, rows: list[ChatExpression]
         )
         if selected is not None:
             return selected
-    return await FuzzySelector().select(tenant, query, active, _MAX_INJECTED)
+    return sample_expression_candidates(active)
+
+
+def weighted_sample(rows: list[ChatExpression], size: int) -> list[ChatExpression]:
+    """移植 MaiBot 062d45c src/learners/weighted_sampling.py 的无放回抽样。"""
+    remaining = list(rows)
+    if len(remaining) <= size:
+        return remaining
+    selected: list[ChatExpression] = []
+    for _ in range(min(size, len(remaining))):
+        counts = [max(0.0, float(row.count or 0)) for row in remaining]
+        lower, upper = min(counts), max(counts)
+        weights = [1.0 if lower == upper else 1.0 + (value - lower) / (upper - lower) * 4 for value in counts]
+        threshold = random.uniform(0, sum(weights))
+        cumulative = 0.0
+        for index, weight in enumerate(weights):
+            cumulative += weight
+            if threshold <= cumulative:
+                selected.append(remaining.pop(index))
+                break
+    return selected
+
+
+def sample_expression_candidates(rows: list[ChatExpression]) -> list[ChatExpression]:
+    """对齐 MaisakaExpressionSelector 的普通候选池：不足 10 条不注入。"""
+    if len(rows) < 10:
+        return []
+    frequent = [row for row in rows if float(row.count or 1) > 1]
+    selected = weighted_sample(frequent, 5) if len(frequent) >= 10 else []
+    selected.extend(weighted_sample(rows, 5))
+    unique: dict[int, ChatExpression] = {}
+    for row in selected:
+        unique.setdefault(int(row.id or 0), row)
+    return list(unique.values())
 
 
 def expression_line(rows: list[ChatExpression]) -> str:
@@ -414,44 +387,3 @@ def expression_line(rows: list[ChatExpression]) -> str:
     if not pairs:
         return ""
     return sanitize_line(f"【表达参考】可以参考这些说法，不要照抄：{'；'.join(pairs)}", 600)
-
-
-def _tick_guard() -> asyncio.Lock:
-    global _tick_lock
-    if _tick_lock is None:
-        _tick_lock = asyncio.Lock()
-    return _tick_lock
-
-
-def _learn_enabled(candidate: TenantJobState) -> bool:
-    """本租户显式关闭时跳过；未设置按开启处理。"""
-    return True if candidate.learn_enabled is None else bool(candidate.learn_enabled)
-
-
-async def expression_job_tick(*, provider: Any = None, cfg: dict[str, Any] | None = None) -> int:
-    """处理所有租户；并发上限只限制同时运行的任务，候选不再被截断。"""
-    if not is_ready():
-        return 0
-    config = cfg or expression_config()
-    async with _tick_guard():
-        try:
-            snapshot = await chat_repository.scheduling_snapshot()
-        except Exception:
-            logger.opt(exception=True).debug("[ChatExpression] 读取表达学习租户失败")
-            return 0
-        candidates = sorted(
-            (candidate for candidate in snapshot if _learn_enabled(candidate)),
-            key=lambda item: item.last_message_id,
-            reverse=True,
-        )
-        semaphore = asyncio.Semaphore(max(1, int(config["max_expression_learner"])))
-
-        async def run(candidate: TenantJobState) -> bool:
-            async with semaphore:
-                return await learn_expressions(candidate.tenant, provider=provider, cfg=config)
-
-        results = await asyncio.gather(*(run(candidate) for candidate in candidates), return_exceptions=True)
-        for candidate, result in zip(candidates, results):
-            if isinstance(result, BaseException):
-                logger.opt(exception=result).warning(f"[ChatExpression] 租户表达学习失败: {candidate.tenant}")
-        return sum(1 for result in results if result is True)

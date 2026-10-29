@@ -341,15 +341,13 @@ async def set_default_ai_provider(name: str) -> dict[str, Any]:
 
 
 _ROUTING_TASKS: tuple[tuple[str, str, str], ...] = (
-    ("reply", "回复模型", "生成最终回复与工具调用"),
+    ("reply", "回复模型", "生成最终回复正文"),
     ("planner", "规划模型", "决定动作、是否接话与主动发言"),
-    ("extract", "抽取模型", "长期记忆、黑话与表达学习"),
-    ("style", "群风格模型", "归纳群聊表达风格"),
     ("vision", "视觉模型", "图片描述、表情识别与内容评审"),
     ("memory", "长期记忆模型", "A_Memorix 记忆抽取与画像整理"),
     ("utils", "通用工具模型", "工具结果压缩与辅助判断"),
-    ("learner", "表达学习模型", "学习群友表达与黑话"),
-    ("fast_model", "快速模型", "模型断句；留空沿用回复模型"),
+    ("learner", "表达学习模型", "学习群友表达与黑话；留空沿用通用工具模型"),
+    ("fast_model", "快速模型", "表达选择与模型断句；留空沿用通用工具模型"),
     ("emoji", "表情管理模型", "表情包名额已满时决定替换哪一个"),
     ("voice", "语音识别模型", "把语音消息转成文字"),
     ("tts", "语音合成模型", "把回复合成为语音"),
@@ -405,11 +403,6 @@ async def get_model_routing() -> dict[str, Any]:
         if str(config.get("provider_type") or "") in _CAPABILITIES
     ]
     default = str(chat.get("provider") or "") or _first_chat_provider(configs)
-    fallback = [
-        str(name)
-        for name in chat.get("provider_fallback") or []
-        if str(name) in configs and str(configs[str(name)].get("provider_type") or "") == "chat"
-    ]
     tasks = []
     for task, label, description in _ROUTING_TASKS:
         provider = routing.get(task, "")
@@ -430,7 +423,6 @@ async def get_model_routing() -> dict[str, Any]:
             "tasks": tasks,
             "providers": providers,
             "default_provider": default,
-            "fallback_providers": fallback,
         }
     )
 

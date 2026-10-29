@@ -4,12 +4,8 @@ from __future__ import annotations
 
 from nonebot import logger
 
-from .style import style_job_tick
 from ..emoji import emoji_config, emoji_cleanup_tick, emoji_reconcile_tick
-from .cleanup import lifecycle_tick, expression_decay_tick
-from .expression import expression_job_tick
-
-_EXPRESSION_INTERVAL_SECONDS = 300
+from .cleanup import lifecycle_tick
 
 
 def setup_memory_tasks() -> None:
@@ -20,40 +16,11 @@ def setup_memory_tasks() -> None:
         logger.warning("[ChatStorage] nonebot-plugin-apscheduler 未安装或未加载，跳过聊天后台任务")
         return
     scheduler.add_job(
-        style_job_tick,
-        trigger="interval",
-        seconds=3600,
-        id="fxbot_chat_style",
-        replace_existing=True,
-        max_instances=1,
-        coalesce=True,
-    )
-    scheduler.add_job(
-        expression_job_tick,
-        trigger="interval",
-        seconds=_EXPRESSION_INTERVAL_SECONDS,
-        id="fxbot_chat_expression",
-        replace_existing=True,
-        max_instances=1,
-        coalesce=True,
-    )
-    scheduler.add_job(
         lifecycle_tick,
         trigger="cron",
         hour=4,
         minute=30,
         id="fxbot_chat_lifecycle",
-        replace_existing=True,
-        max_instances=1,
-        coalesce=True,
-    )
-    scheduler.add_job(
-        expression_decay_tick,
-        trigger="cron",
-        day_of_week="mon",
-        hour=4,
-        minute=20,
-        id="fxbot_chat_expression_decay",
         replace_existing=True,
         max_instances=1,
         coalesce=True,
@@ -88,7 +55,7 @@ def setup_memory_tasks() -> None:
         coalesce=True,
     )
     logger.info(
-        f"[ChatStorage] 聊天任务已注册: 风格每小时；表达每 {_EXPRESSION_INTERVAL_SECONDS} 秒；"
-        f"生命周期每日 04:30、表达衰减每周一 04:20；"
+        "[ChatStorage] 聊天任务已注册: 表达和黑话从裁切素材学习；"
+        "生命周期每日 04:30；"
         f"表情补识别每 {check_minutes} 分钟、缓存每 {cleanup_hours:g} 小时"
     )

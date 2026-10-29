@@ -35,6 +35,8 @@ from src.plugins.nonebot_plugin_fxbot.chat.message_receive import sender as send
 from src.plugins.nonebot_plugin_fxbot.chat.behavior.debounce import PendingBatch
 from src.plugins.nonebot_plugin_fxbot.chat.memory.repository import ChatRepository, chat_repository
 
+from .support import RouterUnitTests, ReplyPipelineTests
+
 
 def _utc(hour: int) -> datetime:
     """构造测试用 naive UTC。"""
@@ -80,7 +82,7 @@ class _TypoSilent:
 class _FakeProvider:
     """固定返回一条回复。"""
 
-    async def chat(self, messages: list[dict[str, object]], tools: object = None) -> LLMResponse:
+    async def chat(self, messages: list[dict[str, object]], tools: object = None, **kwargs) -> LLMResponse:
         return LLMResponse(content="回复")
 
 
@@ -479,7 +481,7 @@ class TurnPersistenceTests(unittest.IsolatedAsyncioTestCase):
         mark.assert_awaited_once_with("tenant", 5, "pmid", generation=0)
 
 
-class RestartContinuityTests(unittest.IsolatedAsyncioTestCase):
+class RestartContinuityTests(ReplyPipelineTests):
     """真实服务与数据库走完一轮后，新实例能恢复上下文。"""
 
     async def asyncSetUp(self) -> None:
@@ -512,7 +514,7 @@ class RestartContinuityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             store.get(self.tenant),
             [
-                {"role": "user", "content": "Alice(user): 你好"},
+                {"role": "user", "content": "Alice(user): 你好", "_sender_id": "user"},
                 {"role": "assistant", "content": "回复"},
             ],
         )
@@ -637,6 +639,9 @@ class SendTraceTests(unittest.IsolatedAsyncioTestCase):
         response = ChatResponse(text="第一段。第二段。", epoch=0, metadata={"reply_parts": ["第一段", "第二段"]})
         with (
             patch.object(sender_module, "typing_time", return_value=0.0),
+            patch.object(
+                sender_module, "apply_typo", side_effect=lambda text: SimpleNamespace(text=text, correction=None)
+            ),
             patch.object(sender_module, "send_voice", AsyncMock()),
             patch.object(sender_module, "send_emoji", AsyncMock()),
         ):
@@ -668,7 +673,7 @@ class SendTraceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("net down", row.error)
 
 
-class SendStateTests(unittest.IsolatedAsyncioTestCase):
+class SendStateTests(ReplyPipelineTests):
     """真实服务下的空响应、发送失败与清空失效。"""
 
     async def asyncSetUp(self) -> None:
@@ -709,7 +714,7 @@ class SendStateTests(unittest.IsolatedAsyncioTestCase):
         await service.mark_sending(request, response)
         await service.mark_send_failed(request, response, RuntimeError("net down"))
 
-        user = {"role": "user", "content": "Alice(user): 你好"}
+        user = {"role": "user", "content": "Alice(user): 你好", "_sender_id": "user"}
         self.assertEqual(store.get(self.tenant), [user])
         self.assertEqual((await self._turn(request)).status, "failed")
         self.assertEqual(await chat_repository.get_recent_messages(self.tenant, 10), [user])
@@ -719,7 +724,7 @@ class SendStateTests(unittest.IsolatedAsyncioTestCase):
         store = ChatSessionStore()
 
         class _EmptyProvider:
-            async def chat(self, messages: list[dict[str, object]], tools: object = None) -> LLMResponse:
+            async def chat(self, messages: list[dict[str, object]], tools: object = None, **kwargs) -> LLMResponse:
                 return LLMResponse(content="  ")
 
         @asynccontextmanager
@@ -734,7 +739,7 @@ class SendStateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((turn.status, turn.error), ("failed", "空响应"))
         self.assertEqual(
             await chat_repository.get_recent_messages(self.tenant, 10),
-            [{"role": "user", "content": "Alice(user): 你好"}],
+            [{"role": "user", "content": "Alice(user): 你好", "_sender_id": "user"}],
         )
 
     async def test_clear_during_generation_aborts_turn(self) -> None:
@@ -743,7 +748,7 @@ class SendStateTests(unittest.IsolatedAsyncioTestCase):
         tenant = self.tenant
 
         class _ClearingProvider:
-            async def chat(self, messages: list[dict[str, object]], tools: object = None) -> LLMResponse:
+            async def chat(self, messages: list[dict[str, object]], tools: object = None, **kwargs) -> LLMResponse:
                 store.clear(tenant)
                 return LLMResponse(content="回复")
 
@@ -758,7 +763,7 @@ class SendStateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self._turn(request)).status, "aborted")
         self.assertEqual(
             await chat_repository.get_recent_messages(self.tenant, 10),
-            [{"role": "user", "content": "Alice(user): 你好"}],
+            [{"role": "user", "content": "Alice(user): 你好", "_sender_id": "user"}],
         )
 
     async def test_duplicate_send_is_recorded_once(self) -> None:
@@ -772,7 +777,7 @@ class SendStateTests(unittest.IsolatedAsyncioTestCase):
             await service.mark_sent(request, response, 0, "pmid")
 
         expected = [
-            {"role": "user", "content": "Alice(user): 你好"},
+            {"role": "user", "content": "Alice(user): 你好", "_sender_id": "user"},
             {"role": "assistant", "content": "回复"},
         ]
         self.assertEqual(store.get(self.tenant), expected)
@@ -793,7 +798,7 @@ class SendStateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self._turn(request)).status, "aborted")
         self.assertEqual(
             await chat_repository.get_recent_messages(self.tenant, 10),
-            [{"role": "user", "content": "Alice(user): 你好"}],
+            [{"role": "user", "content": "Alice(user): 你好", "_sender_id": "user"}],
         )
 
     async def test_other_user_trigger_does_not_abort(self) -> None:
@@ -816,7 +821,7 @@ class SendStateTests(unittest.IsolatedAsyncioTestCase):
         request.accepted_epoch = store.epoch(tenant)
 
         class _InterruptingProvider:
-            async def chat(self, messages: list[dict[str, object]], tools: object = None) -> LLMResponse:
+            async def chat(self, messages: list[dict[str, object]], tools: object = None, **kwargs) -> LLMResponse:
                 store.next_seq(tenant, user_id)
                 return LLMResponse(content="回复")
 
@@ -831,7 +836,7 @@ class SendStateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self._turn(request)).status, "aborted")
         self.assertEqual(
             await chat_repository.get_recent_messages(self.tenant, 10),
-            [{"role": "user", "content": "Alice(user): 你好"}],
+            [{"role": "user", "content": "Alice(user): 你好", "_sender_id": "user"}],
         )
 
     async def test_cleared_queued_turn_is_dropped(self) -> None:
@@ -866,7 +871,7 @@ class SendStateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((item.send_status, item.visible), ("skipped", False))
         self.assertEqual(
             await chat_repository.get_recent_messages(self.tenant, 10),
-            [{"role": "user", "content": "Alice(user): 你好"}],
+            [{"role": "user", "content": "Alice(user): 你好", "_sender_id": "user"}],
         )
 
 
@@ -902,7 +907,7 @@ class _NoMergeRandom:
 _LONG_PARTS = ["第一段。" * 33 + "第一段", "第一段。" * 32 + "第一段", "第一段。" * 32 + "第一段"]
 
 
-class SplitSendTests(unittest.IsolatedAsyncioTestCase):
+class SplitSendTests(ReplyPipelineTests):
     """长回复拆分、分段失败与同租户串行发送。"""
 
     async def asyncSetUp(self) -> None:
@@ -930,7 +935,7 @@ class SplitSendTests(unittest.IsolatedAsyncioTestCase):
         @asynccontextmanager
         async def lease(_name: str):
             class _Provider:
-                async def chat(self, messages: list[dict[str, object]], tools: object = None) -> LLMResponse:
+                async def chat(self, messages: list[dict[str, object]], tools: object = None, **kwargs) -> LLMResponse:
                     return LLMResponse(content=text)
 
             yield _Provider()
@@ -994,7 +999,7 @@ class SplitSendTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([item.send_status for item in items], ["failed", "skipped", "skipped"])
         self.assertEqual(
             await chat_repository.get_recent_messages(self.tenant, 10),
-            [{"role": "user", "content": "User(user): 你好"}],
+            [{"role": "user", "content": "User(user): 你好", "_sender_id": "user"}],
         )
 
     async def test_middle_segment_failure_keeps_sent_history(self) -> None:
@@ -1012,7 +1017,7 @@ class SplitSendTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             await chat_repository.get_recent_messages(self.tenant, 10),
             [
-                {"role": "user", "content": "User(user): 你好"},
+                {"role": "user", "content": "User(user): 你好", "_sender_id": "user"},
                 {"role": "assistant", "content": _LONG_PARTS[0]},
             ],
         )
@@ -1027,7 +1032,7 @@ class SplitSendTests(unittest.IsolatedAsyncioTestCase):
             request.accepted_epoch = store.epoch(self.tenant)
 
         class _LabelledProvider:
-            async def chat(self, messages: list[dict[str, object]], tools: object = None) -> LLMResponse:
+            async def chat(self, messages: list[dict[str, object]], tools: object = None, **kwargs) -> LLMResponse:
                 content = str(messages[-1].get("content", ""))
                 mark = "甲" if "甲" in content else "乙"
                 return LLMResponse(content=f"{mark * 101}。" * 3)
@@ -1055,13 +1060,15 @@ class SplitSendTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(marks[0], marks[3])
 
 
-class RouterSendTests(unittest.IsolatedAsyncioTestCase):
+class RouterSendTests(RouterUnitTests):
     """路由只负责调用服务层发送，并按发送结果结束事件。"""
 
     def _service(self, sent: bool = True) -> SimpleNamespace:
         return SimpleNamespace(
             session_store=ChatSessionStore(),
             ensure_hydrated=AsyncMock(),
+            queue_message=AsyncMock(return_value=False),
+            record_group_message=AsyncMock(),
             process_and_send=AsyncMock(return_value=sent),
         )
 
@@ -1082,13 +1089,13 @@ class RouterSendTests(unittest.IsolatedAsyncioTestCase):
         ):
             await router._handle_ai_fallback(SimpleNamespace(), SimpleNamespace(), matcher)
 
-    async def test_finishes_after_successful_send(self) -> None:
+    async def test_dispatch_does_not_finish_background_turn(self) -> None:
         service = self._service()
         matcher = SimpleNamespace(finish=AsyncMock())
         await self._handle(service, matcher)
 
         service.process_and_send.assert_awaited_once()
-        matcher.finish.assert_awaited_once_with()
+        matcher.finish.assert_not_awaited()
 
     async def test_failed_send_does_not_finish(self) -> None:
         service = self._service(sent=False)
@@ -1098,16 +1105,16 @@ class RouterSendTests(unittest.IsolatedAsyncioTestCase):
         service.process_and_send.assert_awaited_once()
         matcher.finish.assert_not_awaited()
 
-    async def test_processing_error_reports_unavailable(self) -> None:
+    async def test_background_error_is_not_sent_to_user(self) -> None:
         service = self._service()
         service.process_and_send = AsyncMock(side_effect=RuntimeError("boom"))
         matcher = SimpleNamespace(finish=AsyncMock())
         await self._handle(service, matcher)
 
-        matcher.finish.assert_awaited_once_with("AI 服务暂时不可用")
+        matcher.finish.assert_not_awaited()
 
 
-class ClearTests(unittest.IsolatedAsyncioTestCase):
+class ClearTests(ReplyPipelineTests):
     """清空内存、数据库与持久化代次。"""
 
     async def asyncSetUp(self) -> None:
@@ -1194,7 +1201,9 @@ class ClearTests(unittest.IsolatedAsyncioTestCase):
                 request = _request(session_id=self.tenant, turn_id=uuid4().hex, dedupe_key=uuid4().hex)
 
                 class _PausedProvider:
-                    async def chat(self, messages: list[dict[str, object]], tools: object = None) -> LLMResponse:
+                    async def chat(
+                        self, messages: list[dict[str, object]], tools: object = None, **kwargs
+                    ) -> LLMResponse:
                         started.set()
                         await release.wait()
                         return LLMResponse(content="清空前启动的回复")
@@ -1307,10 +1316,10 @@ class _MutableConfig:
         }
 
 
-class MaxHistoryTests(unittest.IsolatedAsyncioTestCase):
+class MaxHistoryTests(ReplyPipelineTests):
     """配置热更新立即影响历史裁剪。"""
 
-    async def test_hot_reload_trims_immediately(self) -> None:
+    async def test_hot_reload_preserves_minimum_history(self) -> None:
         config = _MutableConfig(10)
         store = ChatSessionStore()
         service = ChatService(store)
@@ -1323,7 +1332,7 @@ class MaxHistoryTests(unittest.IsolatedAsyncioTestCase):
             config.max_context_size = 1
             await service.process(_request(session_id="hot", turn_id="turn-2", dedupe_key="msg:2"))
 
-        self.assertEqual(len(store.get("hot")), 1)
+        self.assertEqual(len(store.get("hot")), 2)
 
 
 class _SplitConfig:
@@ -1366,10 +1375,11 @@ class HistoryLimitTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([call.args[1] for call in hydrate.await_args_list], [3, 10])
 
 
-class ZeroHistoryLimitTests(unittest.IsolatedAsyncioTestCase):
+class ZeroHistoryLimitTests(ReplyPipelineTests):
     """上限为 0 时不落库、不累积，但仍照常生成回复。"""
 
     async def asyncSetUp(self) -> None:
+        self.enterContext(patch.object(typo_module, "get_config_manager", return_value=_TypoSilent()))
         await base_models.init_database()
         await migrate.ensure_schema()
         memory_state.mark_ready()
@@ -1434,14 +1444,14 @@ class ZeroHistoryLimitTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             store.get(self.tenant),
             [
-                {"role": "user", "content": "Alice(user): 你好"},
+                {"role": "user", "content": "Alice(user): 你好", "_sender_id": "user"},
                 {"role": "assistant", "content": "回复"},
             ],
         )
         self.assertNotEqual(await chat_repository.get_recent_messages(self.tenant, 10), [])
 
 
-class BatchPersistenceTests(unittest.IsolatedAsyncioTestCase):
+class BatchPersistenceTests(ReplyPipelineTests):
     """合并批次逐条落库，合并内容只作为本轮 user 条目。"""
 
     async def asyncSetUp(self) -> None:
@@ -1489,8 +1499,8 @@ class BatchPersistenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             await chat_repository.get_recent_messages(self.tenant, 10),
             [
-                {"role": "user", "content": "Alice(user): 你好"},
-                {"role": "user", "content": "Alice(user): 在吗"},
+                {"role": "user", "content": "Alice(user): 你好", "_source_ids": ["1"], "_sender_id": "user"},
+                {"role": "user", "content": "Alice(user): 在吗", "_source_ids": ["2"], "_sender_id": "user"},
             ],
         )
         async with base_models.async_maker() as session:

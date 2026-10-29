@@ -42,7 +42,7 @@ def _scope_key(request: Any) -> str:
     """组身份基于规则内容而非列表顺序；不在任何组内时各聊天独立。"""
     groups = focus_config()["groups"] or []
     if not groups:
-        return "global"
+        return "session:" + request.session_id
     for group in groups:
         targets = group.get("targets") if isinstance(group, dict) else None
         if not isinstance(targets, list) or not any(_target_matches(target, request) for target in targets):

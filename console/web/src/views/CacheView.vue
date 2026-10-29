@@ -141,7 +141,7 @@ onMounted(() => {
 
     <div class="panel">
       <h3 class="panel-title">缓存域明细</h3>
-      <el-table v-loading="loading" :data="stats?.domains ?? []" row-key="domain" empty-text="暂无缓存域">
+      <el-table :data="stats?.domains ?? []" row-key="domain" empty-text="暂无缓存域">
         <el-table-column prop="domain" label="缓存域" min-width="180" show-overflow-tooltip />
         <el-table-column prop="entries" label="条目数" width="90" />
         <el-table-column label="占用" min-width="110">
@@ -174,7 +174,7 @@ onMounted(() => {
         <span v-else>{{ keysLoading ? '加载中…' : '加载失败，请刷新重试' }}</span>
         <el-button :icon="Refresh" :loading="keysLoading" :disabled="clearing || loading" @click="loadKeys">刷新键列表</el-button>
       </div>
-      <el-table v-loading="keysLoading" :data="keys?.keys ?? []" row-key="key" empty-text="暂无缓存键" max-height="500">
+      <el-table :data="keys?.keys ?? []" row-key="key" empty-text="暂无缓存键" max-height="500">
         <el-table-column prop="key" label="键名" min-width="240" show-overflow-tooltip />
         <el-table-column label="占用" min-width="110">
           <template #default="{ row }">{{ formatBytes(row.bytes) }}</template>

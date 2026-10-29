@@ -648,7 +648,6 @@ onMounted(() => {
                 </div>
               </div>
               <el-table
-                v-loading="expressionLoading"
                 :data="filteredExpressions"
                 row-key="id"
                 empty-text="暂无表达方式"
@@ -733,7 +732,6 @@ onMounted(() => {
                 </div>
               </div>
               <el-table
-                v-loading="jargonLoading"
                 :data="filteredJargon"
                 row-key="id"
                 empty-text="暂无黑话条目"
@@ -858,7 +856,7 @@ onMounted(() => {
                   <div class="side-hint">
                     聊天中收集的表情会自动识别并在名额内注册；已注册表情按描述匹配回复，同一表情冷却 5 分钟。
                   </div>
-                  <div v-loading="emojiLoading" class="emoji-grid">
+                  <div class="emoji-grid">
                     <div v-for="row in emojis" :key="row.hash" class="emoji-card">
                       <div class="emoji-card-image-wrap">
                         <img
@@ -913,7 +911,7 @@ onMounted(() => {
     </div>
 
     <el-drawer v-model="styleDrawer" title="群风格" size="560px">
-      <div v-loading="styleLoading" class="drawer-body">
+      <div class="drawer-body">
         <template v-if="style">
           <div class="style-summary">
             <el-tag v-if="style.manual_override" size="small" type="warning" class="summary-tag">人工覆盖</el-tag>

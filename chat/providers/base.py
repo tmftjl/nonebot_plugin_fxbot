@@ -62,9 +62,10 @@ class ChatProvider(BaseProvider):
         model: str | None = None,
         temperature: float = 0.7,
         tools: list[dict[str, Any]] | None = None,
+        max_tokens: int | None = None,
     ) -> AsyncGenerator[LLMResponse, None]:
         """流式对话，默认降级为普通对话。"""
-        response = await self.chat(messages, model, temperature, tools)
+        response = await self.chat(messages, model, temperature, tools, max_tokens)
         yield response
 
     async def chat_json(

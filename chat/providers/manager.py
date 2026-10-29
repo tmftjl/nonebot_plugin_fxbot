@@ -146,6 +146,17 @@ class ProviderManager:
 
         raise ValueError(f"未找到 {capability} Provider 配置: {name or '<default>'}")
 
+    @asynccontextmanager
+    async def lease_snapshot(self, name: str, config: dict[str, Any]) -> AsyncIterator[ChatProvider]:
+        """按成功请求保存的配置创建临时实例，避免热重载改变压缩请求前缀。"""
+        provider = self._create_provider(name, config)
+        try:
+            if not isinstance(provider, ChatProvider):
+                raise TypeError("请求快照需要对话 Provider")
+            yield provider
+        finally:
+            await self._release(provider)
+
     def _create_provider(self, name: str, config: dict[str, Any]) -> BaseProvider:
         """创建 Provider 实例。"""
         api_type = str(config["type"])

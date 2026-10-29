@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import json
+from copy import deepcopy
 from uuid import uuid4
 from typing import Any
 from hashlib import sha256
@@ -17,7 +18,7 @@ from nonebot import logger
 
 from ...utils.paths import data_dir
 
-CHECKPOINT_VERSION = 1
+CHECKPOINT_VERSION = 2
 
 
 @dataclass
@@ -31,11 +32,12 @@ class FocusEntry:
     is_at: bool = False
     # 每个会话对应的平台消息 ID；撤回时据此整条丢弃，不随 inputs 被剪掉
     sources: dict[str, list[str]] = field(default_factory=dict)
+    watermarks: dict[str, int] = field(default_factory=dict)
 
     @property
     def progress(self) -> dict[str, int]:
         """这一条对应的各会话输入进度。"""
-        return dict.fromkeys(self.session_ids, self.sequence) if self.sequence else {}
+        return dict(self.watermarks) or (dict.fromkeys(self.session_ids, self.sequence) if self.sequence else {})
 
     def prune_inputs(self, considered: dict[str, int]) -> None:
         """丢弃已被确认的输入编号。"""
@@ -61,6 +63,7 @@ class FocusCheckpointStore:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
             if payload.get("version") != CHECKPOINT_VERSION or payload.get("scope_id") != self.scope_id:
                 raise ValueError("检查点版本或共享组身份不匹配")
+            restore_entries(payload)
             return payload
         except Exception as exc:
             logger.warning(f"[ChatFocus] 检查点读取失败，按空上下文启动: {self.scope_id} ({type(exc).__name__}: {exc})")
@@ -71,6 +74,12 @@ class FocusCheckpointStore:
         payload = {
             "version": CHECKPOINT_VERSION,
             "scope_id": self.scope_id,
+            "sequence": 0,
+            "considered": {},
+            "seen": [],
+            "wait_until": None,
+            "wait_session_id": None,
+            "consecutive_waits": 0,
             **state,
             "entries": [
                 {
@@ -79,6 +88,8 @@ class FocusCheckpointStore:
                     "sequence": entry.sequence,
                     "inputs": entry.inputs,
                     "sources": entry.sources,
+                    "is_at": entry.is_at,
+                    "watermarks": entry.watermarks,
                 }
                 for entry in entries
             ],
@@ -110,11 +121,12 @@ class FocusCheckpointStore:
                     raise ValueError("检查点路径与共享组身份不匹配")
                 if scope_id in loaded_scopes:
                     continue
-                entries = payload.get("entries") or []
+                restore_entries(payload)
+                entries = payload["entries"]
                 kept = [
                     entry
                     for entry in entries
-                    if not any(session_id in (entry.get(key) or []) for key in ("session_ids", "inputs", "sources"))
+                    if not any(session_id in entry[key] for key in ("session_ids", "inputs", "sources", "watermarks"))
                 ]
                 considered = dict(payload.get("considered") or {})
                 considered.pop(session_id, None)
@@ -128,7 +140,7 @@ class FocusCheckpointStore:
                     continue
                 updated = {**payload, "entries": kept, "considered": considered, "seen": seen}
                 if payload.get("wait_session_id") == session_id:
-                    updated.update(wait_until=None, wait_session_id=None)
+                    updated.update(wait_until=None, wait_session_id=None, consecutive_waits=0)
             except Exception as exc:
                 logger.warning(f"[ChatFocus] 检查点清理跳过: {path.name} ({type(exc).__name__}: {exc})")
                 continue
@@ -136,26 +148,56 @@ class FocusCheckpointStore:
 
 
 def restore_entries(payload: dict[str, Any]) -> list[FocusEntry]:
-    """把检查点里的条目还原成对象；坏条目整条跳过。"""
+    """只读取当前检查点结构，缺失字段或错误类型不做转换。"""
     entries: list[FocusEntry] = []
-    for item in payload.get("entries") or []:
-        try:
-            entries.append(
-                FocusEntry(
-                    [message for message in item["messages"] if isinstance(message, dict)],
-                    set(item.get("session_ids") or []),
-                    int(item.get("sequence") or 0),
-                    {
-                        str(sid): [list(record) for record in records]
-                        for sid, records in (item.get("inputs") or {}).items()
-                    },
-                    sources={
-                        str(sid): [str(key) for key in keys]
-                        for sid, keys in (item.get("sources") or {}).items()
-                        if isinstance(keys, list)
-                    },
-                )
+    for item in payload["entries"]:
+        if (
+            not isinstance(item["messages"], list)
+            or not all(isinstance(message, dict) for message in item["messages"])
+            or not isinstance(item["session_ids"], list)
+            or not all(isinstance(sid, str) for sid in item["session_ids"])
+            or type(item["sequence"]) is not int
+            or type(item["is_at"]) is not bool
+            or not isinstance(item["inputs"], dict)
+            or not isinstance(item["sources"], dict)
+            or not isinstance(item["watermarks"], dict)
+        ):
+            raise ValueError("Focus 检查点条目类型无效")
+        entries.append(
+            FocusEntry(
+                messages=deepcopy(item["messages"]),
+                session_ids=set(item["session_ids"]),
+                sequence=item["sequence"],
+                inputs=deepcopy(item["inputs"]),
+                is_at=item["is_at"],
+                sources=deepcopy(item["sources"]),
+                watermarks=dict(item["watermarks"]),
             )
-        except (KeyError, TypeError, ValueError):
-            continue
+        )
     return entries
+
+
+def closed_entry(entry: FocusEntry) -> FocusEntry:
+    """保存时为中断的工具调用补未知状态，不改实时批次也不自动重放。"""
+    snapshot = deepcopy(entry)
+    completed = {message.get("tool_call_id") for message in snapshot.messages if message.get("role") == "tool"}
+    for message in list(snapshot.messages):
+        for call in message.get("tool_calls", []):
+            if call["id"] not in completed:
+                snapshot.messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call["id"],
+                        "name": call["function"]["name"],
+                        "content": json.dumps(
+                            {
+                                "ok": False,
+                                "execution_state": "unknown",
+                                "error": "运行进程在工具批次中断；此调用的完成状态需要核实，禁止自动重放。",
+                            },
+                            ensure_ascii=False,
+                        ),
+                    }
+                )
+                completed.add(call["id"])
+    return snapshot

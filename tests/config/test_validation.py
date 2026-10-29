@@ -35,8 +35,8 @@ class SystemConfigValidationTests(unittest.TestCase):
             {"chat": {"expression": {"max_expression_learner": 21}}},
             {"chat": {"expression": {"max_expression_learner": True}}},
             {"chat": {"planner": None}},
-            {"chat": {"planner": {"mode": "smart"}}},
-            {"chat": {"planner": {"wait_seconds": 29}}},
+            {"chat": {"planner": {"passive_replyer": "yes"}}},
+            {"chat": {"planner": {"context_summary_max_chars": -1}}},
             {"chat": {"behavior": None}},
             {"chat": {"behavior": {"enable_reply_at": 1}}},
             {"chat": {"behavior": {"group_quote_frequency": "sometimes"}}},
@@ -74,7 +74,7 @@ class SystemConfigValidationTests(unittest.TestCase):
                     "max_context_size": 0,
                     "jargon": {"learning_list": []},
                     "expression": {"checked_only": True},
-                    "planner": {"mode": "complex"},
+                    "planner": {"passive_replyer": True},
                 }
             }
         )
@@ -101,9 +101,7 @@ class SystemConfigValidationTests(unittest.TestCase):
         self.assertEqual(
             data["chat"]["planner"],
             {
-                "mode": "complex",
-                "wait_seconds": 60,
                 "context_summary_max_chars": 6000,
-                "passive_replyer": False,
+                "passive_replyer": True,
             },
         )

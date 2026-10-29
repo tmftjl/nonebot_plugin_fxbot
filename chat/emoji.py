@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-import json
 import math
 import base64
 import random
@@ -16,29 +15,24 @@ from datetime import datetime, timedelta
 
 from PIL import Image, ImageDraw, ImageFont
 from nonebot import logger
-from rapidfuzz import fuzz
 
-from .vision import review_emoji, describe_emoji
+from .vision import review_emoji, describe_emoji, vision_configured
 from ..config import get_manager as get_config_manager
+from .personas import DEFAULT_PERSONA
 from ..utils.paths import config_dir
 from .memory.models import ChatEmoji, utc_now_naive
+from .memory.prompts import learning_prompt
 from .message_adapter import load_image_bytes, emoji_sources_for_event
 from .memory.repository import chat_repository
 from .providers.routing import routed_task, fallback_provider
 
 MAX_EMOJI_BYTES = 5 * 1024 * 1024
-EMOJI_COOLDOWN = timedelta(minutes=5)
 _THUMB_SIZE = 320
 _COLLAGE_TILE = 256
-_COLLAGE_BADGE = 48
+_COLLAGE_BADGE = 64
 _MAX_REPLACE_CANDIDATES = 20  # 对齐 MaiBot emoji_manager.MAX_EMOJI_FOR_PROMPT
-_ANALYZE_CONCURRENCY = 2
-_MIN_SCORE = 45
-_TOP_PICKS = 3
 
-_analysis_tasks: dict[str, asyncio.Task[None]] = {}
 _tenant_locks: dict[str, asyncio.Lock] = {}
-_analysis_slots = asyncio.Semaphore(_ANALYZE_CONCURRENCY)
 
 
 def emoji_config() -> dict[str, Any]:
@@ -122,11 +116,11 @@ def _tenant_lock(tenant: str) -> asyncio.Lock:
 
 
 async def collect_from_event(tenant: str, event: Any) -> None:
-    """从消息里采集表情包；下载、去重后安排后台识别。"""
+    """从消息采集并去重，识别注册由周期维护执行。"""
     if not emoji_config().get("steal_emoji", True):
         return
     limit = _max_collect_bytes()
-    for source in emoji_sources_for_event(event)[:3]:
+    for source in emoji_sources_for_event(event):
         try:
             data = await load_image_bytes(source, limit=limit)
         except Exception as exc:
@@ -143,7 +137,6 @@ async def collect_from_event(tenant: str, event: Any) -> None:
         except Exception:
             logger.opt(exception=True).debug("[ChatEmoji] 表情采集落盘失败")
             continue
-        _schedule_analysis(tenant, digest, path)
 
 
 def collect_in_background(tenant: str, event: Any) -> None:
@@ -158,66 +151,49 @@ def collect_in_background(tenant: str, event: Any) -> None:
     asyncio.create_task(run())
 
 
-def _schedule_analysis(tenant: str, digest: str, path: Path) -> None:
-    """同一租户同一哈希只保留一个后台识别任务。"""
-    key = f"{tenant}:{digest}"
-    running = _analysis_tasks.get(key)
-    if running is not None and not running.done():
-        return
-    task = asyncio.create_task(_analyze(tenant, digest, path))
-    _analysis_tasks[key] = task
-
-    def finish(done: asyncio.Task[None]) -> None:
-        if _analysis_tasks.get(key) is done:
-            _analysis_tasks.pop(key, None)
-
-    task.add_done_callback(finish)
-
-
-async def _analyze(tenant: str, digest: str, path: Path) -> None:
-    """后台识别表情：描述、审核、按名额注册。"""
-    cfg = emoji_config()
-    async with _analysis_slots:
+async def _analyze(tenant: str, digest: str, path: Path) -> bool:
+    """串行完成当前会话的识别、审核和注册，避免并发占用同一名额。"""
+    async with _tenant_lock(tenant):
+        cfg = emoji_config()
+        maximum = int(cfg.get("max_reg_num", 64))
+        row = await chat_repository.get_emoji(tenant, digest)
+        if row is None or not row.enabled or row.registered or row.vlm_processed:
+            return False
+        counts = await chat_repository.count_emoji(tenant)
+        if maximum <= 0 or (counts["registered"] >= maximum and not cfg.get("do_replace", True)):
+            return False
         try:
             data = await asyncio.to_thread(path.read_bytes)
         except OSError:
-            return
+            return False
         url = f"data:{_mime(data)};base64,{base64.b64encode(data).decode('ascii')}"
+        description, tags, passed = "", [], False
         try:
-            async with fallback_provider("vision", tenant) as provider:
-                description, tags = await describe_emoji(provider, url)
-                passed = bool(description)
-                if passed and cfg.get("content_filtration"):
-                    passed = await review_emoji(provider, url)
+            if vision_configured(get_config_manager().get_system()["chat"]):
+                async with fallback_provider("vision", tenant) as provider:
+                    description, tags = await describe_emoji(provider, url)
+                    passed = bool(description)
+                    if passed and emoji_config().get("content_filtration"):
+                        passed = await review_emoji(provider, url)
         except Exception:
-            logger.opt(exception=True).debug("[ChatEmoji] 表情识别失败，保留待审核")
-            return
-        if not description:
-            return
+            logger.opt(exception=True).warning("[ChatEmoji] 表情识别失败，本次维护不再重试")
         try:
             await chat_repository.set_emoji_analysis(tenant, digest, description=description, tags=tags, passed=False)
-            if passed and await _ensure_slot(tenant, description):
-                await chat_repository.set_emoji_registered(tenant, digest, True)
+            row = await chat_repository.get_emoji(tenant, digest)
+            if not passed or row is None or not row.enabled:
+                return False
+            cfg = emoji_config()
+            maximum = int(cfg.get("max_reg_num", 64))
+            if maximum <= 0:
+                return False
+            counts = await chat_repository.count_emoji(tenant)
+            if counts["registered"] >= maximum:
+                if not cfg.get("do_replace", True) or not await _replace_by_llm(tenant, description, maximum):
+                    return False
+            return await chat_repository.set_emoji_registered(tenant, digest, True)
         except Exception:
             logger.opt(exception=True).warning("[ChatEmoji] 表情注册写库失败")
-
-
-async def _ensure_slot(tenant: str, description: str) -> bool:
-    """检查注册名额；满额时按配置替换旧表情。"""
-    cfg = emoji_config()
-    try:
-        maximum = int(cfg.get("max_reg_num", 64))
-    except (TypeError, ValueError):
-        maximum = 64
-    if maximum <= 0:
-        return False
-    async with _tenant_lock(tenant):
-        counts = await chat_repository.count_emoji(tenant)
-        if counts["registered"] < maximum:
-            return True
-        if not cfg.get("do_replace", True):
             return False
-        return await _replace_by_llm(tenant, description, maximum)
 
 
 async def _replace_by_llm(tenant: str, description: str, maximum: int) -> bool:
@@ -230,21 +206,30 @@ async def _replace_by_llm(tenant: str, description: str, maximum: int) -> bool:
         weights=[1 / (row.count + 1) for row in rows],
         k=min(_MAX_REPLACE_CANDIDATES, len(rows)),
     )
-    unique = list({row.hash: row for row in picked}.values())
     lines = [
-        f"编号: {index}\n描述: {row.description or '无描述'}\n使用次数: {row.count}"
-        for index, row in enumerate(unique, 1)
+        f"编号: {index}\n描述: {row.description}\n使用次数: {row.count}\n"
+        f"添加时间: {row.register_time.strftime('%Y-%m-%d %H:%M:%S') if row.register_time else '未知时间'}\n"
+        for index, row in enumerate(picked, 1)
     ]
-    prompt = (
-        f"机器人的可发送表情包数量已满({len(rows)}/{maximum})，"
-        "需要决定是否取消注册一个旧表情包来为新表情包腾出名额。\n\n"
-        f"新表情包信息：\n描述: {description or '无描述'}\n\n"
-        "现有表情包列表：\n" + "\n".join(lines) + "\n\n"
-        "请只回答：'不取消注册'或'取消注册编号X'（X为表情包编号）。"
+    prompt = learning_prompt(
+        "emoji_replace",
+        nickname=get_config_manager().get_system()["chat"].get("persona") or DEFAULT_PERSONA,
+        emoji_num=len(rows),
+        emoji_num_max=maximum,
+        emoji_list="\n".join(lines),
+        description=description or "无描述",
     )
     try:
-        async with fallback_provider(routed_task("emoji", "planner"), tenant) as provider:
-            response = await provider.chat([{"role": "user", "content": prompt}], temperature=0.1, max_tokens=32)
+        task = routed_task("emoji", "planner")
+        async with fallback_provider(task, tenant) as provider:
+            response = await asyncio.wait_for(
+                provider.chat(
+                    [{"role": "user", "content": prompt}],
+                    temperature=0.7,
+                    max_tokens=8192 if task == "emoji" else 16384,
+                ),
+                timeout=120 if task == "emoji" else 180,
+            )
     except Exception:
         logger.opt(exception=True).debug("[ChatEmoji] 替换决策失败")
         return False
@@ -255,9 +240,9 @@ async def _replace_by_llm(tenant: str, description: str, maximum: int) -> bool:
     if not match:
         return False
     index = int(match.group(1)) - 1
-    if not 0 <= index < len(unique):
+    if not 0 <= index < len(picked):
         return False
-    return await chat_repository.set_emoji_registered(tenant, unique[index].hash, False)
+    return await chat_repository.set_emoji_registered(tenant, picked[index].hash, False)
 
 
 async def cleanup_emoji_cache(*, now: datetime | None = None) -> dict[str, int]:
@@ -285,16 +270,22 @@ async def cleanup_emoji_cache(*, now: datetime | None = None) -> dict[str, int]:
 
 
 async def reconcile_emoji_cache() -> None:
-    """补识别上次没处理完的表情，文件不在的跳过等清理。"""
+    """周期识别未处理表情，每个会话成功注册一个后结束本次维护。"""
+    if not emoji_config().get("steal_emoji", True):
+        return
     try:
-        rows = await chat_repository.list_unanalyzed_emoji(limit=20)
+        rows = await chat_repository.list_unanalyzed_emoji()
     except Exception:
         logger.opt(exception=True).debug("[ChatEmoji] 表情补识别读取失败")
         return
+    registered = set()
     for row in rows:
+        if row.tenant in registered:
+            continue
         path = Path(row.path)
         if path.is_file():
-            _schedule_analysis(row.tenant, row.hash, path)
+            if await _analyze(row.tenant, row.hash, path):
+                registered.add(row.tenant)
 
 
 async def emoji_reconcile_tick() -> None:
@@ -327,50 +318,6 @@ async def save_emoji(tenant: str, data: bytes, *, description: str = "", tags: l
     return await chat_repository.save_emoji(tenant, digest, str(path), description=description, tags=tags or [])
 
 
-def _tags(row: ChatEmoji) -> list[str]:
-    """解析标签 JSON；坏数据按空处理。"""
-    try:
-        values = json.loads(row.tags or "[]")
-    except (TypeError, ValueError):
-        return []
-    return [str(item) for item in values if str(item).strip()] if isinstance(values, list) else []
-
-
-def _score(text: str, row: ChatEmoji) -> float:
-    """文本与描述、标签的模糊匹配分。"""
-    values = [row.description, *_tags(row)]
-    return max((fuzz.partial_ratio(text, value) for value in values if value), default=0.0)
-
-
-def _cooled(row: ChatEmoji, now: datetime) -> bool:
-    """距离上次发送是否已过冷却。"""
-    return row.last_used is None or now - row.last_used >= EMOJI_COOLDOWN
-
-
-async def pick_emoji(
-    tenant: str, text: str, *, now: datetime | None = None, rng: random.Random | None = None
-) -> ChatEmoji | None:
-    """按当前回复挑选一条未冷却且匹配的表情。"""
-    config = emoji_config()
-    if not str(text or "").strip():
-        return None
-    try:
-        rows = await chat_repository.list_emoji(tenant, registered_only=True)
-    except Exception:
-        logger.opt(exception=True).debug("[ChatEmoji] 读取表情失败")
-        return None
-    current = now or utc_now_naive()
-    scored = []
-    for row in rows:
-        score = _score(text, row)
-        if score >= _MIN_SCORE and _cooled(row, current):
-            scored.append((score, row))
-    if not scored:
-        return None
-    scored.sort(key=lambda item: (item[0], item[1].count), reverse=True)
-    return (rng or random.Random()).choice(scored[: min(_candidate_count(config), len(scored))])[1]
-
-
 async def emoji_catalog(tenant: str, *, limit: int | None = None) -> list[ChatEmoji]:
     """规划器挑选用的候选表情：已注册、启用且文件仍在。"""
     try:
@@ -380,7 +327,7 @@ async def emoji_catalog(tenant: str, *, limit: int | None = None) -> list[ChatEm
         return []
     rows = [row for row in rows if Path(row.path).is_file()]
     count = limit if limit is not None else _candidate_count(emoji_config())
-    return rows if len(rows) <= count else random.sample(rows, count)
+    return random.sample(rows, min(len(rows), count))
 
 
 def _collage_tile(path: str, index: int) -> Image.Image:
@@ -395,24 +342,47 @@ def _collage_tile(path: str, index: int) -> Image.Image:
     except Exception:
         logger.opt(exception=True).debug(f"[ChatEmoji] 拼图读取失败: {path}")
     draw = ImageDraw.Draw(tile)
-    draw.rectangle((0, 0, _COLLAGE_BADGE, _COLLAGE_BADGE), fill="black")
+    font = ImageFont.load_default(size=32)
+    label = str(index)
+    bounds = draw.textbbox((0, 0), label, font=font)
+    while bounds[2] - bounds[0] > _COLLAGE_TILE - 40 and font.size > 8:
+        font = ImageFont.load_default(size=font.size - 1)
+        bounds = draw.textbbox((0, 0), label, font=font)
+    width, height = bounds[2] - bounds[0], bounds[3] - bounds[1]
+    badge_width = max(_COLLAGE_BADGE, width + 12)
+    draw.rounded_rectangle((14, 14, 14 + badge_width, 14 + _COLLAGE_BADGE), radius=8, fill="black")
     draw.text(
-        (_COLLAGE_BADGE // 5, _COLLAGE_BADGE // 10),
-        str(index),
+        (14 + (badge_width - width) / 2, 14 + (_COLLAGE_BADGE - height) / 2 - 1),
+        label,
         fill="white",
-        font=ImageFont.load_default(size=32),
+        font=font,
     )
     return tile
 
 
-def emoji_collage(rows: list[ChatEmoji]) -> str | None:
+def emoji_grid_shape(count: int) -> tuple[int, int]:
+    """按 MaiBot 的长宽差与空位数选择拼图行列。"""
+    return min(
+        ((math.ceil(count / columns), columns) for columns in range(1, count + 1)),
+        key=lambda shape: (abs(shape[1] - shape[0]), shape[0] * shape[1] - count),
+        default=(1, 1),
+    )
+
+
+def emoji_collage(rows: list[ChatEmoji], *, start_index: int = 1) -> str | None:
     """把候选表情拼成带序号的网格图，返回 data URL；没有候选时返回 None。"""
     if not rows:
         return None
-    columns = max(1, math.ceil(math.sqrt(len(rows))))
-    canvas = Image.new("RGB", (columns * _COLLAGE_TILE, math.ceil(len(rows) / columns) * _COLLAGE_TILE), "white")
-    for index, row in enumerate(rows, start=1):
-        offset = (((index - 1) % columns) * _COLLAGE_TILE, ((index - 1) // columns) * _COLLAGE_TILE)
+    grid_rows, columns = emoji_grid_shape(len(rows))
+    gap = 12
+    canvas = Image.new(
+        "RGB",
+        (columns * _COLLAGE_TILE + gap * (columns - 1), grid_rows * _COLLAGE_TILE + gap * (grid_rows - 1)),
+        "white",
+    )
+    for offset_index, row in enumerate(rows):
+        index = start_index + offset_index
+        offset = ((offset_index % columns) * (_COLLAGE_TILE + gap), (offset_index // columns) * (_COLLAGE_TILE + gap))
         canvas.paste(_collage_tile(row.path, index), offset)
     buffer = BytesIO()
     canvas.save(buffer, "PNG")
@@ -433,14 +403,14 @@ async def emoji_by_hash(tenant: str, digest: str) -> ChatEmoji | None:
 
 def _candidate_count(config: dict[str, Any]) -> int:
     """单次发送的候选池大小。"""
-    value = config.get("emoji_send_num", _TOP_PICKS)
+    value = config.get("emoji_send_num", 25)
     if isinstance(value, bool) or not isinstance(value, int):
-        return _TOP_PICKS
+        return 25
     return max(1, min(64, value))
 
 
 async def mark_used(row: ChatEmoji, *, now: datetime | None = None) -> None:
-    """记录一次发送，进入冷却。"""
+    """记录一次成功发送的使用次数和时间。"""
     try:
         await chat_repository.mark_emoji_used(row.tenant, row.hash, now=now)
     except Exception:

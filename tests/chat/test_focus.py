@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import json
+import base64
 import asyncio
 import tempfile
 import unittest
 from types import SimpleNamespace
 from pathlib import Path
+from dataclasses import replace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.plugins.nonebot_plugin_fxbot.chat import service as service_module
 from src.plugins.nonebot_plugin_fxbot.chat.focus import (
+    tools as tools_module,
     context as context_module,
     manager as manager_module,
     group_runtime as group_runtime_module,
@@ -107,7 +110,8 @@ class FocusConfigTests(unittest.TestCase):
 
     def test_scope_key(self) -> None:
         with patch.object(manager_module, "focus_config", return_value=_focus_config()):
-            self.assertEqual(_scope_key(_request()), "global")
+            self.assertEqual(_scope_key(_request()), "session:" + SESSION)
+            self.assertNotEqual(_scope_key(_request()), _scope_key(_request(session_id=OTHER)))
         groups = [
             {
                 "targets": [
@@ -192,6 +196,7 @@ class GroupRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 with self.subTest(names=names):
                     self.group._wait_until = None
                     provider.chat.return_value = SimpleNamespace(
+                        content="",
                         tool_calls=[{"function": {"name": name}} for name in names],
                         to_message_dict=lambda: {"role": "assistant", "content": ""},
                     )
@@ -291,6 +296,7 @@ class GroupRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(SESSION, self.group._ready)
         entry = self.group._pending[SESSION][0]
         self.assertTrue(entry.messages[0]["content"].startswith(f"[{SESSION}]"))
+        self.assertIn(f"[msg_id: {request.message_id or request.dedupe_key}]", entry.messages[0]["content"])
         self.assertIn("Alice", entry.messages[0]["content"])
         self.group._take_ready_inputs()
         self.assertEqual(len(self.group.entries), 1)
@@ -348,7 +354,9 @@ class GroupRuntimeTests(unittest.IsolatedAsyncioTestCase):
     async def test_messages_include_references_and_reminder(self) -> None:
         self.group.entries = [FocusEntry([{"role": "user", "content": "你好"}], {SESSION}, 1)]
         messages = self.group._build_messages(["<focus_reference>记忆</focus_reference>"])
-        self.assertEqual(messages[-1]["content"], "<focus_reference>记忆</focus_reference>")
+        self.assertIn("<focus_reference>记忆</focus_reference>", messages[-1]["content"])
+        self.assertIn("思考是否进行工具调用", messages[-1]["content"])
+        self.assertTrue(messages[1]["content"].startswith("时间："))
         self.group._consecutive_waits = 3
         self.assertIn("连续等待", self.group._build_messages([])[-1]["content"])
 
@@ -361,8 +369,10 @@ class GroupRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([entry.messages[0]["content"] for entry in self.group.entries], ["b"])
 
     async def test_router_controls(self) -> None:
+        self.group.add_member(_member(_request()))
         router = FocusToolRouter(self.group)
-        content, paused = await router.invoke("stop", {})
+        with patch.object(self.group, "is_member_valid", return_value=True):
+            content, paused = await router.invoke("stop", {"session_id": SESSION})
         self.assertTrue(paused)
         self.assertTrue(json.loads(content)["ok"])
         content, paused = await router.invoke("reply", {"session_id": "missing", "reply_reference": "接一句"})
@@ -503,7 +513,7 @@ class ManagerTests(unittest.IsolatedAsyncioTestCase):
             await manager.register(_member(request), request, is_at=True)
             self.assertTrue(manager.attached(SESSION))
             self.assertTrue(manager.is_enabled_for_session(SESSION))
-            self.assertEqual(manager.scope_key(SESSION), "global")
+            self.assertEqual(manager.scope_key(SESSION), "session:" + SESSION)
             self.assertEqual(len(manager.groups), 1)
             await manager.detach(SESSION)
         self.assertFalse(manager.attached(SESSION))
@@ -573,13 +583,15 @@ class FocusReplyValidityTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         root = tempfile.TemporaryDirectory()
         self.addCleanup(root.cleanup)
-        self.group = FocusGroupRuntime("global", store=FocusCheckpointStore("global", Path(root.name)))
+        self.group = FocusGroupRuntime(
+            "session:" + SESSION, store=FocusCheckpointStore("session:" + SESSION, Path(root.name))
+        )
         self.member = _member(_request())
         self.group.add_member(self.member)
         self.manager = FocusModeManager()
-        self.manager.groups["global"] = self.group
+        self.manager.groups["session:" + SESSION] = self.group
         self.manager._requests[SESSION] = self.member.request
-        self.manager._scope_by_session[SESSION] = "global"
+        self.manager._scope_by_session[SESSION] = "session:" + SESSION
         self.service = ChatService(ChatSessionStore())
         self.config = _focus_config()
         self.process = AsyncMock(return_value=ChatResponse(text="reply", epoch=0))
@@ -639,9 +651,9 @@ class FocusReplyValidityTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(invalidation=invalidation):
                 self.group._closed = False
                 self.group.add_member(self.member)
-                self.manager.groups["global"] = self.group
+                self.manager.groups["session:" + SESSION] = self.group
                 self.manager._requests[SESSION] = self.member.request
-                self.manager._scope_by_session[SESSION] = "global"
+                self.manager._scope_by_session[SESSION] = "session:" + SESSION
                 self.config.update(_focus_config())
 
                 async def generate(*args, **kwargs):
@@ -652,7 +664,7 @@ class FocusReplyValidityTests(unittest.IsolatedAsyncioTestCase):
                     elif invalidation == "disable":
                         self.config["enabled"] = False
                     elif invalidation == "scope":
-                        self.config["groups"] = [{"targets": []}]
+                        self.config["groups"] = [{"targets": [{"platform": "test", "type": "group", "item_id": "g1"}]}]
                     else:
                         self.group.add_member(_member(_request()))
                     return ChatResponse(text="reply", epoch=0)
@@ -695,6 +707,85 @@ class FocusReplyValidityTests(unittest.IsolatedAsyncioTestCase):
         self.process.assert_awaited_once()
         self.send.assert_awaited_once()
         self.assertEqual(len(self.group._sent), 1)
+
+    async def test_focus_reply_options_reach_target_sender(self) -> None:
+        target = self.member.request.message_id
+        self.member.request.images = ["base64://" + base64.b64encode(b"synthetic-picture").decode("ascii")]
+        self.member.request.metadata["planner_emoji_candidates"] = {"700": "own-emoji-hash"}
+        row = SimpleNamespace(sender_id="42")
+        with (
+            patch.object(group_runtime_module, "reply_at_enabled", return_value=True),
+            patch.object(group_runtime_module.chat_repository, "message_by_identity", AsyncMock(return_value=row)),
+        ):
+            content, paused = await FocusToolRouter(self.group).invoke(
+                "reply",
+                {
+                    "session_id": SESSION,
+                    "msg_id": target,
+                    "reply_reference": "接一句",
+                    "reply_style": "简短表达",
+                    "attach_pic": [{"msg_id": target}],
+                    "attach_at": [target, target],
+                    "attach_emoji": 700,
+                },
+            )
+        self.assertTrue(json.loads(content)["ok"])
+        self.assertFalse(paused)
+        request = self.process.await_args.args[0]
+        self.assertEqual(request.metadata["reply_target_id"], target)
+        self.assertEqual(request.metadata["reply_at_users"], ["42"])
+        response = self.send.await_args.args[1]
+        self.assertEqual(response.metadata["attach_pictures"], [b"synthetic-picture"])
+        self.assertEqual(response.metadata["attach_emoji"], "own-emoji-hash")
+        self.assertEqual(self.process.await_args.kwargs["focus_instruction"], "接一句")
+        self.assertEqual(self.process.await_args.args[0].metadata["requested_reply_style"], "简短表达")
+        self.assertNotIn("reply_pictures", self.member.request.metadata)
+
+    async def test_focus_rejects_another_sessions_reply_target(self) -> None:
+        with patch.object(group_runtime_module.chat_repository, "message_by_identity", AsyncMock(return_value=None)):
+            content, _ = await FocusToolRouter(self.group).invoke(
+                "reply",
+                {
+                    "session_id": SESSION,
+                    "msg_id": "foreign-message",
+                    "reply_reference": "回复别的会话",
+                },
+            )
+        self.assertFalse(json.loads(content)["ok"])
+        self.process.assert_not_awaited()
+
+    async def test_focus_exposes_same_attachment_schema_as_normal_planner(self) -> None:
+        from src.plugins.nonebot_plugin_fxbot.chat.heart_flow import conversation
+        from src.plugins.nonebot_plugin_fxbot.chat.focus.tools import _control_definitions
+
+        with patch.object(conversation, "emoji_config", return_value={"use_new_send_logic": True}):
+            definitions = _control_definitions([SESSION])
+        reply = next(item["function"] for item in definitions if item["function"]["name"] == "reply")
+        self.assertTrue({"msg_id", "reply_reference", "session_id"} <= set(reply["parameters"]["required"]))
+        self.assertTrue({"attach_pic", "attach_emoji", "reply_style"} <= set(reply["parameters"]["properties"]))
+        self.assertTrue({"send_emoji", "show_emoji_list"} <= {item["function"]["name"] for item in definitions})
+
+    async def test_focus_cannot_use_another_members_tool_picture(self) -> None:
+        self.group.tools.pending_media = [
+            FocusEntry(
+                [
+                    {"role": "user", "_tool_media": {"tool_result:foreign:1": "base64://aW1hZ2U="}},
+                ],
+                {OTHER},
+            )
+        ]
+        with patch.object(group_runtime_module.chat_repository, "message_by_identity", AsyncMock(return_value=None)):
+            content, _ = await FocusToolRouter(self.group).invoke(
+                "reply",
+                {
+                    "session_id": SESSION,
+                    "msg_id": self.member.request.message_id,
+                    "reply_reference": "附图",
+                    "attach_pic": [{"media_index": "tool_result:foreign:1"}],
+                },
+            )
+        self.assertFalse(json.loads(content)["ok"])
+        self.process.assert_not_awaited()
 
 
 class FocusPrivilegedToolTests(unittest.IsolatedAsyncioTestCase):
@@ -746,6 +837,7 @@ class FocusPrivilegedToolTests(unittest.IsolatedAsyncioTestCase):
         for patcher in (
             patch.object(manager_module, "focus_mode_manager", self.manager),
             patch.object(manager_module, "focus_config", return_value=_focus_config()),
+            patch.object(self.manager, "scope_key", return_value="global"),
             patch.object(executor_module, "check_permission", AsyncMock(return_value=True)),
         ):
             patcher.start()
@@ -774,3 +866,33 @@ class FocusPrivilegedToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(paused)
         self.assertTrue(json.loads(content)["ok"])
         self.assertEqual(self.calls, [SESSION])
+
+    async def test_business_session_argument_is_preserved(self) -> None:
+        captured = []
+
+        def handler(context, runtime, session_id):
+            captured.append((context.session_id, session_id))
+            return "done"
+
+        spec = default_registry.get(self.PLAIN)
+        default_registry.register(
+            replace(
+                spec,
+                handler=handler,
+                parameters={
+                    "type": "object",
+                    "properties": {"session_id": {"type": "string"}},
+                    "required": ["session_id"],
+                },
+            )
+        )
+        with patch.object(tools_module, "allowed_tools", AsyncMock(return_value=({self.PLAIN}, []))):
+            definitions = await self.router.refresh()
+        schema = next(item["function"]["parameters"] for item in definitions if item["function"]["name"] == self.PLAIN)
+        self.assertIn("tool_arguments", schema["required"])
+        content, paused = await self.router.invoke(
+            self.PLAIN, {"session_id": SESSION, "tool_arguments": {"session_id": "business-session"}}, SESSION
+        )
+        self.assertFalse(paused)
+        self.assertTrue(json.loads(content)["ok"])
+        self.assertEqual(captured, [(SESSION, "business-session")])

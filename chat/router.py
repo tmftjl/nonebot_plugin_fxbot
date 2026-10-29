@@ -12,7 +12,6 @@ from nonebot.adapters import Bot, Event
 
 from . import emoji as emoji_module
 from .focus import focus_mode_manager
-from .tools import ToolRuntime
 from .types import ChatRequest, TriggerKind
 from .voice import transcribe_event, audio_sources_for_event
 from ..config import get_manager as get_config_manager
@@ -36,14 +35,16 @@ from .message_adapter import (
     mention_flags,
     event_identity,
     collect_mentions,
-    platform_for_bot,
+    is_ignored_command,
     adapt_message_event,
+    memory_image_sources,
     session_id_for_event,
     image_sources_for_event,
 )
-from .behavior.debounce import default_debounce_registry
+from .behavior.debounce import default_debounce_registry as default_debounce_registry
 from .behavior.reply_gate import proactive_switch, default_reply_gate_registry
-from .focus.group_runtime import FocusMember
+from .focus.group_runtime import FocusMember, FocusMatcher
+from .behavior.turn_scheduler import normal_scheduler
 from ..permission.message_policy import should_process_fxbot_message
 
 
@@ -106,7 +107,7 @@ async def _proactive_gate(bot: Any, event: Any, *, text: str, has_image: bool, h
     sample = text or ("[图片]" if has_image else "[语音]" if has_voice else "")
     has_at_bot, at_other = mention_flags(bot, event)
     observation = gate.observe_message([identity.dedupe_key], [sample], has_at_bot=has_at_bot, at_other=at_other)
-    if await proactive_switch(identity.session_id) is not True:
+    if await proactive_switch(identity.session_id) is False:
         gate.reset_pending()
         return False
     if not observation.would_trigger or gate.backoff_delay() > 0:
@@ -150,21 +151,6 @@ def _reply_timing(cfg: dict[str, Any]) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def _private_paused(cfg: dict[str, Any], bot: Any, event: Any) -> bool:
-    """全局暂停私聊回复；单个用户规则优先。"""
-    settings = _reply_timing(cfg)
-    user_id = normalize_id(event_user_id(event)) or ""
-    platform = platform_for_bot(bot)
-    for rule in settings.get("private_reply_pause_rules") or []:
-        if not isinstance(rule, dict) or normalize_id(rule.get("user_id")) != user_id:
-            continue
-        rule_platform = str(rule.get("platform") or "").strip()
-        if rule_platform and rule_platform != platform:
-            continue
-        return bool(rule.get("paused", True))
-    return bool(settings.get("private_reply_paused", False))
-
-
 def _match_context(cfg: dict[str, Any], bot: Any, event: Any) -> bool:
     """按会话类型判断是否允许进入 AI 兜底；关闭的必回复项交给上下文记录。"""
     if event_group_id(event):
@@ -181,11 +167,11 @@ def _match_context(cfg: dict[str, Any], bot: Any, event: Any) -> bool:
     allowlist = _id_allowlist(cfg, "private_allowlist")
     if allowlist and event_user_id(event) not in allowlist:
         return False
-    return not _private_paused(cfg, bot, event)
+    return True
 
 
 def _should_record_context(cfg: dict[str, Any], bot: Any, event: Any) -> bool:
-    """不能进入 AI 回复的普通消息写历史，包括暂停的私聊与关闭必回复的提及。"""
+    """不能进入 AI 回复的普通群消息写历史，包括关闭必回复的提及。"""
     if event_group_id(event):
         if not _allowed_group_id(cfg, event):
             return False
@@ -200,7 +186,7 @@ def _should_record_context(cfg: dict[str, Any], bot: Any, event: Any) -> bool:
     allowlist = _id_allowlist(cfg, "private_allowlist")
     if allowlist and event_user_id(event) not in allowlist:
         return False
-    return _private_paused(cfg, bot, event)
+    return False
 
 
 async def _ai_fallback_rule(bot: Bot, event: Event) -> bool:
@@ -215,8 +201,7 @@ async def _ai_fallback_rule(bot: Bot, event: Event) -> bool:
     text = message_text(event)
     if not text and not _has_image(event) and not _has_voice(event):
         return False
-    prefixes = tuple(str(item) for item in cfg["command_prefixes"])
-    if text and text.startswith(prefixes):
+    if is_ignored_command(text, cfg):
         return False
     return True
 
@@ -233,15 +218,11 @@ async def _context_rule(bot: Bot, event: Event) -> bool:
     if not _should_record_context(cfg, bot, event):
         return False
     text = message_text(event)
-    prefix = tuple(str(item) for item in cfg["command_prefixes"])
-    if text and text.startswith(prefix):
+    if is_ignored_command(text, cfg):
         return False
     has_image = _has_image(event)
     has_voice = _has_voice(event)
     if not text and not has_image and not has_voice:
-        return False
-    if event_group_id(event) and await _proactive_gate(bot, event, text=text, has_image=has_image, has_voice=has_voice):
-        setattr(event, _PROACTIVE_ATTR, True)
         return False
     return True
 
@@ -262,11 +243,6 @@ async def _handle_context(bot: Bot, event: Event) -> None:
     has_image = _has_image(event)
     text = message_text(event)
     user_id = normalize_id(event_user_id(event)) or ""
-    batch = default_debounce_registry.get(identity.session_id)
-    if batch is not None and batch.owner_id == user_id and not batch.full:
-        # 同作者在等待窗口内续发，完整适配后并入本轮而不是单独开一轮
-        if default_debounce_registry.merge_context(await adapt_message_event(bot, event, trigger_kind="mention")):
-            return
     if not text and not has_image and _has_voice(event):
         # 纯语音先转写再入历史，转写失败时留占位
         text = await transcribe_event(event)
@@ -287,12 +263,25 @@ async def _handle_context(bot: Bot, event: Event) -> None:
         event_id=identity.event_id,
         message_id=identity.message_id,
         reply_to_message_id=identity.reply_to_message_id,
+        memory_images=memory_image_sources(event),
     )
     if focus_mode_manager.enabled() or focus_mode_manager.attached(identity.session_id):
         focus_request = await adapt_message_event(bot, event, trigger_kind="mention")
         # 这条消息刚由 record_group_message 写入历史，Focus 回复时不能再写一遍
         focus_request.metadata["history_recorded"] = True
         await _focus_or_detach(bot, event, focus_request, is_at=not focus_request.is_group)
+        if focus_mode_manager.is_enabled_for_request(focus_request):
+            return
+    if event_group_id(event):
+        request = await adapt_message_event(bot, event, trigger_kind="proactive")
+        request.accepted_epoch = chat_service.session_store.epoch(identity.session_id)
+        request.activity_seq = chat_service.session_store.activity(identity.session_id)
+        request.metadata.update({"history_recorded": True, "history_appended": True})
+        has_at_bot, at_other = mention_flags(bot, event)
+        request.metadata.update({"has_at_bot": has_at_bot, "at_other": at_other})
+        matcher = FocusMatcher(bot, extract_message_target(event))
+        runtime = default_runtime_factory.create(bot=bot, event=event, matcher=matcher)
+        await normal_scheduler.submit(chat_service, request, runtime)
 
 
 async def _register_focus(bot: Bot, event: Event, request: ChatRequest, *, is_at: bool) -> None:
@@ -316,18 +305,6 @@ async def _focus_or_detach(bot: Bot, event: Event, request: ChatRequest, *, is_a
     if focus_mode_manager.attached(request.session_id):
         await focus_mode_manager.detach(request.session_id)
     return False
-
-
-async def _process_and_send(request: ChatRequest, runtime: ToolRuntime, matcher: Matcher) -> None:
-    """生成并按段发送；拆分、发送状态与轮次锁由服务层负责。"""
-    try:
-        sent = await chat_service.process_and_send(request, runtime)
-    except Exception as exc:
-        logger.opt(exception=True).warning(f"[Chat] AI 兜底处理失败: {exc}")
-        await matcher.finish("AI 服务暂时不可用")
-        return
-    if sent:
-        await matcher.finish()
 
 
 @ai_router.handle()
@@ -362,31 +339,24 @@ async def _handle_ai_fallback(bot: Bot, event: Event, matcher: Matcher) -> None:
     request.accepted_epoch = accepted_epoch
     request.activity_seq = activity_seq
     runtime = default_runtime_factory.create(bot=bot, event=event, matcher=matcher)
-    registered = default_debounce_registry.get(identity.session_id)
-    if registered is not None:
-        # 并入已有批次由 owner 回复；批次已满时立即处理，避免丢掉这条触发
-        if trigger_kind == "proactive":
-            if default_debounce_registry.merge_proactive(request) is not None:
-                return
-        elif default_debounce_registry.merge_trigger(request) is not None:
-            return
-        if trigger_kind in {"mention", "persona"}:
-            default_reply_gate_registry.get(request.session_id).record_forced_turn([request.dedupe_key])
-        await _process_and_send(request, runtime, matcher)
-        return
-    batch = default_debounce_registry.create(request)
-    try:
-        await batch.wait()
-    finally:
-        default_debounce_registry.pop(batch)
-    if batch.cancelled:
-        return
-    merged = batch.merge()
-    if merged.trigger_kind in {"mention", "persona"}:
-        default_reply_gate_registry.get(merged.session_id).record_forced_turn(
-            [request.dedupe_key for request in batch.requests]
-        )
-    if merged.batched and merged.accepted_epoch is not None:
-        if chat_service.is_current(merged.session_id, merged.accepted_epoch):
-            await chat_service.persist_batch(batch.requests)
-    await _process_and_send(merged, runtime, matcher)
+    await chat_service.record_group_message(
+        request.session_id,
+        request.user_id,
+        request.user_name,
+        request.text,
+        is_group=request.is_group,
+        images=request.images,
+        has_image=bool(request.images),
+        mentions=request.mentions,
+        dedupe_key=request.dedupe_key,
+        platform=request.platform,
+        event_id=request.event_id,
+        message_id=request.message_id,
+        reply_to_message_id=request.reply_to_message_id,
+        occurred_at=request.occurred_at,
+        memory_images=list(zip(request.metadata.get("raw_image_paths", []), request.metadata.get("raw_images", []))),
+    )
+    request.metadata.update({"history_recorded": True, "history_appended": True})
+    has_at_bot, at_other = mention_flags(bot, event)
+    request.metadata.update({"has_at_bot": has_at_bot, "at_other": at_other})
+    await normal_scheduler.submit(chat_service, request, runtime)

@@ -25,6 +25,8 @@ from src.plugins.nonebot_plugin_fxbot.chat.behavior.reply_gate import (
 )
 from src.plugins.nonebot_plugin_fxbot.adapter.platforms.onebot12 import OneBotV12MessageAdapter
 
+from .support import RouterUnitTests
+
 
 class _Gate:
     """记录路由调用，不实现门控。"""
@@ -301,7 +303,7 @@ class RegistryTests(unittest.TestCase):
         self.assertIsNone(registry.peek("a"))
 
 
-class RouterWiringTests(unittest.IsolatedAsyncioTestCase):
+class RouterWiringTests(RouterUnitTests):
     """路由在普通消息和强制触发上的观察点。"""
 
     async def test_proactive_gate_passes_mention_flags(self) -> None:
@@ -333,6 +335,7 @@ class RouterWiringTests(unittest.IsolatedAsyncioTestCase):
             "persona": "",
         }
         with (
+            patch.object(router, "proactive_switch", AsyncMock(return_value=False)),
             patch.object(message_adapter, "get_platform_adapter", return_value=OneBotV12MessageAdapter()),
             patch.object(router, "chat_service", service),
             patch.object(router, "default_reply_gate_registry", _Registry(gate)),
@@ -345,8 +348,7 @@ class RouterWiringTests(unittest.IsolatedAsyncioTestCase):
             event = make_event(message_id="message")
             self.assertTrue(await router._context_rule(make_bot(), event))
             await router._handle_context(make_bot(), event)
-        self.assertEqual(gate.observed[0][0][0], ["msg:message"])
-        self.assertEqual(gate.observed[0][0][1], ["你好"])
+        self.assertEqual(gate.observed, [])
         service.record_group_message.assert_awaited_once()
 
     async def test_group_trigger_records_forced_turn_but_private_does_not(self) -> None:
@@ -355,6 +357,8 @@ class RouterWiringTests(unittest.IsolatedAsyncioTestCase):
                 gate = _Gate()
                 service = SimpleNamespace(
                     session_store=ChatSessionStore(),
+                    queue_message=AsyncMock(return_value=False),
+                    record_group_message=AsyncMock(),
                     process_and_send=AsyncMock(return_value=False),
                     ensure_hydrated=AsyncMock(),
                 )
@@ -370,7 +374,8 @@ class RouterWiringTests(unittest.IsolatedAsyncioTestCase):
                 ):
                     event = make_event(group_id=group_id, to_me=group_id is not None, message_id="message")
                     await router._handle_ai_fallback(make_bot(), event, SimpleNamespace(finish=AsyncMock()))
-                self.assertEqual(len(gate.forced), expected)
+                self.assertEqual(len(gate.forced), 0)
+                self.assertEqual(request.trigger_kind, kind)
 
 
 class _Config:

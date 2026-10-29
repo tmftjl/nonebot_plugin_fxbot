@@ -190,7 +190,7 @@ async def _load_image(
     *,
     compress_oversized: bool = True,
 ) -> bytes:
-    """加载图片源；只接受内联字节、base64 和公网 http(s) URL，拒绝本地路径。"""
+    """加载内联字节、图片 data URL、base64 或公网图片，拒绝本地路径。"""
     if limit is _DEFAULT_LIMIT:
         limit = _max_image_bytes()
     read_limit = _download_limit(limit, compress_oversized=compress_oversized)
@@ -198,11 +198,16 @@ async def _load_image(
         data = source
     else:
         value = str(source or "").strip()
-        if value.startswith("base64://"):
-            encoded = value[9:]
+        if value.startswith(("data:", "base64://")):
+            if value.startswith("data:"):
+                header, separator, encoded = value.partition(",")
+                if not separator or not header.startswith("data:image/") or not header.endswith(";base64"):
+                    raise ValueError("内联图片必须使用图片 MIME 类型与 base64 编码")
+            else:
+                encoded = value[9:]
             if read_limit is not None and len(encoded) > read_limit * 4 // 3 + 4:
                 raise ResponseTooLargeError("base64 图片超过大小上限")
-            data = base64.b64decode(encoded)
+            data = base64.b64decode(encoded, validate=True)
         elif value:
             data = await _fetch_remote_image(value, limit=read_limit)
         else:
@@ -232,6 +237,17 @@ def image_sources_for_event(event: Any, reply: ReplyInfo | None = None) -> list[
     if not sources and reply is not None:
         sources = list(reply.image_sources)
     return list(dict.fromkeys(source for source in sources if source))[: _max_image_count()]
+
+
+def memory_image_sources(event: Any) -> list[tuple[str, str | bytes]]:
+    """图片记忆只登记当前消息原图，保留原始组件下标并排除表情。"""
+    result = []
+    emojis = set(emoji_sources_for_event(event))
+    for index, segment in enumerate(list(event_message(event) or [])):
+        for source in extract_raw_image_sources([segment]):
+            if source and source not in emojis:
+                result.append((str(index), source))
+    return result
 
 
 async def load_images(sources: list[str | bytes]) -> list[str]:
@@ -366,6 +382,12 @@ async def collect_mentions(
     return refs
 
 
+def is_ignored_command(text: str, config: dict[str, Any]) -> bool:
+    """前缀命令不进入对话或历史，忽略开头空白和无效空前缀。"""
+    prefixes = tuple(str(value) for value in config.get("command_prefixes", []) if str(value))
+    return bool(prefixes and str(text or "").lstrip().startswith(prefixes))
+
+
 def message_text(event: Any) -> str:
     """纯文本；消息只有合并转发时补一个占位，让 AI 知道可以展开。"""
     text = event_plain_text(event)
@@ -486,6 +508,11 @@ async def adapt_message_event(bot: Any, event: Any, *, trigger_kind: TriggerKind
         images=await load_images(image_sources_for_event(event, reply)),
         quoted_text=_quoted_text(reply),
         platform=platform_for_bot(bot),
-        metadata={"event": event, "received_at": received_at.isoformat()},
+        metadata={
+            "event": event,
+            "received_at": received_at.isoformat(),
+            "raw_images": [source for _, source in memory_image_sources(event)],
+            "raw_image_paths": [path for path, _ in memory_image_sources(event)],
+        },
         mentions=mentions,
     )

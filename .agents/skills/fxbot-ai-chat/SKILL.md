@@ -1,121 +1,38 @@
 ---
 name: fxbot-ai-chat
-description: Implementation workflow for FxBot AI memory and group-chat behavior. Use when implementing or reviewing chat memory, history persistence, debounce, sending, quoting, planner, or proactive gate work. Read ../fxbot/SKILL.md and docs/ai-memory-and-chat-design.md first. Do not use for generic NoneBot questions or unrelated subplugins.
+description: Development and review workflow for FxBot chat, history persistence, memory, planning, reply timing, and sending. Use for the repository chat subsystem, not generic NoneBot questions or unrelated subplugins.
 ---
 
 # FxBot AI Chat Development
 
-Implement the AI chat subsystem described in `docs/ai-memory-and-chat-design.md`. The design document is the source of truth for phases, tables, invariants, and verification; this skill only defines how to work.
+Read `../fxbot/SKILL.md` first. Current source code is the implementation source of truth. Design notes, migration comments and this skill do not prove that behavior is implemented or enabled. Do not revive historical P0/P0.5/P5 restrictions or require following an old design document.
 
-## Read First
+## Investigation
 
-1. `../fxbot/SKILL.md` for repository-wide standards.
-2. `docs/ai-memory-and-chat-design.md`, especially section 22 for P0/P0.5 and section 11.1 for P5.
-3. If the change touches `plugins/`, also read `../fxbot-subplugin/SKILL.md`.
-4. Use `rg` to read the actual call chain before editing. Do not rely on line numbers or inventories in the design document.
+- Follow the affected path from `chat/router.py` through `chat/service.py` and its actual callees. Inspect ordinary planning and Focus separately when both are affected.
+- Compare configuration defaults, console schema, validation and business reads. Distinguish saved runtime values from defaults, and exposed fields from effective behavior.
+- Separate chat history and learning storage under `chat/memory/` from long-term memory under `chat/amemorix/`. Inspect the host bridge before changing the vendored kernel.
+- For MaiBot comparisons, inspect the specified checkout and its callers. Similar names and copied algorithms do not establish full behavior parity.
 
-## Scope
+## Boundaries to Preserve
 
-Use this skill for:
+- Keep message, event, turn and reply-target identity distinct. Check deduplication and adapter identity extraction when changing ingress.
+- Bind history ownership and sending targets to the actual session. Explicit Focus, learning-sharing and memory-retrieval scopes permit configured shared reads; they do not permit silently mixing all chats. Inspect each feature's scope and authorization.
+- Preserve the distinction between generated output and successfully sent visible history. Check cancellation, partial sends and clearing against in-flight turns.
+- For batching and tools, trace authors, runtime events and allowed tools through discovery and execution. Do not assume a design document's batch authorization or read-only guarantees are implemented.
+- Inspect Focus routing before changing ordinary debounce or proactive gates; avoid duplicate reply paths and duplicate history writes.
+- Preserve ConfigManager hot reload and platform adapter boundaries from the core skill.
 
-- `chat/` service, router, session, message adapter, types, providers, tools;
-- chat DB models, repository, migrations, bootstrap imports;
-- chat configuration, console routes, and chat console UI;
-- memory extraction, retrieval, profile, episodes, and lifecycle;
-- debounce, splitting, sending, quoting, interruption, planner, and proactive gate;
-- `chat/focus/` shared-group planning (MaiBot `src/maisaka/focus/`).
+## Implementation and Verification
 
-Do not use it for unrelated framework, membership, console, or subplugin work.
+Make the smallest change for the current request. Do not infer unfinished phases from historical plans. Preserve source attribution when migrating MaiBot code and adapt integration boundaries to FxBot.
 
-## Phase Boundary
+For MaiBot parity work, implement the current target contract directly. Do not add data migrations, historical-data rewriting, old-mode routing, legacy payload parsers or checkpoint upgrades. Remove superseded paths and tests that exist only for old modes; keep verification of the current conversation behavior and session isolation. Required host and platform adapters remain integration boundaries, not alternate conversation modes.
 
-Implement one phase item at a time. Do not pull P5 behavior into P0/P0.5.
+Choose focused existing tests for affected behavior. For substantive behavior changes, cover applicable regressions: restart hydration, duplicate ingress, interruption, cross-author batching, partial sends, clearing during generation, explicit sharing scopes and tool authorization. Derive timing values and expected semantics from current requirements and code, not frozen examples in this skill.
 
-| Phase | Work |
-|---|---|
-| P0-1 | Message/event/turn identity, dedupe key, reply target ID |
-| P0-2 | `chat_*` models, migrations, UTC, degraded DB startup |
-| P0-3 | History persistence, hydration, image-description update |
-| P0-4 | Turn states, generated-vs-sent, send failure handling |
-| P0-5 | Clear, generation, minimal memory config |
-| P0.5-1 | Author-preserving debounce and batch flush |
-| P0.5-2 | Trigger sequence and same-user interruption |
-| P0.5-3 | Split reply and serialized per-tenant sending |
-| P0.5-4 | Reply/quote segments and platform fallback |
-| P5 | Planner first, then `reply_likelihood` + `dynamic_gate` |
-
-P0.5 stops after quoting. It does **not** implement proactive replies. Ordinary group messages only write history; `ai_router` handles @, persona name, and private chat.
-
-P5 is explicit work, not an automatic continuation. Do not implement the proactive gate until Planner samples exist or the user asks for the observe-only phase.
-
-## Non-Negotiable Invariants
-
-- `tenant = session_id`. Every read, update, delete, and cache key is tenant-scoped. Never merge groups or private chats.
-- Business code must not import platform-specific Bot, Event, or Message types. Put platform differences in `adapter/platforms/`.
-- Store naive UTC in SQLite. Use `utils/tz.py` for Shanghai display. Do not treat naive UTC as local time.
-- Register matchers through `Plugin` with the literal `P` and AST-recognizable forms.
-- Read configuration through `ConfigManager` at use time; preserve hot reload. Do not cache config copies.
-- Use `utils/cache.py` for in-process caches. Prefix tuple keys with the domain and invalidate at the write entry point.
-- Use explicit `CREATE TABLE/INDEX IF NOT EXISTS` and column checks for chat migrations. Do not rely on `exec_list` swallowing exceptions.
-- Generated text is not visible history. Only successfully sent turn items with `visible=true` feed the next turn.
-- Initial DB failure degrades long-term memory reads/writes and learning, but must not disable basic chat.
-- A P5 gate is sampled once per event. If it passes, `_context_rule` returns false and `_ai_fallback_rule` bypasses `_match_context`; otherwise `_handle_context` writes history. Never let both paths write the same user message.
-- Focus 接管聊天时，路由登记后直接返回：普通防抖、规划器与 proactive gate 都不再参与；回复仍由该聊天自己的回复模型生成并发送到自己的目标。
-- Proactive turns use only read-only tools (`query_memory`, `query_person_profile`, `web_search`); admin tools are rejected for the whole batch if any message is proactive.
-- Do not invent cooldowns or caps. There is no fixed 5-minute/60-second/5-per-10-minute/hourly limit. Use only MaiBot's `talk_value` window budget and `no_action_backoff`.
-
-## MaiBot Code Migration
-
-Copying and migrating MaiBot code is allowed for this personal project. Preserve a source comment naming the MaiBot file and commit. Adapt to FxBot boundaries instead of rewriting algorithms for appearance.
-
-Direct-copy candidates:
-
-- `src/maisaka/turn_trigger/reply_likelihood.py` → `chat/behavior/reply_gate.py`;
-- `src/maisaka/turn_trigger/dynamic_gate.py` and `idle_backoff.py` → same module;
-- Planner prompts, parsers, and scheduling structure → `chat/planner.py` and debounce;
-- expression, jargon, typo algorithms and prompts → the corresponding chat modules;
-- A_Memorix memory kernel → vendored at `chat/amemorix/`; do not reintroduce the removed `chat/memory/extract.py` pipeline.
-
-Do not copy MaiBot's platform adapters, OneBot/QQ sending, or global config loader. Reconnect those through FxBot's `adapter/platforms/*`, `ConfigManager`, permission model, and repository layer.
-
-Do not reintroduce classical willing. MaiBot removed it in `1f91967d2`; P5 uses Planner labels plus the latest gate.
-
-## Workflow
-
-1. Pick one item from section 22 and state its acceptance criteria.
-2. Locate the current call chain and neighboring tests with `rg`.
-3. Write or extend a `unittest` test under `tests/chat/` before or with the change.
-4. Make the smallest implementation change that satisfies the phase item.
-5. Run the focused test, then `ruff check` and `ruff format --check` on changed Python files.
-6. If `console/web/src/` changed, run the frontend build and include `console/web/dist/`.
-7. Report changed files, tests run, failures, and any remaining limitation. Do not claim verification you did not run.
-
-Implement items one at a time, but commit a whole phase as a single commit once all its items pass verification. Do not commit sub-items separately. Do not reformat untouched legacy files.
-
-## Verification Matrix
-
-- **P0-1**: OneBot12 `id` vs `message_id`; duplicate delivery; cross-bot tenant; quoted target vs trigger ID.
-- **P0-2**: fresh DB, repeated migration, broken migration, missing column; UTC round-trip; DB-failure startup.
-- **P0-3**: restart continuity; clear-then-restart; history trim; late image description after recall; cross-tenant read failure.
-- **P0-4**: model failure, empty response, first-segment failure, duplicate send; generated-but-not-sent excluded from history; clear during generation.
-- **P0-5**: clear clears memory/DB/in-flight work; `max_context_size` hot reload; invalid config does not crash startup.
-- **P0.5-1**: same-author burst, cross-author, window reset, 30-second cap, forced flush, no duplicate user append.
-- **P0.5-2**: A1→A2 aborts A1; A1→B1 lets A1 finish; partial send is not rolled back.
-- **P0.5-3**: long text, first/middle segment failure, concurrent turns, no interleaving per tenant.
-- **P0.5-4**: quote support, unsupported platform, construction failure, text fallback.
-- **P5**: Planner first-round labels; gate observe-only before enforce; @ bypass; one sample per event; window statistics.
-
-## Anti-Patterns
-
-- Adding proactive behavior before P5.
-- Reintroducing `willingness.py`, `willingness_enabled`, or `talk_frequency`.
-- Adding fixed proactive cooldowns or caps that MaiBot does not have.
-- Recording an ordinary group message in both `_handle_context` and `process`.
-- Using `finish(text)` as the send path without recording send status.
-- Adding a sidecar, vector service, graph DB, Redis, or unused Protocol.
-- Copying MaiBot platform code instead of using the adapter.
-- Sending exception text or internal paths to customers.
+Run applicable core-skill checks for changed code. Documentation-only work needs reference and diff checks, not an application build. Report actual verification and separate confirmed findings from untested hypotheses.
 
 ## Maintenance
 
-Update this skill only when phase boundaries, architecture, migration policy, or verification entry points change. Do not update it for ordinary feature work, command additions, or line-number changes.
+Keep durable boundaries and verification methods here, not configuration inventories, implementation snapshots, phase plans or historical line numbers. Correct contradictions with current code and user requirements when discovered.

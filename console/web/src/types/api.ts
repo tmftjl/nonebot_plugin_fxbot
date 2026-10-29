@@ -273,7 +273,6 @@ export interface ModelRoutingData {
   tasks: ModelRoutingTask[]
   providers: ModelRoutingProvider[]
   default_provider: string
-  fallback_providers: string[]
 }
 
 export interface ChatTenant {
@@ -419,6 +418,24 @@ export interface ChatHealth {
   degraded_reason: string
   scheduler_ready: boolean
   online_bots: number
+}
+
+export interface ChatTraceStage {
+  kind: 'planner' | 'replyer' | 'send'
+  label: string
+  duration_ms: number
+  provider: string
+  error?: string
+  target_message_id?: string
+  budget?: Record<string, any>
+  injected?: Record<string, any>
+  send?: {
+    sent_parts: number
+    total_parts: number
+    failed_index: number | null
+    cancelled: boolean
+    send_ms: number
+  }
 }
 
 export interface ChatTrace {

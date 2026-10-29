@@ -1,0 +1,66 @@
+# FxBot 与本地 MaiBot 功能核查
+
+后续明确要求：删除全局私聊暂停、单个私聊暂停规则及备用 Provider 配置和运行逻辑。私聊只由启用开关与白名单控制；每项任务使用单一 Provider，不做故障转移。“忽略命令前缀”继续保留，匹配消息（包括开头空白和带图消息）不进入对话、群聊历史或私聊历史。本次全库 799 项测试、前端类型检查与构建通过。
+
+对照对象为 `temp/MaiBot` 的 `062d45c`，以源码和实际调用结果为依据。相同默认配置不代表功能流程完全相同；本记录不能替代后续源码核查。FxBot 保留会话归属和隔离，显式配置的共享范围另行检查。
+
+| 功能 | FxBot 调用链 | 当前核查结果 |
+| --- | --- | --- |
+| 普通聊天 | `chat/router.py` → `chat/service.py` → `chat/heart_flow/conversation.py` | 已接入原生工具 Planner 循环，支持工具结果续思考、reply、wait、stop、被动回复和快速反应；已做真实模型联调，平台发送使用本地模拟目标 |
+| Planner 与回复器提示 | `chat/heart_flow/prompts.py`、`chat/personas.py`、`chat/replyer/prompt.py` | 普通、被动、Focus Planner 及回复器采用对应上游原版模板；行为风格只交给 Planner，回复器不再插入额外时间心情建议或背景禁回标记。真实模型完成 reply → 纯正文回复器 → stop，共三次请求 |
+| 回复器模型职责 | `chat/replyer/generator.py` | 回复器不提供或执行工具，默认温度 1.0、8192 tokens、240 秒超时；工具结果续思考只在 Planner 执行，删除旧回复器工具循环 |
+| 工具发现与共享参数 | `chat/tools/discovery.py`、`chat/focus/tools.py` | 未发现工具通过上游 system-reminder 列表提示；只在上下文保留完整 tool_search 调用与成功结果时激活，裁切后重新隐藏。Focus 所有工具含 wait/stop 均要求有效来源会话，原工具同名 session_id 参数放入 tool_arguments，保留本地 schema 引用与约束 |
+| 被动回复选项 | `chat/heart_flow/conversation.py` | 每次设置整体替换，wait、stop 或轮次结束清空；等待参数只接受非负整数；本次篇幅要求使用上游指示原文 |
+| 表达学习 | 裁切上下文 → `chat/memory/trimmed.py` → `chat/memory/expression.py` → Repository | 使用裁切的真实聊天素材，至少 10 条；使用上游抽取和复审提示词；只接受数组和有效消息 id，精确合并、每次计数加 1、不衰减；不转换旧数据 |
+| 表达选择 | `chat/memory/inject.py` → `select_expressions` | 普通模式改为 MaiBot 的计数加权无放回抽样，不足 10 个候选不注入；向量模式保留召回后筛选 |
+| 黑话学习 | 裁切上下文 → `chat/memory/trimmed.py` → `chat/memory/jargon.py` → Repository | 至少 10 条起批，4/8/25/100 次阈值；迁入上下文释义、孤立释义、比较三阶段提示词，仅主要含义不同才视为黑话；新三阶段已通过真实模型验证；阈值和隔离由数据库回归验证 |
+| 黑话使用 | `chat/memory/inject.py` → `_jargon_hits` | 只在上下文命中时注入可用词条，读取受会话或显式共享配置约束 |
+| 长期记忆 | `bootstrap.py` → `chat/amemorix/runtime.py`；`writeback.py`、`inject.py`、`chat/tools/amemorix.py` | 内置 A_Memorix 内核、摘要及人物事实写回、画像和检索工具都有入口；默认参数已对照；真实内核验证写入后本会话命中 1 条，其他会话 0 条；未将该存储测试当作完整模型写回测试 |
+| 人物事实 | 成功发送 → `chat/amemorix/writeback.py` | 迁入上游提取提示词，优先回复目标，否则从最近六条用户消息过滤目标人物；最多三条证据，邻近上下文帮助理解省略；真实模型从短答提取过敏信息且未采纳机器人新增猜测；真实消息 ID 由宿主记录 |
+| 人物事实完整写回验证 | `on_reply` → 提取模型 → `ingest_text` → 真实 A_Memorix → `search` | 已用合成发言执行真实模型提取及真实数据库写入，生成 direct_user 稳定事实；未写入机器人猜测的职业。本会话检索命中 1 条、其他会话 0 条。当前无嵌入服务，该测试验证的是稀疏检索路径 |
+| 自动摘要完整写回验证 | 默认 36 条真实记录 → `_handle_summary` → 上游摘要模型 → 真实内核 | 无 embeddings 环境下真实模型生成并写入苏州天平山出行摘要，保存集合时间、分工及雨天备选；本会话命中 1 条、其他会话 0 条，同一消息计数再次处理不重复写入 |
+| 宿主检索与画像返回值 | `chat/amemorix/service.py` → 查询工具/自动注入 | 修复原生内核以 `hits`、`error`、`retrieval_ready` 返回，宿主却直接要求 `success` 导致成功结果被误判的问题；画像同样在宿主边界明确转换。按 MaiBot 的真实来源查询补回段落来源和人物归属，避免稀疏召回的排序通道名被当成记忆来源；真实数据库回归覆盖查询工具正文和启发式记忆引用 |
+| 记忆检索范围 | `chat/amemorix/core/runtime/services/search_hit_processing_service.py` | 修复直接 SQL 查询返回的当前 JSON metadata 未解码，导致事实段落不能进入本会话召回范围；真实数据库回归覆盖本会话可检索及其他会话不命中，无历史数据转换 |
+| 记忆资源释放 | 内核 lifecycle → `SparseBM25Index.unload`、MetadataStore.close | 已复现并修复 BM25 独立 SQLite 连接在关闭时遗漏释放；正常关闭、持久化失败及初始化失败均有回归。真实模型写回后 shutdown 完成即能在事件循环内释放临时目录，无延迟清理或垃圾回收兜底 |
+| 摘要时间边界 | `chat/amemorix/writeback.py` | 修复 naive UTC 截止时间被按机器本地时区转为时间戳的问题，转换前显式标为 UTC；回归阻止无时区 timestamp 调用 |
+| 消息调度 | `chat/behavior/turn_scheduler.py` → `chat/service.py` | 先防抖、静默、强制触发、退避，再动态门控；未触发的消息保留到后续合并；进行中的 Planner 接收新消息；已覆盖会话隔离和清空取消 |
+| Focus 裁切 | `chat/focus/group_runtime.py` | 轮后按真实聊天消息计数，1.2 倍触发、保留 0.2 倍且至少五条；保留完整片段与最后用户消息，清空期间不提交旧结果；学习素材按各会话来源投递 |
+| 上下文摘要 | `chat/context_summary.py`、普通 Planner 与 Focus | 已改为复用成功 Planner 的完整消息前缀、工具顺序、实际 Provider 配置、模型和任务参数；仅追加未覆盖资料及上游普通/Focus 压缩模板；严格校验 JSON，工具调用响应不执行且不提交；真实模型验证前缀复用及快照后资料合入 |
+| Focus 内置工具 | `chat/focus/tools.py` → `chat/focus/group_runtime.py` | 使用普通 Planner 的回复选项结构，补入消息目标、回复风格、@、图片附件、表情候选与发送；图片工具结果按来源聊天投影，回复目标和附件不能引用其他成员聊天；成员退出或清空后旧结果作废 |
+| Focus 检查点 | `chat/focus/context.py` → `chat/focus/group_runtime.py` | 当前结构保存各会话处理进度、输入来源和 @ 标记；压缩摘要保留来源及进度，重启后仍能按来源撤回；保存副本为未完成工具补充未知执行状态，禁止自动重放且不改变实时批次；只读取当前版本，不转换旧检查点 |
+| 工具媒体 | `chat/heart_flow/attachments.py` | 覆盖图片、音频、资源链接、嵌入资源和二进制内容；保留原始内容项序号及上游 XML 属性，内联有效图片进入视觉输入，其余投影可读元信息；真实模型验证识别图片主色及 PDF 文件名 |
+| 旧链路清理 | `chat/planner.py`、`chat/heart_flow/plan_flow.py`、`chat/memory/expression.py` | 删除旧 JSON 动作规划器及其分派、单独的定时表达/黑话学习入口、旧批次复审解析和模糊选择器；删除本次新增的表达旧数据重算与合并迁移及对应测试，当前仅使用原生工具 Planner 与裁切学习链路 |
+| 模型任务参数 | `chat/amemorix/_host/llm.py` | utils 默认温度 0.5、memory 0.3，通常 8192 tokens、planner 16384；采用对应任务超时，保留显式覆盖及零温度；未增加配置项 |
+| 旧自动群风格 | `chat/memory/inject.py` | 停用额外自动风格摘要注入，仅保留用户明确设置的人工风格；自动表达与黑话走各自上游流程 |
+| 多余配置清理 | 默认配置、配置 schema、Provider 任务分配接口 | 删除 `model_routing.extract` 和 `model_routing.style`，移除旧自动群风格模型链路及旧联网配置迁移；学习任务未分配时使用 utils，表达选择与模型断句的 fast_model 未分配时使用 utils。两处控制台入口均不再显示或接受已删除的任务 |
+| 表情采集与管理 | `chat/router.py` → `chat/emoji.py` → Repository；周期维护和清理任务 | 采集只存储，周期维护每个会话成功注册一个后结束；纯文本情绪标签、GIF 处理、内容审核及满额替换使用上游实现与原版模板；整个注册链按会话互斥，失败识别标为已处理；替换样本保留上游有放回加权抽样及原始编号 |
+| 表情选择与发送 | `chat/heart_flow/emoji_tools.py` → `chat/message_receive/sender.py` | 使用上游选择模板和最近 12 条上下文，emoji 路由优先，再选择可用的 Planner/vision；无效模型结果按上游规则取首项；拼图行列、间距及可扩展序号角标对照上游；发送成功后保存回执、可见历史及使用计数；已移除自动模糊匹配补发 |
+| 表情真实模型验证 | 合成笑脸/哭脸 → 注册/审核 → 选择 → 本地发送目标 → 替换 | 原版四个模板逐文件比对一致；真实模型完成情绪识别和内容审核，依据“面试通过”的上下文选中笑脸，成功计数与可见历史已核验；替换模型返回有效编号。发送对象为本地模拟目标 |
+| 普通回复附图 | `chat/heart_flow/attachments.py` → `chat/message_receive/sender.py` | 支持 `attach_pic` 的消息 ID + 图片序号，以及 `tool_result:<call_id>:<item_index>`；正文后按序发送，成功回执才写可见历史；会话归属、同轮工具媒体引用、真实数据库回执和清空取消均有回归 |
+| 视觉 | `chat/vision.py`、Provider 多模态请求 | 有图片描述和表情识别；给定网关的真实模型识别红色测试图成功 |
+| 语音 | `chat/voice.py`、任务路由和 sender | ASR/TTS 有独立入口；默认不开启；需要相应服务，未用纯文本模型冒充语音服务测试 |
+| 联网 | `chat/web/`、工具注册及任务路由 | 有搜索、页面读取和工具结果存储；需要配置对应服务 |
+| 回复后处理 | `chat/behavior/response.py`、`chat/typo.py`、`chat/behavior/`、sender | 断句、节奏、引用、错字和纠错链路存在；保持与成功发送历史分离 |
+| 首段发送与图片复用 | `chat/message_receive/sender.py`、`history.py`、`chat/service.py` | 按上游 reply 工具的 `typing=index > 0` 发送：首段不额外等待，仅后续分段模拟打字。已入历史的图片描述供当前消息复用，当前轮识图结果继续传给回复器，避免同一张图片在历史、Planner、回复器三个阶段重复识别；不同消息、不同图片及无法确定对应关系的合并批次不混用历史结果 |
+| 轮次追踪 | `chat/trace.py` → `chat/service.py`、sender → 控制台 | 新记录按逻辑轮次汇总，Planner 请求、各次回复生成、交付逐阶段展开；子回复不另建追踪，发送失败和多次回复保留明细。总耗时使用经过时间，不叠加已经包含的子阶段；同轮等待续跑更新同一记录，Focus 独立回复追加交付阶段。阶段 JSON 完整存储，不截断；不猜测合并或转换历史记录。809 项回归、前端类型检查和构建通过 |
+
+## 外部服务与验收范围
+
+- A_Memorix 图片记忆已补入原图缓存、持久任务日志、重启恢复和 `query_image_memory` 宿主工具；本地回归覆盖字节与会话归属，尚未使用真实图片嵌入服务完成外部联调。
+- 工具媒体投影已覆盖上游五类内容；语音识别、播报和文件正文读取仍取决于相应工具及服务，当前真实模型测试验证了图片和资源元信息。
+- 上下文摘要已采用请求快照及上游提示词，Focus 检查点已覆盖压缩进度及中断工具批次。模型摘要内容本身具有随机性，前缀保持不代表两次生成逐字一致。
+- 表情注册、审核、选择和替换的模型链路已联调，实际平台附件交付尚未逐平台验证。FxBot 使用现有任务路由表达视觉模型配置，无新增视觉开关；Planner 与 vision 指向同一个 Provider 时允许直接查看候选拼图。
+- 未提供 Embedding、ASR、TTS 或联网服务时，不能将相应功能的完整外部链路标为已联调。本轮实测给定网关 `/models` 为 200、无嵌入模型候选，给定模型的 `/embeddings` 请求为 404；向量服务联调尚未完成。
+- 人物事实、自动聊天摘要的真实模型提取、内核写入及稀疏检索已贯通；真实内核画像派生返回“喜欢登山”，图片记忆在无 embeddings 时通过原图精确哈希检索命中本会话、其他会话不命中。图片向量相似检索仍需真实嵌入服务。无 embeddings 是受支持的普通运行场景，不阻塞这些非向量链路。
+
+默认值复核通过：本次再次直接解析上游配置定义，核对 48 项同名聊天标量和 140 项可唯一定位的长期记忆标量均一致；其余嵌套结构、路由和宿主字段按各功能回归验证，不能把这些抽样数量解释为全部配置总数。未新增对话设置项，未增加数据迁移或旧模式兼容分支。
+
+长期记忆配置的字段定义另做 AST 对照：28 个 A_Memorix 配置类中，聊天运行所用字段一致；宿主未提供上游旧存储迁移/LPMM 转换的四项子进程等待配置，该类工具不在本次会话功能范围，也未为其添加配置或迁移代码。
+
+代码检查：全库 `ruff check .` 通过；本次涉及 Python 文件格式检查通过。全库格式检查仍报告已有的无关文件格式差异，未批量格式化其他模块。
+
+最终回归：配置清理后整个 `tests/` 共 803 项通过，覆盖聊天、配置保存及调度热更新；删除旧自动风格学习与配置迁移实现的专用测试，保留现用行为回归。异步测试关闭调试栈采集以避免大量 SQLite 操作的调试开销，未跳过用例。真实网关曾完成三次模型请求的普通 Planner → 回复器 → stop 验证；本次配置清理通过路由、控制台和全库回归验证。
+
+配置核查补正：上游 `src/config/official_configs.py` 的 `ChatConfig.context_compaction_summary_max_chars` 对应本项目 `planner.context_summary_max_chars`；上游 `src/web_search/config.py` 定义 `preview_chars`。两项均为有效上游设置，保留默认值、校验及运行时读取。此前将它们描述为 FxBot 独有配置不准确。
+
+没有新增对话设置项，也没有把测试凭据保存到仓库。真实模型测试只使用合成消息、合成图片和隔离测试数据，不向真实群聊发消息。
