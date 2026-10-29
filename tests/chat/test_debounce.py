@@ -10,16 +10,16 @@ from unittest.mock import AsyncMock, patch
 
 from src.plugins.nonebot_plugin_fxbot.chat import router
 from src.plugins.nonebot_plugin_fxbot.chat.types import MentionRef, ChatRequest
+from src.plugins.nonebot_plugin_fxbot.chat.service import ChatService
 from src.plugins.nonebot_plugin_fxbot.chat.session import ChatSessionStore
 from src.plugins.nonebot_plugin_fxbot.chat.behavior import debounce
 from src.plugins.nonebot_plugin_fxbot.chat.behavior.debounce import (
-    GROUP_WINDOW,
-    PRIVATE_WINDOW,
     BATCH_MAX_SECONDS,
     BATCH_MAX_MESSAGES,
     PendingBatch,
     DebounceRegistry,
 )
+from src.plugins.nonebot_plugin_fxbot.chat.behavior.reply_gate import ReplyGateRegistry
 
 
 def _request(**values: object) -> ChatRequest:
@@ -39,18 +39,54 @@ def _request(**values: object) -> ChatRequest:
     return ChatRequest(**fields)  # type: ignore[arg-type]
 
 
-class BatchMergeTests(unittest.TestCase):
+class _NaturalMode(unittest.IsolatedAsyncioTestCase):
+    """固定自然档，避免读取本机已保存的配置。"""
+
+    def setUp(self) -> None:
+        patcher = patch.object(debounce, "_mode", return_value="natural")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+
+class BatchMergeTests(_NaturalMode):
     """窗口、上限与合并内容。"""
 
-    def test_windows(self) -> None:
-        self.assertEqual(debounce.window_for(_request()), GROUP_WINDOW)
-        self.assertEqual(debounce.window_for(_request(group_id=None)), PRIVATE_WINDOW)
+    def test_mode_profiles(self) -> None:
+        self.assertEqual(debounce.WAIT_PROFILES["fast"], debounce.WaitTimes(1.0, 3.0, 1.0, 0.5))
+        self.assertEqual(debounce.WAIT_PROFILES["natural"], debounce.WaitTimes(2.0, 5.0, 2.0, 0.5))
+        self.assertEqual(debounce.WAIT_PROFILES["steady"], debounce.WaitTimes(4.0, 7.0, 4.0, 2.0))
+
+    def test_quiet_and_active_start(self) -> None:
+        now = [100.0]
+        registry = DebounceRegistry()
+        with patch.object(debounce, "_now", lambda: now[0]):
+            batch = registry.create(_request(trigger_kind="private"))
+            self.assertEqual(batch.deadline, 102.0)
+            registry.pop(batch)
+            now[0] = 110.0
+            active = registry.create(_request(trigger_kind="private", dedupe_key="msg:2"))
+        self.assertEqual(active.deadline, 115.0)
+
+    def test_mention_is_capped_to_one_second(self) -> None:
+        with patch.object(debounce, "_now", lambda: 100.0):
+            batch = DebounceRegistry().create(_request(trigger_kind="mention"))
+        self.assertEqual(batch.deadline, 101.0)
+
+    def test_bare_image_waits_at_least_four_seconds(self) -> None:
+        with patch.object(debounce, "_now", lambda: 100.0):
+            batch = DebounceRegistry().create(_request(group_id=None, trigger_kind="private", text="", images=["a"]))
+        self.assertEqual(batch.deadline, 104.0)
+
+    def test_off_mode_does_not_wait(self) -> None:
+        with patch.object(debounce, "_mode", return_value="off"), patch.object(debounce, "_now", lambda: 100.0):
+            batch = DebounceRegistry().create(_request())
+        self.assertEqual(batch.deadline, 100.0)
 
     def test_same_author_burst_extends_window(self) -> None:
         now = [100.0]
         registry = DebounceRegistry()
         with patch.object(debounce, "_now", lambda: now[0]):
-            batch = registry.create(_request())
+            batch = registry.create(_request(trigger_kind="private"))
             self.assertEqual(batch.deadline, 102.0)
             now[0] = 101.5
             self.assertTrue(registry.merge_context(_request(dedupe_key="msg:2", message_id="2", text="在吗")))
@@ -82,7 +118,7 @@ class BatchMergeTests(unittest.TestCase):
         now = [0.0]
         registry = DebounceRegistry()
         with patch.object(debounce, "_now", lambda: now[0]):
-            batch = registry.create(_request())
+            batch = registry.create(_request(trigger_kind="private"))
             now[0] = BATCH_MAX_SECONDS - 1
             batch.accept(_request(dedupe_key="msg:2", message_id="2"), trigger=False)
             self.assertEqual(batch.deadline, BATCH_MAX_SECONDS)
@@ -131,6 +167,55 @@ class BatchMergeTests(unittest.TestCase):
         self.assertEqual(merged.trigger_seq, 2)
         self.assertEqual(merged.accepted_epoch, 0)
 
+    def test_merged_batch_is_checked_under_latest_trigger_owner(self) -> None:
+        """换人触发后，合并轮次按新触发者的序号判断是否被取代。"""
+        store = ChatSessionStore()
+        registry = DebounceRegistry()
+        first = _request(trigger_seq=store.next_seq("tenant", "u1"), trigger_owner="u1")
+        batch = registry.create(first)
+        second = _request(
+            user_id="u2",
+            user_name="Bob",
+            dedupe_key="msg:2",
+            message_id="2",
+            trigger_seq=store.next_seq("tenant", "u2"),
+            trigger_owner="u2",
+        )
+        registry.merge_trigger(second)
+        merged = batch.merge()
+        self.assertEqual(merged.trigger_owner, "u2")
+        service = ChatService(store)
+        self.assertTrue(service.is_latest(merged))
+        store.next_seq("tenant", "u2")
+        self.assertFalse(service.is_latest(merged))
+
+    def test_proactive_turn_is_not_invalidated_by_itself(self) -> None:
+        """主动轮的序号记在独立归属者下，不能按普通用户去查。"""
+        store = ChatSessionStore()
+        service = ChatService(store)
+        owner = "\0proactive"
+        request = _request(
+            trigger_kind="proactive",
+            proactive=True,
+            trigger_seq=store.next_seq("tenant", owner),
+            trigger_owner=owner,
+        )
+        self.assertTrue(service.is_latest(request))
+        store.next_seq("tenant", "u1")
+        self.assertTrue(service.is_latest(request))
+
+    def test_forced_trigger_wins_over_proactive_in_batch(self) -> None:
+        """批次里既有主动又有人 @ 时按普通轮处理，只有纯主动批次才算主动轮。"""
+        registry = DebounceRegistry()
+        batch = registry.create(_request(trigger_kind="proactive", proactive=True, trigger_seq=1))
+        registry.merge_trigger(_request(dedupe_key="msg:2", message_id="2", trigger_seq=2))
+        self.assertFalse(batch.merge().proactive)
+
+        pure = DebounceRegistry()
+        pure_batch = pure.create(_request(trigger_kind="proactive", proactive=True, trigger_seq=1))
+        pure.merge_proactive(_request(dedupe_key="msg:2", message_id="2", trigger_kind="proactive", proactive=True))
+        self.assertTrue(pure_batch.merge().proactive)
+
     def test_clear_cancels_pending_batch(self) -> None:
         registry = DebounceRegistry()
         batch = registry.create(_request())
@@ -146,7 +231,7 @@ class BatchMergeTests(unittest.TestCase):
         self.assertIs(registry.get("tenant"), batch)
 
 
-class BatchWaitTests(unittest.IsolatedAsyncioTestCase):
+class BatchWaitTests(_NaturalMode):
     """窗口等待与清空唤醒。"""
 
     async def test_wait_returns_when_deadline_passed(self) -> None:
@@ -157,7 +242,8 @@ class BatchWaitTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_new_message_wakes_and_extends_wait(self) -> None:
         registry = DebounceRegistry()
-        with patch.object(debounce, "window_for", return_value=0.05):
+        waits = debounce.WaitTimes(0.05, 0.05, 0.05, 0.05)
+        with patch.dict(debounce.WAIT_PROFILES, {"natural": waits}):
             batch = registry.create(_request())
             task = asyncio.create_task(batch.wait())
             await asyncio.sleep(0.01)
@@ -174,7 +260,7 @@ class BatchWaitTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(task, 1.0)
 
 
-class RouterBatchTests(unittest.IsolatedAsyncioTestCase):
+class RouterBatchTests(_NaturalMode):
     """路由只由首个触发消息生成一轮。"""
 
     def _identity(self) -> SimpleNamespace:
@@ -263,11 +349,101 @@ class RouterBatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(merged.text, "你好\n在吗")
         service.persist_batch.assert_awaited_once_with([first, second])
 
+    async def test_merged_forced_triggers_count_once_and_deduplicate_all_ids(self) -> None:
+        for first_kind in ("mention", "persona", "proactive"):
+            with self.subTest(first_kind=first_kind):
+                registry = DebounceRegistry()
+                gates = ReplyGateRegistry()
+                service = SimpleNamespace(
+                    session_store=ChatSessionStore(),
+                    persist_batch=AsyncMock(),
+                    process_and_send=AsyncMock(return_value=False),
+                    is_current=lambda *_: True,
+                    ensure_hydrated=AsyncMock(),
+                )
+                first = _request(trigger_kind=first_kind)
+                second = _request(dedupe_key="msg:2", message_id="2")
+                event = self._event()
+                setattr(event, router._PROACTIVE_ATTR, first_kind == "proactive")
+                second_identity = self._identity()
+                second_identity.dedupe_key = second.dedupe_key
+                second_identity.message_id = second.message_id
+                gate = gates.get("tenant")
+
+                async def wait_and_add_trigger(batch: PendingBatch) -> None:
+                    self.assertEqual(gate.snapshot()["window"]["expected_forced"], 0)
+                    await router._handle_ai_fallback(None, self._event(), SimpleNamespace(finish=AsyncMock()))
+                    self.assertEqual(batch.requests, [first, second])
+                    self.assertEqual(gate.snapshot()["window"]["expected_forced"], 0)
+                    service.process_and_send.assert_not_awaited()
+
+                with (
+                    patch.object(router, "default_debounce_registry", registry),
+                    patch.object(router, "default_reply_gate_registry", gates),
+                    patch.object(router, "chat_service", service),
+                    patch.object(router, "event_identity", side_effect=[self._identity(), second_identity]),
+                    patch.object(router, "adapt_message_event", new=AsyncMock(side_effect=[first, second])),
+                    patch.object(
+                        router,
+                        "_is_to_me",
+                        side_effect=[True] if first_kind == "proactive" else [first_kind == "mention", True],
+                    ),
+                    patch.object(PendingBatch, "wait", wait_and_add_trigger),
+                    patch.object(router.default_runtime_factory, "create", return_value=object()),
+                ):
+                    await router._handle_ai_fallback(None, event, SimpleNamespace(finish=AsyncMock()))
+
+                service.process_and_send.assert_awaited_once()
+                self.assertTrue(service.process_and_send.await_args.args[0].batched)
+                self.assertAlmostEqual(gate.snapshot()["window"]["expected_forced"], 0.91)
+                for request in (first, second):
+                    gate.record_forced_turn([request.dedupe_key])
+                    self.assertAlmostEqual(gate.snapshot()["window"]["expected_forced"], 0.91)
+
+    async def test_immediate_forced_turn_counting(self) -> None:
+        for full_batch in (False, True):
+            for kind in ("mention", "persona", "proactive", "private"):
+                with self.subTest(full_batch=full_batch, kind=kind):
+                    registry = DebounceRegistry()
+                    if full_batch:
+                        batch = registry.create(_request(dedupe_key="owner"))
+                        for index in range(BATCH_MAX_MESSAGES - 1):
+                            batch.accept(_request(dedupe_key=f"context:{index}"), trigger=False)
+                    gates = ReplyGateRegistry()
+                    service = SimpleNamespace(
+                        session_store=ChatSessionStore(),
+                        process_and_send=AsyncMock(return_value=False),
+                        ensure_hydrated=AsyncMock(),
+                    )
+                    event = self._event()
+                    if kind == "private":
+                        event.group_id = None
+                    setattr(event, router._PROACTIVE_ATTR, kind == "proactive")
+                    with (
+                        patch.object(debounce, "_mode", return_value="off"),
+                        patch.object(router, "default_debounce_registry", registry),
+                        patch.object(router, "default_reply_gate_registry", gates),
+                        patch.object(router, "chat_service", service),
+                        patch.object(router, "event_identity", return_value=self._identity()),
+                        patch.object(
+                            router, "adapt_message_event", new=AsyncMock(return_value=_request(trigger_kind=kind))
+                        ),
+                        patch.object(router, "_is_to_me", return_value=kind == "mention"),
+                        patch.object(router.default_runtime_factory, "create", return_value=object()),
+                    ):
+                        await router._handle_ai_fallback(None, event, SimpleNamespace(finish=AsyncMock()))
+
+                    service.process_and_send.assert_awaited_once()
+                    self.assertAlmostEqual(
+                        gates.get("tenant").snapshot()["window"]["expected_forced"],
+                        0.91 if kind in {"mention", "persona"} else 0,
+                    )
+
     async def test_epoch_is_captured_after_hydration(self) -> None:
         registry = DebounceRegistry()
         store = ChatSessionStore()
 
-        async def hydrate(_session_id: str) -> None:
+        async def hydrate(_session_id: str, *, is_group: bool = True) -> None:
             store.set_epoch("tenant", 5)
 
         service = SimpleNamespace(
@@ -316,6 +492,7 @@ class RouterBatchTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_clear_during_wait_skips_reply(self) -> None:
         registry = DebounceRegistry()
+        gates = ReplyGateRegistry()
         service = SimpleNamespace(
             session_store=ChatSessionStore(), process_and_send=AsyncMock(), ensure_hydrated=AsyncMock()
         )
@@ -325,6 +502,7 @@ class RouterBatchTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(router, "default_debounce_registry", registry),
+            patch.object(router, "default_reply_gate_registry", gates),
             patch.object(router, "chat_service", service),
             patch.object(router, "event_identity", return_value=self._identity()),
             patch.object(router, "adapt_message_event", new=AsyncMock(return_value=_request())),
@@ -334,3 +512,4 @@ class RouterBatchTests(unittest.IsolatedAsyncioTestCase):
             await router._handle_ai_fallback(None, self._event(), SimpleNamespace(finish=AsyncMock()))
 
         service.process_and_send.assert_not_awaited()
+        self.assertEqual(gates.get("tenant").snapshot()["window"]["expected_forced"], 0)

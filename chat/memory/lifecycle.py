@@ -1,50 +1,36 @@
-"""遗忘、画像查看与撤回失效的业务入口。"""
+"""撤回失效的业务入口。"""
 
 from __future__ import annotations
 
+from nonebot import logger
+
 from .state import is_ready
+from ..session import default_session_store
 from .repository import chat_repository
-
-
-def _require_ready() -> None:
-    """记忆不可用时直接失败，不能伪报删除成功。"""
-    if not is_ready():
-        raise RuntimeError("记忆功能暂不可用")
-
-
-async def forget_subject(tenant: str, subject_id: str, *, reason: str = "user") -> int:
-    """删除主体全部长期记忆并写禁止重建标记。"""
-    _require_ready()
-    return await chat_repository.forget_subject(tenant, subject_id, reason=reason)
-
-
-async def forget_fact(tenant: str, subject_id: str, keyword: str, *, reason: str = "user") -> list[tuple[str, str]]:
-    """删除匹配关键词的事实，返回被删除的 (key, value)。"""
-    _require_ready()
-    return await chat_repository.forget_fact(tenant, subject_id, keyword, reason=reason)
-
-
-async def profile_view(tenant: str, subject_id: str) -> str:
-    """返回画像与事实的可读文本。"""
-    _require_ready()
-    profile = await chat_repository.get_profile(tenant, subject_id)
-    facts = await chat_repository.get_facts(tenant, subject_id, limit=20)
-    lines: list[str] = []
-    if profile is not None and not profile.stale:
-        name = profile.display_name or subject_id
-        summary = profile.manual_override or profile.summary
-        lines.append(f"{name}的画像：{summary or '暂无'}")
-    elif profile is not None:
-        lines.append("画像正在重建，暂不可用")
-    else:
-        lines.append("还没有可用的长期画像")
-    if facts:
-        lines.append("已知事实：")
-        lines.extend(f"- {fact.key.split('.', 1)[-1]}：{fact.value}" for fact in facts)
-    return "\n".join(lines)
+from ..context_summary import forget_summarized
+from ..behavior.debounce import default_debounce_registry
 
 
 async def handle_recall(tenant: str, platform_message_id: str, *, operator: str = "") -> dict[str, int] | None:
-    """处理撤回；消息不存在时返回 None。"""
-    _require_ready()
-    return await chat_repository.invalidate_message(tenant, platform_message_id, operator=operator)
+    """处理撤回：数据库与运行时上下文一起失效，基于旧内容的在途回复不再发出。"""
+    if not is_ready():
+        raise RuntimeError("聊天存储暂不可用")
+    result = await chat_repository.invalidate_message(tenant, platform_message_id, operator=operator)
+    if await _discard_runtime(tenant, platform_message_id):
+        default_session_store.invalidate(tenant)
+        logger.debug(f"[Chat] 撤回后运行时上下文已失效: session={tenant} message={platform_message_id}")
+    return result
+
+
+async def _discard_runtime(tenant: str, platform_message_id: str) -> bool:
+    """从内存历史、待合并批次、Focus 时间线与摘要里移除这条消息；返回是否有变化。"""
+    dropped = default_session_store.discard_message(tenant, platform_message_id)
+    dropped = default_debounce_registry.discard_message(tenant, platform_message_id) or dropped
+    dropped = forget_summarized(tenant, platform_message_id) or dropped
+    try:
+        from ..focus import focus_mode_manager
+
+        dropped = await focus_mode_manager.discard_message(tenant, platform_message_id) or dropped
+    except Exception:
+        logger.opt(exception=True).warning("[Chat] 撤回时清理 Focus 上下文失败")
+    return dropped

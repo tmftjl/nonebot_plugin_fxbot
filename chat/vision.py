@@ -20,7 +20,17 @@ _EMOJI_PROMPT = (
     '{"description": "不超过 60 字的客观描述", "tags": ["3-6 个适合检索的标签"]}。'
     "标签写情绪、动作或主题，不要写发送者。"
 )
+_EMOJI_REVIEW_PROMPT = (
+    "这是一张准备放进聊天表情库的图片。判断它是否适合在日常群聊中发送："
+    "不能含色情、血腥、暴力、违法、政治敏感或令人强烈不适的内容。只回答「是」或「否」。"
+)
 _MAX_IMAGE_DESC_CHARS = 200
+
+
+def vision_configured(chat_cfg: dict[str, Any]) -> bool:
+    """是否配置了 vision 路由；与 MaiBot 未配视觉模型时不识图一致。"""
+    routing = chat_cfg.get("model_routing") or {}
+    return isinstance(routing, dict) and bool(str(routing.get("vision") or "").strip())
 
 
 def clean_description(text: str) -> str:
@@ -66,6 +76,7 @@ async def describe_images(provider: Any, images: list[str]) -> list[str]:
 
 async def describe_sources(provider: Any, images: list[str | bytes]) -> list[str]:
     """把原始图片源加载后并发描述。"""
+
     async def describe_source(source: str | bytes) -> str:
         loaded = await load_images([source])
         return await describe_image(provider, loaded[0]) if loaded else ""
@@ -99,3 +110,9 @@ async def describe_emoji(provider: Any, url: str) -> tuple[str, list[str]]:
     """为表情包生成描述与标签；失败时返回空结果。"""
     raw = await _chat_vision(provider, url, _EMOJI_PROMPT, max_tokens=256)
     return _parse_emoji(raw) if raw else ("", [])
+
+
+async def review_emoji(provider: Any, url: str) -> bool:
+    """内容审核；模型失败或明确否定时返回 False。"""
+    raw = await _chat_vision(provider, url, _EMOJI_REVIEW_PROMPT, max_tokens=8)
+    return bool(raw) and "否" not in raw

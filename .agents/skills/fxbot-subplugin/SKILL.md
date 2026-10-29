@@ -44,7 +44,7 @@ Discovery by scanning does not mean “never imported.” Keep both `models.py` 
 - Log runtime errors with context and stack traces, then end the matcher silently. Do not send failure reasons to customers or interpolate exception text into messages. Only expected business branches such as missing parameters, invalid formats, or insufficient permissions may send predefined guidance.
 - Release image-rendering and browser resources on both success and failure paths. Preserve a lightweight fallback when the feature already defines graceful degradation.
 - Background loops must support idempotent startup, cancellation, and shutdown cleanup. A single failed iteration must not silently kill a long-running task. Follow neighboring subplugins when choosing a scheduling mechanism.
-- Register AI tools through the `chat.tools` registry and keep parameter schemas aligned with function signatures. High-risk tools validate scene, permission, and parameter boundaries themselves.
+- Register AI tools through the `chat.tools` registry and keep parameter schemas aligned with function signatures. High-risk tools validate scene, permission, and parameter boundaries themselves. Mark situational tools `deferred=True` so they stay out of the model's tool list until `tool_search` finds them.
 
 ## Style and Boundaries
 

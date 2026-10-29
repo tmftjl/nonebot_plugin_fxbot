@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from dataclasses import dataclass
 
@@ -43,9 +44,52 @@ def _ensure_default_persona(dir_path: Path) -> None:
     default_file.write_text(_DEFAULT_PERSONA_TEXT, encoding="utf-8")
 
 
+_PERSONA_HEADING = re.compile(r"^#{1,6}[ \t]+(.+?)[ \t]*$", re.M)
+_PERSONA_SECTIONS = {
+    "人格特征": "personality",
+    "行为风格": "behavior_style",
+    "回复风格": "reply_style",
+}
+_REPLY_LEAD = "现在请你读读之前的聊天记录，把握当前的话题，然后给出日常且口语化的回复，"
+_REPLY_TAIL = "请注意不要输出多余内容(包括不必要的前后缀，冒号，括号，表情包，@等 )，只输出发言内容就好。"
+
+
 def _read_text(path: Path) -> str:
     """读取人格文本。"""
     return path.read_text(encoding="utf-8", errors="ignore").strip()
+
+
+def _split_sections(text: str) -> tuple[str, dict[str, str]] | None:
+    """按人格小标题切分；出现未知或重复小标题时返回 None，整段当作身份。"""
+    headings = list(_PERSONA_HEADING.finditer(text))
+    if not headings:
+        return None
+    sections: dict[str, str] = {}
+    for index, heading in enumerate(headings):
+        key = _PERSONA_SECTIONS.get(heading.group(1).strip())
+        if key is None or key in sections:
+            return None
+        end = headings[index + 1].start() if index + 1 < len(headings) else len(text)
+        sections[key] = text[heading.end() : end].strip()
+    return text[: headings[0].start()].strip(), sections
+
+
+def compose_persona_prompt(name: str, text: str, *, scene_prompt: str = "") -> str:
+    """按 MaiBot replyer 的结构拼装系统提示；旧版无小标题的人格整段当作身份。"""
+    parsed = _split_sections(text)
+    intro, sections = parsed if parsed is not None else (text, {})
+    lines = [intro or f"你的名字是{name}。"]
+    if sections.get("personality"):
+        lines.append(sections["personality"])
+    if sections.get("behavior_style"):
+        lines.append(f"你的行为风格是：{sections['behavior_style']}")
+    lines.append(_REPLY_LEAD)
+    if sections.get("reply_style"):
+        lines.append(sections["reply_style"])
+    prompt = "\n".join(lines)
+    if scene_prompt.strip():
+        prompt = f"{prompt}\n\n在该聊天中的注意事项：\n通用注意事项：\n{scene_prompt.strip()}"
+    return f"{prompt}\n\n{_REPLY_TAIL}"
 
 
 def _collect_persona_files(dir_path: Path) -> dict[str, Path]:

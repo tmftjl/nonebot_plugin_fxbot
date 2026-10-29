@@ -114,6 +114,10 @@ class PlatformAdapter(ABC):
         result = await self.get_message(bot, message_id)
         return result.get("message") if isinstance(result, dict) else None
 
+    async def get_forward_messages(self, bot: Any, forward_id: str) -> list[dict[str, Any]]:
+        """读取合并转发的节点；平台不支持时抛 UnsupportedCapability。"""
+        return await self._unsupported("合并转发")
+
     def reply_sender_id(self, event: Any) -> str | None:
         """读取被引用消息的发送者 ID；平台无法提供时返回 None。"""
         return None
@@ -370,6 +374,17 @@ class PlatformAdapter(ABC):
                 continue
             data = getattr(segment, "data", {}) or {}
             source = data.get("url") or data.get("file") or data.get("file_id")
+            if isinstance(source, (str, bytes)) and source:
+                result.append(source)
+        return result
+
+    def extract_raw_audio_sources(self, message: Any) -> list[str | bytes]:
+        result = []
+        for segment in list(message or []):
+            if getattr(segment, "type", "") not in {"record", "voice", "audio"}:
+                continue
+            data = getattr(segment, "data", {}) or {}
+            source = data.get("url") or data.get("file") or data.get("file_id") or data.get("path")
             if isinstance(source, (str, bytes)) and source:
                 result.append(source)
         return result

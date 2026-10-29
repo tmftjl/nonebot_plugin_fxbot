@@ -123,6 +123,75 @@ export interface StatsToday {
   bots: Record<string, BotStats>
 }
 
+export interface StatsHistoryDay {
+  date: string
+  sent: number
+  group: number
+  private: number
+}
+
+export interface StatsHistory {
+  days: number
+  items: StatsHistoryDay[]
+}
+
+export interface ModelUsageModel {
+  model_name: string
+  provider_name: string
+  request_count: number
+  failure_count: number
+  avg_duration: number | null
+  failure_rate: number
+}
+
+export interface ModelUsageTask {
+  task_name: string
+  request_count: number
+  failure_count: number
+  avg_duration: number | null
+  failure_rate: number
+  models: ModelUsageModel[]
+}
+
+export interface ModelUsage {
+  hours: number
+  request_count: number
+  tasks: ModelUsageTask[]
+}
+
+export interface SystemStatus {
+  available: boolean
+  cpu?: {
+    percent: number | null
+    count: number
+    physical: number
+    freq_mhz: number | null
+    history: number[]
+  }
+  memory?: {
+    percent: number | null
+    used: number
+    total: number
+    history: number[]
+  }
+  swap?: { percent: number | null; used: number; total: number }
+  disks?: Array<{ mount: string; percent: number | null; used: number; total: number }>
+  network?: {
+    upload: number
+    download: number
+    total_upload: number
+    total_download: number
+  }
+  process?: { rss: number; threads: number; uptime: number }
+  system?: {
+    platform: string
+    release: string
+    machine: string
+    python: string
+    uptime: number
+  }
+}
+
 export interface BotStats {
   total_sent: number
   group?: {
@@ -148,6 +217,7 @@ export interface ProviderTypeOption {
   default_base_url?: string
   default_timeout?: number
   default_embedding_dim?: number | null
+  default_voice?: string | null
 }
 
 export interface ProviderItem {
@@ -159,6 +229,7 @@ export interface ProviderItem {
   model: string
   timeout: number
   embedding_dim?: number | null
+  voice?: string | null
   has_api_key: boolean
   is_default: boolean
 }
@@ -178,11 +249,38 @@ export interface ProviderPayload {
   model: string
   timeout: number
   embedding_dim?: number | null
+  voice?: string | null
+}
+
+export interface ModelRoutingProvider {
+  name: string
+  model: string
+  type_label: string
+  provider_type: string
+}
+
+export interface ModelRoutingTask {
+  task: string
+  label: string
+  description: string
+  provider: string
+  provider_type: string
+  model: string
+  configured: boolean
+}
+
+export interface ModelRoutingData {
+  tasks: ModelRoutingTask[]
+  providers: ModelRoutingProvider[]
+  default_provider: string
+  fallback_providers: string[]
 }
 
 export interface ChatTenant {
   tenant: string
   messages: number
+  learn_count?: number
+  use_count?: number
 }
 
 export interface ChatStyleExample {
@@ -278,11 +376,8 @@ export interface ChatReplyGateBackoff {
 }
 
 export interface ChatReplyGateProactive {
-  enabled: boolean
-  gate_mode: string
   talk_value: number
   switch: boolean | null
-  group_allowed: boolean
 }
 
 export interface ChatReplyGate {
@@ -294,20 +389,7 @@ export interface ChatReplyGate {
   proactive: ChatReplyGateProactive
 }
 
-export interface ChatBehavior {
-  scene_tags: string[]
-  action: string
-  outcome: string
-  confidence: number
-  count: number
-  last_seen: string | null
-}
-
-export interface ChatBehaviorResponse {
-  items: ChatBehavior[]
-  attributed: number
-  minimum: number
-}
+export type ChatEmojiStatus = 'registered' | 'pending' | 'unidentified' | 'disabled'
 
 export interface ChatEmoji {
   hash: string
@@ -316,57 +398,287 @@ export interface ChatEmoji {
   count: number
   last_used: string | null
   enabled: boolean
+  registered: boolean
+  vlm_processed: boolean
+  status: ChatEmojiStatus
+  register_time: string | null
   created_at: string | null
 }
 
-export interface ChatKnowledgeDoc {
-  id: number
-  title: string
-  source: string
-  status: string
-  hash: string
-  created_at: string | null
-  updated_at: string | null
-}
-
-export interface ChatReminder {
-  id: number
-  user_id: string
-  content: string
-  due_at: string | null
-  status: string
-  attempts: number
-  next_attempt_at: string | null
-  last_error: string
-  sent_at: string | null
-  created_at: string | null
+export interface ChatEmojiCounts {
+  registered: number
+  pending: number
+  unidentified: number
+  disabled: number
+  all: number
 }
 
 export interface ChatHealth {
   enabled: boolean
-  memory_ready: boolean
+  storage_ready: boolean
   degraded_reason: string
   scheduler_ready: boolean
   online_bots: number
 }
 
-export interface ChatJob {
+export interface ChatTrace {
+  id: number
+  turn_id: string
+  trigger_kind: string
+  request_preview: string
+  injected: Record<string, any>
+  budget: Record<string, any>
+  provider: string
+  latency_ms: number
+  error: string
+  created_at: string | null
+}
+
+// A_Memorix 长期记忆
+export type AmemorixRecordType = 'paragraph' | 'entity' | 'relation' | 'episode' | 'fact'
+
+export interface AmemorixRecord {
+  type: AmemorixRecordType
   id: string
-  next_run: string | null
-  pending: boolean
-}
-
-export interface ChatJobCursor {
-  job: string
-  direction: string
-  cursor_seq: number
-  fail_count: number
-  next_retry_at: string | null
-  last_error: string
+  title: string
+  summary: string
+  source: string
+  source_label: string
+  status: string
+  created_at: string | null
   updated_at: string | null
+  metadata: Record<string, any>
 }
 
-export interface ChatJobs {
-  jobs: ChatJob[]
-  cursors: ChatJobCursor[]
+export interface AmemorixRecords {
+  success: boolean
+  query: string
+  types: AmemorixRecordType[]
+  count: number
+  counts: Record<string, number>
+  items: AmemorixRecord[]
+}
+
+export interface AmemorixRecordDetail {
+  success: boolean
+  record: AmemorixRecord
+  detail: Record<string, any>
+  paragraphs: AmemorixParagraph[]
+}
+
+export interface AmemorixParagraph {
+  hash: string
+  content: string
+  source: string
+  created_at: string | null
+}
+
+export interface AmemorixStatus {
+  available: boolean
+  enabled: boolean
+  error: string
+  counts: {
+    paragraphs: number
+    entities: number
+    relations: number
+    episodes: number
+    facts: number
+    persons: number
+    profiles: number
+  }
+  runtime: Record<string, any>
+  integration: Record<string, boolean>
+}
+
+export interface AmemorixSource {
+  source: string
+  source_label: string
+  count: number
+  last_updated: string | null
+}
+
+export interface AmemorixProfile {
+  person_id: string
+  name: string
+  user_id: string
+  platform: string
+  profile_text: string
+  profile_version: number
+  updated_at: string | null
+  expires_at: string | null
+  source_note: string
+  fact_count: number
+}
+
+export interface AmemorixProfileDetail {
+  person: Record<string, any>
+  profile: {
+    profile_version: number
+    profile_text: string
+    updated_at: string | null
+    expires_at: string | null
+    source_note: string
+    aliases: string[]
+    alias_override: boolean
+  }
+  facts: AmemorixRecord[]
+}
+
+export interface AmemorixGraphNode {
+  id: string
+  name: string
+  hash: string
+  appearance_count: number
+}
+
+export interface AmemorixGraphEdge {
+  source: string
+  target: string
+  predicates: string[]
+  relation_hashes: string[]
+  confidence: number
+  label: string
+  relation_count: number
+}
+
+export interface AmemorixGraph {
+  nodes: AmemorixGraphNode[]
+  edges: AmemorixGraphEdge[]
+  total_nodes: number
+  total_edges: number
+}
+
+export interface AmemorixGraphNodeDetail {
+  node: Record<string, any>
+  relations: Array<Record<string, any>>
+  paragraphs: AmemorixParagraph[]
+}
+
+export interface AmemorixRuntime {
+  available: boolean
+  error?: string
+  [key: string]: any
+}
+
+export interface AmemorixConfig {
+  config: Record<string, any>
+  restart_required?: boolean
+}
+
+export interface AmemorixTimelineItem {
+  id: string
+  category: string
+  event_type: string
+  title: string
+  summary: string
+  timestamp: string | null
+  target: { type: string; id: string }
+}
+
+export interface AmemorixRecycleItem {
+  id: string
+  kind: 'operation' | 'fact'
+  mode: string
+  title: string
+  summary: string
+  count: number
+  status: string
+  created_at: string | null
+  restored_at: string | null
+  preview: Array<{ type: string; label: string }>
+}
+
+export interface AmemorixCorrectionItem {
+  id: string
+  kind: 'feedback' | 'plan'
+  title: string
+  status: string
+  decision: string
+  rollback_status: string
+  created_at: string | null
+  updated_at: string | null
+  detail: Record<string, any>
+}
+
+export interface AmemorixCorrectionTarget {
+  type: 'paragraph' | 'relation'
+  id: string
+}
+
+export interface AmemorixCorrectionOperation {
+  action: string
+  target_type?: string
+  hash?: string
+  text?: string
+  reason?: string
+  [key: string]: any
+}
+
+export interface AmemorixCorrectionPreview {
+  success: boolean
+  plan_id: string
+  plan: Record<string, any>
+  preview: {
+    request_text: string
+    scope: string
+    candidates: Array<Record<string, any>>
+    operations: AmemorixCorrectionOperation[]
+    cascade_preview?: Record<string, any>
+    reason?: string
+    [key: string]: any
+  }
+  requires_confirmation?: boolean
+}
+
+export interface AmemorixBundle {
+  installation_id: string
+  package_id: string
+  version: string
+  name: string
+  description: string
+  author: string
+  scope_type: string
+  chat_id: string
+  status: string
+  paragraph_count: number
+  images: Record<string, any>
+  updated_at: string | null
+  [key: string]: any
+}
+
+export interface AmemorixImportTask {
+  task_id: string
+  source: string
+  status: string
+  current_step: string
+  files?: Array<Record<string, any>>
+  [key: string]: any
+}
+
+export interface AmemorixImportSettings {
+  max_files_per_task: number
+  max_file_size_mb: number
+  max_paste_chars: number
+  [key: string]: any
+}
+
+export interface AmemorixImage {
+  asset_id: string
+  occurrence_id: string
+  content_hash: string
+  mime_type: string
+  byte_size: number
+  width: number
+  height: number
+  status: string
+  occurrence_count: number
+  latest_occurrence_at: number | null
+}
+
+export interface AmemorixImageStatus {
+  status: string
+  message?: string
+  dimension?: number
+  stats?: Record<string, number>
+  [key: string]: any
 }

@@ -1,6 +1,6 @@
 # FxBot AI 记忆与群聊行为设计及实施方案（Codex 评审后修订）
 
-> 状态：设计稿 v3 + P0/P0.5 实施方案，未实现。
+> 状态：历史设计稿。长期记忆已整体改为内置 A_Memorix（`chat/amemorix/`），文中 `chat_memory`、`chat_episode`、`chat_profile`、`chat_relation`、`chat_alias`、知识库各节仅作旧方案记录，不再对应现有代码。
 > 实现方式：优先复制/迁移 MaiBot 现有代码，按 fxbot 的 tenant、适配器、配置和权限边界改造；本文的模块和表结构仍是 fxbot 的落点。
 > 目标：把 MaiBot 中可验证有效的思路吸收到 fxbot 单进程内；不引入额外部署，不预留没有实现的设计接口；真实多态处使用设计模式。
 > 依据：`chat/service.py`、`chat/router.py`、`chat/session.py`、`chat/types.py`、`chat/message_adapter.py`、`chat/providers/manager.py`、`bootstrap.py`、`db/base_models.py`、`config/proxy.py`、`adapter/core/bot.py`、`adapter/platforms/*`、`.agents/skills/fxbot/SKILL.md`；MaiBot `src/maisaka/turn_trigger/*` 与当前配置文档。
@@ -45,7 +45,7 @@ Codex 的结论：**方向可行，单进程可以保留全部能力，但现稿
 - `epoch` 只在清空时递增：`chat/session.py:98`；`chat/router.py:160` 只检查 epoch。新消息不会让在途回复失效。
 - `ChatRequest` 没有 `message_id`、`event_id`、`turn_id`：`chat/types.py:30`。防抖、引用、打断、撤回都缺这些字段。
 - 引用只读不写：`chat/message_adapter.py:150` 读取引用；`adapter/platforms/onebot11.py:57` 与 `adapter/platforms/qq.py:79` 的 `build_segment` 都没有 `reply` 分支，直接传 `"reply"` 会抛 `ValueError`。
-- 没有防抖、拆分、表情包、知识库、聊天提醒、记忆表、别名表、撤回处理。
+- 没有防抖、拆分、表情包、知识库、记忆表、别名表、撤回处理。
 - Provider 单路：`chat/service.py:49` 只解析会话绑定；`chat/providers/manager.py:71` 的 `lease` 只做引用计数，没有 fallback 链。
 - `BaseIDModel` 只有 `id`（`db/base_models.py:127`），没有 tenant、时间戳；`get_by_ids` 只按主键查。
 - `exec_list` 迁移循环捕获所有异常后继续，最后仍标记初始化成功（`db/base_models.py:81`）。
@@ -72,21 +72,17 @@ Codex 的结论：**方向可行，单进程可以保留全部能力，但现稿
 | 风格 | 群风格 | `chat_style` | 每周 / 200 条 | 常驻 ≤150 字 | P3 |
 | 风格 | 黑话 | `chat_jargon` | 同风格任务 | 命中时 | P3 |
 | 表达 | 情境→说法 | `chat_expression` | 每批次 / 40 条 | top5 | P4 |
-| 状态 | 情绪/熟悉度 | `chat_state` | 每批 / 每次互动 | ≤50 字 | P5 |
-| 行为 | 场景→动作→结果 | `chat_behavior_sample/behavior` | 每次动作 / 每周聚合 | 规划参考 | P5 |
 | 规划 | 动作枚举 | 无表 | 每条触发 | planner 调用 | P5 |
 | 行为 | 主动接话门控 | 内存（不落库） | 每条群消息 | Planner 标签 + logistic 概率 + 小时预算 | P5 |
 | 行为 | 防抖合并 | 内存 | 每条触发 | 合并为一轮 | P0.5 |
 | 行为 | 拆分/引用/打断 | `chat_turn` 状态 | 每次发送 | 发送层 | P0.5 |
 | 行为 | 时间感知 | 无表 | 每条 | 一行 | P0.5 |
-| 行为 | 防复读 | 无表 | 每次发送 | 重生成一次 | P1.5 |
 | 行为 | 上下文预算 | 无表 | 每次组装 | 裁剪历史 | P1.5 |
 | 数据 | 冷启动回填 | `chat_job_cursor` | 首次启用 | 后台批次 | P1.5 |
 | 数据 | 撤回 | `chat_message.deleted` | notice | 证据失效 | P1 |
 | 忘记 | 忘记/禁止重建标记 | `chat_forget_marker` | `#忘记` | 抽取跳过 | P1 |
 | 多模态 | 表情包 | `chat_emoji` | 控制台/可选采集 | 每次 ≤1 条 | P6 |
 | 知识 | 文档库 | `chat_knowledge_doc/chunk` | 控制台上传 | `search_knowledge` | P6 |
-| 工具 | 提醒 | `chat_reminder` | 工具 + 用户确认 | APScheduler | P6 |
 | 输出 | 错字 | 无表 | 发送前 | 后处理 | P6 |
 | 可观测 | 回复 trace / job 状态 | `chat_trace` | 每轮 / 每批 | 控制台 | P0 起 |
 
@@ -112,17 +108,14 @@ chat/
     send.py          # 拆分、节奏、引用、发送状态
     time_hint.py     # 时间/深夜语气
     postprocess.py   # 去前缀、去 Markdown、限长
-    anti_repeat.py   # 输出相似度
   knowledge/
     store.py         # 文档切块 + BM25 + 发布/删除
     tools.py         # search_knowledge
   emoji/
     store.py         # 本地表情库
-    select.py        # 语境/情绪选择
+    select.py        # 语境选择
   planner.py         # 动作规划（P5；门控标签来自 Planner 首轮）
-  mood.py            # 情绪 + 熟悉度
   typo.py            # 错字后处理
-  reminder.py        # 提醒工具 + 调度
   providers/routing.py  # 任务→Provider + fallback
 ```
 
@@ -158,7 +151,7 @@ chat/
 
 1. 批次保留每条消息的作者、消息 ID、引用、来源；不能只剩拼接字符串。
 2. 对话生成可以跨作者合并；**有副作用的动作不能因此合并授权**。
-3. 有副作用工具（`remember/forget/profile/reminder/管理类`）要求批次内**每个作者**都通过该工具权限；任一作者无权，工具返回“权限不足”，不执行。
+3. 有副作用工具（`remember/forget/profile/管理类`）要求批次内**每个作者**都通过该工具权限；任一作者无权，工具返回“权限不足”，不执行。
 4. 工具目标主体只能是批次作者之一；管理员可显式指定他人。模型参数里的 `tenant/subject/actor` 不作为授权依据。
 5. `runtime.event` 仍是最后一个事件，但权限检查不能只看它；`ToolContext` 增加 `actor_id`、`authors`、`turn_id`，由接入层填充。
 
@@ -348,19 +341,9 @@ chat/
 
 `chat_expression`：`tenant`、`situation`、`situation_hash`、`style`、`style_hash`、`type`、`count`（float，初值 0，增量 0.006，上限 5.0）、`checked`、`rejected`、`source_message_seq`、`source_batch_id`、`learn_count`、`use_count`、`last_used_at`、时间戳；唯一 `(tenant, situation_hash, style_hash)`；索引 `(tenant, count)`。
 
-### 6.7 状态与行为
-
-`chat_state`：唯一 `(tenant, subject_id)`；`subject_id=""` 表示租户情绪；`valence`（-1..1）、`arousal`（0..1）、`familiarity`（0..1）、`affinity`（-1..1）、`last_interaction_at`、`last_decay_at`、`updated_at`。
-
-`chat_behavior_sample`：每次动作一行，支撑“10 分钟后是否被忽略”的判断；`tenant`、`turn_id`、`trigger_kind`、`scene_tags`、`action`、`acted_at`、`observed_until`、`outcome`（pending/continued/ignored/negative）、`attributed_at`；唯一 `(tenant, turn_id, action)`；索引 `(tenant, outcome, observed_until)`。
-
-`chat_behavior`：周聚合；唯一 `(tenant, scene_hash, action)`；`scene_tags`、`action`、`outcome`、`confidence`、`count`、`last_seen`。样本 <50 只在控制台显示，不参与提示。
-
-### 6.8 会话、提醒、知识、表情、trace
+### 6.7 会话、知识、表情、trace
 
 `chat_session_state`：`tenant` 唯一；`generation`、`cleared_at`、`last_active_at`、`backfilled_at`、`learn_enabled`（可空，NULL 表示跟随全局）、`facts_version`、`episodes_version`、`knowledge_version`、`profile_version`、`degraded_reason`、`updated_at`。主动接话的群级开关和运行时门控状态属于 P5，P0/P1 不预留空字段。
-
-`chat_reminder`：`tenant`、`user_id`、`content`、`due_at`、`status`（pending_confirmation/pending/claimed/sent/failed/cancelled）、`confirmed_at`、`claim_token`、`claimed_at`、`attempts`、`next_attempt_at`、`sent_message_id`、`idempotency_key`、`last_error`、`created_at`、`sent_at`；唯一 `(tenant, idempotency_key)`；索引 `(status, due_at)`、`(status, next_attempt_at)`。
 
 `chat_knowledge_doc`：`tenant`、`title`、`source`、`hash`、`status`（staging/active/deleted）、`created_at`、`updated_at`；唯一 `(tenant, hash)`。
 
@@ -372,7 +355,7 @@ chat/
 
 ### 6.9 索引、迁移、写事务
 
-- 必需组合索引：`chat_memory(tenant, subject_id, status)`、`chat_memory(tenant, key)`、`chat_memory_evidence(tenant, message_seq)`、`chat_job_batch(tenant, job, status, next_retry_at)`、`chat_reminder(status, next_attempt_at)`、`chat_message(tenant, id)`、`chat_turn(tenant, created_at)`。已有复合索引左前缀覆盖的单列索引不重复建。
+- 必需组合索引：`chat_memory(tenant, subject_id, status)`、`chat_memory(tenant, key)`、`chat_memory_evidence(tenant, message_seq)`、`chat_job_batch(tenant, job, status, next_retry_at)`、`chat_message(tenant, id)`、`chat_turn(tenant, created_at)`。已有复合索引左前缀覆盖的单列索引不重复建。
 - 新表由 `create_all` 建；索引与唯一约束由 `Field(index=True)` / `UniqueConstraint` 建。**不能只靠 `exec_list`**：新增字段、唯一约束、索引、回填、约束收紧都是迁移。
 - `chat/memory/migrate.py` 在 `init_database()` 之后运行：查 `sqlite_master`、`PRAGMA table_info`、`PRAGMA index_list`，缺什么补什么；只忽略明确的“已存在/重复列”，其他异常抛出。失败时写 `degraded_reason`，禁用记忆写入与后台 job，聊天文本仍降级可用；控制台 `/fxbot/chat/health` 显示原因。不声称现有全局 `exec_list` 可靠。
 - 写事务用 `chat/memory/db.py` 的显式 `asyncio.Lock` + 短事务，batch 提交期间持锁；读不持锁。`sqlite_semaphore=20` 不当作写串行保证。
@@ -435,11 +418,9 @@ chat/
 - 黑话：同一次风格任务抽取未知词；LLM 推断释义；置信不足 `rejected`，不注入；`source_batch_id` 支持失效。
 - 表达：每批次或 40 条消息抽 `situation → style`；`situation_hash` 去重；rapidfuzz（0–100）≥75 合并并 `count += 0.006`；新条目 LLM 复审一次，写 `checked/rejected`；控制台可改判；`learn_count` 与 `use_count` 分开。
 
-### 7.6 关系、状态、行为
+### 7.6 关系
 
 - 关系写入前校验 tenant、subject、object 一致性；删除主体时覆盖 subject 和 object 两端。
-- 状态 EMA 每批只应用一次，批次事务成功才生效；`last_decay_at` 防止重启重复衰减。
-- 行为样本在动作发生时写入，`observed_until = acted_at + 10min`；后台归因后写 `outcome`；周聚合只读样本，不反推“没记录就代表没发生”。
 
 ### 7.7 游标、幂等、失败与公平
 
@@ -467,7 +448,7 @@ chat/
 
 ### 8.2 打分
 
-- Episode：`0.6*bm25_norm + 0.2*参与人重合 + 0.1*时效 + 0.1*情绪相近`；没有情绪的 Episode 不参与情绪项；按 `episode_key` 去重，取 top2。
+- Episode：`0.7*bm25_norm + 0.2*参与人重合 + 0.1*时效`；按 `episode_key` 去重，取 top2。
 - 事实：先按 `(tenant, subject_id, status=active)` 直取 top6；再用查询 BM25 补 top4；关系 1–2 跳扩展的边按 1.0/0.5 权重加入；按 id 去重，总数 ≤10。
 - 表达：rapidfuzz `partial_ratio` 返回 0–100，统一 `/100` 后再比较；阈值 0.75；乘 `min(count,5)/5`，取 top5。
 - 黑话：当前文本子串命中，最多 5 条释义。
@@ -486,13 +467,12 @@ chat/
 → 近期 Episode
 → 关系扩展
 → 群风格
-→ 情绪/熟悉度
 → 黑话
 → 表达参考
 → scene_hint
 ```
 
-**记忆块预算 ≤1500 字**（不含人格、时间、scene_hint、当前消息）：画像 300、事实 400、Episode 300、风格 150、情绪 50、黑话 100、表达 200。超预算按“表达 → 黑话 → 情绪 → 风格 → Episode → 事实”的顺序从低分丢弃；画像不丢。之前写成 1200 是算术错误，已修正。
+**记忆块预算 ≤1450 字**（不含人格、时间、scene_hint、当前消息）：画像 300、事实 400、Episode 300、风格 150、黑话 100、表达 200。超预算按“表达 → 黑话 → 风格 → Episode → 事实”的顺序从低分丢弃；画像不丢。
 
 ### 8.4 净化与信任边界
 
@@ -521,7 +501,7 @@ chat/
 - `split_reply(text, target_chars=120, max_parts=3)`：先按 `。！？!?\n` 切，再按逗号/空格切；URL、代码块、@ 不切。120 是**目标段长**，平台硬上限另设；剩余并进最后一段时允许超过目标段长，但不超过平台硬上限。
 - 第一条立即发；后续每条间隔 0.6–1.2 秒（按长度线性，封顶 2 秒）；私聊间隔减半。
 - 发送状态：turn `generated` → 每段 `sending` → 平台返回 ID 后 `sent`；全部成功 turn=`sent`，中途失败 turn=`partial`，第一段失败 turn=`failed`。只有 `visible=true` 且 `sent` 的 assistant 段进入历史；生成全文留在 `chat_turn.generated_text` 供 trace。
-- 发送期间持有 per-tenant `send_lock`，防止同一租户的多段与提醒/表情交错；turn 的 `turn_lock` 持续到发送结束，下一轮才能开始生成。后台提醒也走 `send_lock`。
+- 发送期间持有 per-tenant `send_lock`，防止同一租户的多段与表情交错；turn 的 `turn_lock` 持续到发送结束，下一轮才能开始生成。
 - 用 `matcher.send` 逐段发送，最后无正文 `finish()`；后台 flush 不保存 matcher，改用捕获的 `bot/event` 或显式 target。不要假设 `matcher.finish()` 是后台任务完成通知。
 - QQ 官方多段：保留同一个 event 对象，SDK 自动递增 `_reply_seq`/`msg_seq`，业务层不要重复自增；云端次数/有效期另验。
 
@@ -548,6 +528,7 @@ chat/
 - 时段：0–6 深夜、6–9 早上、9–11 上午、11–13 中午、13–18 下午、18–23 晚上。
 - 深夜加“语气轻，不要主动问早/晚安”；早上可以问候。只加一行，不写进人格文件。
 - 存储与检索仍用 naive UTC；只有展示和提示用北京时间。
+- 没有开关，恒注入（对齐 MaiBot `maisaka_generator_base.py` 的 `当前时间：`）。
 
 ### 9.6 回复后处理
 
@@ -569,20 +550,19 @@ chat/
 | 主模型调用 | 1–10 s 常见，20 s+ 长尾 | 由 Provider/网络/上下文长度决定，占主导 |
 | 工具轮 | 每轮一次模型调用 + 工具耗时 | 现有 `_TOOL_BUDGET=90s` 对聊天过长 |
 | 图片描述 | 与主模型并发，但当前会 `await` | 视觉模型慢于主模型时，直接拖慢整轮 |
-| 防复读二次生成 | 仅相似度 ≥85 时，多一次完整调用 | 不做无限重试 |
 | Provider fallback | 仅失败时，多一次调用 | 失败路径延迟翻倍 |
 | 分条发送 | 首条立即；后续每段 0.6–1.2 s | 生成完才拆，不是流式 |
 
 硬上限（写入配置，P0.5 起生效）：
 
-- 整轮前台 deadline 60 秒；主模型单次调用 30 秒；工具总预算 45 秒（低于现有 90 秒）；单轮最多 4 次模型调用（主回复 + 工具轮 + 防复读/fallback 共用）。
+- 整轮前台 deadline 60 秒；主模型单次调用 30 秒；工具总预算 45 秒（低于现有 90 秒）；单轮最多 4 次模型调用（主回复 + 工具轮 + fallback 共用）。
 - 图片描述最多等 3 秒；超时先用 `[图片]` 继续回复，描述晚到后只更新历史，不阻塞发送。
 - 后台 job 并发 2、廉价 Provider；前台请求优先。后台回填/抽取与前台共用 Provider 时，前台取不到租约要让路，不能把 60 秒 deadline 耗在排队上。
-- trace 记录每轮 `latency_ms`、模型调用次数、是否 fallback/防复读/图片等待，按 Provider 统计 p50/p95。p95 超过 15 秒时告警，而不是等用户投诉。
+- trace 记录每轮 `latency_ms`、模型调用次数、是否 fallback/图片等待，按 Provider 统计 p50/p95。p95 超过 15 秒时告警，而不是等用户投诉。
 - 防抖窗口可调到群 1.2–1.5 秒、私聊 0.5–0.8 秒；如果更看重“秒回”，优先降这个，不要降记忆预算。
 - 当前是“整段生成完再发送”，不是流式；如果以后要首字更快，需要单独做流式发送，不能靠拆分伪装。
 
-## 10. 身份、噪声、冷启动、撤回、防复读、上下文预算
+## 10. 身份、噪声、冷启动、撤回、上下文预算
 
 ### 10.1 别名
 
@@ -610,19 +590,13 @@ chat/
 - 命中后：`chat_message.deleted=true`；`chat_memory_evidence.status=invalid`；有效证据数归零的事实**立即** `status=forgotten`，退出检索；覆盖该消息的 Episode 标 `stale`；画像 `stale=true` 并停止注入。
 - 不自动物理删除整条事实；用户显式 `#忘记` 才物理删除。删除主体关系时覆盖 subject 和 object 两端。
 
-### 10.5 防复读
-
-- 每个 tenant 保留最近 5 条 Bot 回复；rapidfuzz `ratio`（0–100）≥85 时带“换个说法，不要重复上一句”重生成一次。
-- 仍重复则发送原文，不无限重试；连续 3 条相同开场词时强制改写开头。
-- 只对触发回复生效，不对群背景消息生效。
-
-### 10.6 上下文预算
+### 10.5 上下文预算
 
 - `max_history_chars=12000`；组装时从最旧的一轮开始丢，保持“user + 后续 assistant”整组完整；tool 项不跨轮注入。
 - 当前消息截断 4000 字；背景块沿用现有 2000 字上限（`chat/service.py:43`）。
 - 工具调用组不能被截断成孤立 tool 结果；丢掉整组。
 
-## 11. 规划、情绪、关系、行为
+## 11. 规划与主动接话
 
 ### 11.1 主动接话：Planner + 最新门控（P5）
 
@@ -668,20 +642,20 @@ p = 1 / (1 + exp(-logit))
 
 **配置与命令**：
 
-- `chat.proactive.enabled` 默认 false；`talk_value` 默认 1.0（仅启用后生效），`talk_value_rules` 默认 `00:00-08:59=0.8`、`09:00-18:59=1.0`；群白名单；热更新立即生效。
+- 这些字段与 MaiBot 一样放在 `chat.reply_timing` 下，不单开 `chat.proactive`。MaiBot 没有全局 `enabled`、`gate_mode` 或群白名单，这里也不加：门控始终运行，群级开关决定本群是否参与。`talk_value` 默认 1.0，`talk_value_rules` 默认 `00:00-08:59=0.8`、`09:00-18:59=1.0`；热更新立即生效。
 - `no_action_backoff_*` 默认 `base=15`、`cap=300`、`start_count=2`、`bypass_pending_count=6`。
-- 群级开关在 P5 落 `chat_session_state`，P0/P1 不预留空字段。
-- `#主动` 查看全局/群级开关、`talk_value` 和当前小时窗口统计；`#主动 开/关` 仅群主/管理员。不提供关键词、静默时段等另一套模式。
+- 群级开关在 P5 落 `chat_session_state.proactive_enabled`，NULL/False 均为不参与，只有 `#主动 开` 之后才参与。
+- `#主动` 查看本群开关、`talk_value` 和当前小时窗口统计；`#主动 开/关` 仅群主/管理员。不提供关键词、静默时段等另一套模式。
 - 时区用 `utils/tz.py` 的上海时区，不用服务器本地时区。
 
 **主动轮的额外限制**（fxbot 安全边界，不是 MaiBot 行为）：
 
-- `ChatRequest`/`chat_turn` 的 `trigger_kind = mention | persona | private | proactive`，trace 与行为样本都记录。
-- 主动轮只允许只读工具（`search_memory`、`search_knowledge`、配置允许的 `web_search`）；`remember/forget/profile/reminder` 和管理类工具一律拒绝。批次里只要有一条是主动触发，整轮都按只读处理。
+- `ChatRequest`/`chat_turn` 的 `trigger_kind = mention | persona | private | proactive`，trace 记录。
+- 主动轮只允许只读工具（`search_memory`、`search_knowledge`、配置允许的 `web_search`）；`remember/forget/profile` 和管理类工具一律拒绝。批次里只要有一条是主动触发，整轮都按只读处理。
 - 主动轮默认不引用触发消息、不 @ 人；用户明确在跟 Bot 说话时才引用。
 - 主动回复排队期间来了 @：把 @ 并入同一缓冲并标 `forced=true`，最多再等 0.5 秒就 flush，不能因为主动轮让 @ 用户等 2 秒。
 - 主动缓冲期间其他作者的消息只写历史；他们也 @ 时才并入，授权仍按 5.3 的“全部作者”规则。
-- 主动回复计入成本预算、防复读和发送限流，不因为“主动”绕过任何限制。
+- 主动回复计入成本预算和发送限流，不因为“主动”绕过任何限制。
 
 **延迟**：
 
@@ -692,8 +666,7 @@ p = 1 / (1 + exp(-logit))
 
 - P5-1：Planner、结构化动作、样本落库；不接门控。
 - P5-2：`reply_likelihood` + `dynamic_gate` 只记录不拦截，核对窗口统计和标签分布。
-- P5-3：用自己的样本校准后启用；`talk_value`、群级开关、`#主动`、白名单、热更新一起上线。
-- P5-4：情绪/熟悉度和行为样本接入 Planner 提示，但不改门控公式。
+- P5-3：用自己的样本校准后启用；`talk_value`、群级开关、`#主动`、热更新一起上线。
 - P2 的记忆检索先喂给 Planner；门控特征不直接依赖向量检索，避免热路径抖动。
 - classical 只作为历史结论保留在第 21 节，不进入实施。
 
@@ -704,18 +677,6 @@ p = 1 / (1 + exp(-logit))
 - 规划器不输出正文；`text_reply` 再调一次 replyer。最多 1 轮规划，不循环。
 - `wait` 延迟 30–120 秒，期间有新消息则合并；`fetch_knowledge` 调知识库工具；`tool` 走现有 `execute_tool`，授权规则不变。
 - 动作执行用分派表；每个动作一个真实 handler，不建类层级。
-
-### 11.3 情绪与关系
-
-- Episode 抽取返回 `emotion`；租户情绪 EMA：`new = 0.7*old + 0.3*batch`；`last_decay_at` 控制每日向 0 衰减 0.1，重启不重复衰减。
-- 熟悉度：每轮互动 +0.02，封顶 1；每日 ×0.99；affinity 按正负反馈小幅调整。
-- 注入一行：“现在心情平静；对当前用户熟悉度中等”；不让情绪覆盖人格和安全规则。
-- 私聊和群聊分别维护；不跨租户。
-
-### 11.4 行为
-
-- 只记录，不直接驱动回复；样本 ≥50 后在 planner prompt 里给 top3 场景→动作提示。
-- 默认关闭；控制台可查看和清空。
 
 ## 12. 表达、黑话、错字
 
@@ -735,42 +696,35 @@ p = 1 / (1 + exp(-logit))
 
 ### 12.3 错字
 
-- 发送前后处理：按句切分 → 保护 URL/@/数字/命令/已确认昵称/代码 → 按 pypinyin 混淆表替换 → 可选颜文字保护。
-- 配置：`error_rate=0.01`、`tone_error_rate=0.1`、`word_replace_rate=0.006`；默认关闭。
-- 历史存干净文本；自纠引用只在 OneBot 启用，概率 0.5，格式“（打错了，是 X）”。
+- 发送前后处理：按句切分 → 保护 URL/@/数字/命令/已确认昵称/代码 → 按 pypinyin 混淆表替换（候选字频低于 `min_freq` 的字不参与）→ 可选颜文字保护。
+- 配置：`enable` 默认开、`error_rate=0.01`、`min_freq=9`、`tone_error_rate=0.1`、`word_replace_rate=0.006`；`min_freq` 与 MaiBot 同尺度（jieba 词频归一化到 0–1000）。
+- 历史存干净文本。对齐 MaiBot：一半概率放弃错字直接发原句；否则发错字句，按 50% 再补一条纠正消息（内容为正确的字/词，整词错写优先），`enable_correction_quote` 与 `correction_quote_probability` 决定这条纠正是否引用刚发的错字消息。
 - 错字不改变语义、不落在专有名词和数字上；替换失败直接原文发送。
 
-## 13. 表情、知识库、提醒、模型路由、控制台
+## 13. 表情、知识库、模型路由、控制台
 
 ### 13.1 表情包
 
 - 本地库：`config_dir("ai_chat")/emoji` + `chat_emoji` 索引；控制台上传/启停。
-- 入库：视觉模型生成描述和标签；发送时按当前文本/情绪/标签用 rapidfuzz 选 1 条，冷却 5 分钟。
+- 入库：视觉模型生成描述和标签；发送时按当前文本/标签用 rapidfuzz 选 1 条，冷却 5 分钟。
 - 群图片采集默认关闭；开启时只采集白名单群，存 hash + 描述，不存发送者。
 - 发送走适配器 image 段；平台不支持时降级为文字。
 
 ### 13.2 知识库
 
-- 控制台上传 `.txt/.md`；按 400 字切块，重叠 50 字；先 staging，再原子 active；存 `chat_knowledge_doc/chunk`。
+- 控制台上传 `.txt/.md`；按 400 字切块，重叠 50 字；先 staging，再原子 active；存 `chat_knowledge_doc/chunk`。切片与条数写死，只保留启用开关。
 - 检索：BM25 top4，返回带文档标题的片段；`search_knowledge` 工具给 replyer 用。
 - 只在本 tenant 内检索；不和个人记忆混表；没有资料时明确说没有；知识文档按不可信资料处理。
 
-### 13.3 提醒
+### 13.3 模型路由
 
-- `set_reminder` 工具：LLM 填 `content` + `due_at`；ISO 带 offset 直接转 UTC，naive 视为北京时间墙钟，再转 naive UTC，不重复减 8 小时。
-- 校验未来时间、内容非空、每用户最多 10 条；先创建 `pending_confirmation`，Bot 回复“将在 X 提醒你 Y，回复 `#确认提醒 <id>` 生效”；用户确认后才进入 `pending`。取消用 `#取消提醒 <id>`。
-- APScheduler 每分钟 claim 到期项：`claimed` + token，发送成功 `sent`，失败 `failed` 并 `attempts+1`；进程崩溃后 claim 超时可回收。
-- 群提醒发到群，私聊提醒发到私聊；不跨租户；主动发送缺少权限时记录失败并在控制台可见，不假装送达。
-
-### 13.4 模型路由
-
-- `chat.model_routing = {"reply": "", "extract": "", "profile": "", "style": "", "planner": "", "vision": ""}`；空值用会话绑定/全局默认。
+- `chat.model_routing = {"reply": "", "extract": "", "style": "", "planner": "", "vision": ""}`；空值用会话绑定/全局默认。
 - `chat.provider_fallback = ["name2", "name3"]`；在**模型调用边界**按顺序尝试，不重跑整个 `_process`。
 - 只重试超时/5xx/网络错误；总 deadline、最多 2 个候选、候选去重；工具轮切换 Provider 时检查工具消息格式与能力兼容；工具已执行的结果不重放。
 - `profile/style/vision` 使用各自 task，不能统一走 `extract`；后台用廉价 Provider，前台优先。
 - `lease` 保留引用计数与退役语义；fallback 是调用方的循环，不是上下文管理器自动重放。
 
-### 13.5 控制台
+### 13.4 控制台
 
 - 新增 `console/routes/chat.py`：`/fxbot/chat/tenants`、`/fxbot/chat/memory`、`/profile`、`/expression`、`/style`、`/jargon`、`/emoji`、`/knowledge`、`/trace`、`/jobs`、`/health`。
 - 能力：搜索/删除记忆、编辑画像覆盖、重建画像、表达 approve/reject、风格人工覆盖、表情上传、文档上传、查看最近回复注入了什么、查看 job 游标/退避/错误、手动重试/回填。
@@ -787,7 +741,7 @@ p = 1 / (1 + exp(-logit))
 - `#忘记我`：同一事务物理删除该主体 facts/relations/profile/alias/evidence；`#忘记我` 的原始消息按隐私策略脱敏（置空 content、payload 白名单字段），turn 投影删除或标 aborted；写 subject 级 `chat_forget_marker`；Episode 标 stale 并重建；后续抽取跳过该主体及其消息。关系删除覆盖 subject/object 两端；第三人转述不能绕过。
 - `#忘记 <事实>`：按 id 或 key + value 精确删除；模糊匹配多于一条时列出候选，要求指定；写 fact 级 marker；画像 stale 重建。
 - 在途任务：抽取/画像开始前捕获 `facts_version`、`generation`、marker 快照；提交前重验，变了就丢弃结果。删除失败必须告知用户，不能回复“已经忘记”。
-- 每日清理 job：历史 30 天、trace 7 天、过期提醒、frozen 30 天后物理删除；清理前检查是否仍被有效证据引用。
+- 每日清理 job：历史 30 天、trace 7 天、frozen 30 天后物理删除；清理前检查是否仍被有效证据引用。
 
 ## 15. 配置
 
@@ -817,20 +771,13 @@ p = 1 / (1 + exp(-logit))
     "inject_facts_chars": 400,
     "inject_episodes_chars": 300,
     "inject_style_chars": 150,
-    "inject_mood_chars": 50,
     "inject_jargon_chars": 100,
     "inject_expressions_chars": 200,
-    "inject_total_chars": 1500,
+    "inject_total_chars": 1450,
     "background_concurrency": 2,
     "max_model_calls_per_hour": 60,
     "max_images_per_hour": 30,
     "payload_mode": "whitelist",
-},
-"privacy": {
-    "image_description_learn": False,
-    "style_learn": False,
-    "expression_learn": False,
-    "group_opt_out_command": True,
 },
 "behavior": {
     "merge_window_seconds": 2.0,
@@ -844,20 +791,30 @@ p = 1 / (1 + exp(-logit))
     "split_delay_seconds": 0.8,
     "quote_mode": "auto",
     "interrupt_same_user": True,
-    "time_awareness": True,
     "post_process": True,
-    "anti_repeat": True,
-    "anti_repeat_threshold": 85,
     "foreground_deadline_seconds": 60,
     "model_call_timeout_seconds": 30,
     "tool_budget_seconds": 45,
     "max_model_calls_per_turn": 4,
     "image_description_wait_seconds": 3,
+    "alternate_reply_styles": ["很简短", "用1-2个字进行回复"],
+    "alternate_reply_probability": 0.0,
+    "chat_prompts": ["OneBot V11:123456:group:本群规则：……"],
 },
-"proactive": {
-    "enabled": False,          # 默认关；@/人格名/私聊不受影响
-    "talk_value": 1.0,         # 仅 enabled 后生效
-    "gate_mode": "observe",    # observe 只记录不拦截；enforce 才启用门控
+"attention_drift": {
+    "enabled": False,
+    "drift_level": "scattered",
+    "anchor_policy": "balanced",
+    "reaction_style": "lively",
+},
+"visual": {"image_quality": "high", "max_images": 4, "max_image_size_mb": 5},
+"reply_timing": {
+    "message_debounce_mode": "natural",
+    "talk_value": 1.0,
+    "private_reply_paused": False,
+    "private_reply_pause_rules": [],
+    "mentioned_bot_reply": True,
+    "inevitable_at_reply": True,
     "enable_talk_value_rules": False,
     "talk_value_rules": [
         {"tenant": "", "time": "00:00-08:59", "value": 0.8},
@@ -868,19 +825,18 @@ p = 1 / (1 + exp(-logit))
     "no_action_backoff_start_count": 2,
     "no_action_backoff_bypass_pending_count": 6,
 },
-"planner": {"enabled": False, "mode": "simple", "max_rounds": 1, "wait_seconds": 60},
-"mood": {"enabled": True, "decay_per_day": 0.1},
-"expression": {"enabled": True, "learn": True, "llm_select": False, "sample_size": 50, "inject_top_k": 5},
-"jargon": {"enabled": True, "inject_max": 5},
-"typo": {"enabled": False, "error_rate": 0.01, "tone_error_rate": 0.1, "word_replace_rate": 0.006, "correction_quote": True},
-"emoji": {"enabled": False, "max_per_reply": 1, "collect_from_group": False},
-"knowledge": {"enabled": False, "chunk_chars": 400, "top_k": 4},
-"reminder": {"enabled": False, "max_pending_per_user": 10, "require_confirmation": True},
-"model_routing": {"reply": "", "extract": "", "profile": "", "style": "", "planner": "", "vision": ""},
+"planner": {"enabled": False, "mode": "simple", "wait_seconds": 60},
+"expression": {"checked_only": False, "self_reflect": True, "learning_list": [], "groups": []},
+"jargon": {"learning_list": [], "groups": []},
+"typo": {"enable": True, "error_rate": 0.01, "min_freq": 9, "tone_error_rate": 0.1, "word_replace_rate": 0.006, "enable_correction_quote": True, "correction_quote_probability": 1.0},
+"emoji": {"max_per_reply": 1},
+"knowledge": {"enabled": False},
+"model_routing": {"reply": "", "extract": "", "style": "", "planner": "", "vision": ""},
 "provider_fallback": [],
 ```
 
-- 三个开关分开：`history_enabled` 只控制原始消息/轮次持久化；`learn_enabled` 控制事实/画像/Episode 抽取；`privacy.*` 控制图片描述、风格、表达学习。默认历史开、长期学习关，旧用户开启原 chat 不会自动获得新的模型外发行为。
+- 两个开关分开：`history_enabled` 只控制原始消息/轮次持久化；`learn_enabled` 控制事实/画像/Episode/风格/表达/黑话学习，也是这些学习任务的唯一总闸。默认历史开、长期学习关，旧用户开启原 chat 不会自动获得新的模型外发行为。图片描述一旦生成就写回持久化历史。
+- 表达/黑话不再有 `enabled`、`learn`、注入条数等全局开关，与 MaiBot 保持一致：使用与学习按 `learning_list[].use/learn` 逐聊天控制，注入上限写死（表达 5 条、黑话 10 条），表达选择只有本地模糊匹配，向量/LLM 精排属于外置嵌入服务，只保留接口。
 - 群管理员可用 `#记忆 开/关` 写 `chat_session_state.learn_enabled`；私聊本人可关闭自己租户。关闭后不抽取、不注入，保留已有数据供 `#忘记` 删除。
 - 校验：类型、范围、枚举、交叉条件（如 `inject_total_chars >= profile+facts`）；`memory` 被写成 `null/false` 时拒绝保存或恢复默认 dict，不能靠深度合并自动修复。
 - 控制台必须补显式 schema（`console/routes/config.py` 或独立 chat 设置路由）；只改 `SYSTEM_DEFAULTS` 不会生成表单。
@@ -910,11 +866,11 @@ p = 1 / (1 + exp(-logit))
 | P0 | 消息/事件/turn 身份、`chat_message/turn/turn_item`、历史持久化、完整轮次恢复、UTC、迁移校验、clear 截断、最小预算、降级状态、trace | 重启后继续聊；清空后重启不复活；生成失败/未发送的回复不进历史 |
 | P0.5 | 作者保真防抖、接入 trigger_seq、打断、串行发送、发送结果、平台引用与序号适配 | QQ 连发合并；长回复分条；同用户改口旧回复不再发；多段不交错；不做主动接话 |
 | P1 | 最小批次/游标、Episode 来源结构、噪声过滤、事实/别名/画像、本人/管理授权、遗忘闭环、撤回失效 | “记住我叫 X”下次叫得出；`#忘记` 后 7 天不复活；撤回证据不注入；跨租户测试通过 |
-| P1.5 | 协调回填、公平调度、防复读、预算优化、job 重试/告警 | 回填不重复计数；坏批次不饿死其他租户；重复率下降 |
+| P1.5 | 协调回填、公平调度、预算优化、job 重试/告警 | 回填不重复计数；坏批次不饿死其他租户 |
 | P2 | 丰富 Episode 检索、BM25、类型明确的关系扩展、排序评估 | “上次说的那个本”能召回；关系不把公司当用户 |
 | P3 / P4 | 群风格/黑话、表达学习与复审 | 语气像群；黑话能解释；控制台可删 |
-| P5 | Planner、`reply_likelihood` + `dynamic_gate`、`talk_value`、群级开关、情绪/熟悉度、行为归因 | Planner 首轮标签可追溯；门控先观察后启用；主动接话只在白名单群生效且能被 `#主动 关` 立即停掉 |
-| P6 | 表情、知识库、提醒、错字、完整控制台 | 提醒先通过平台送达验收；每项可单独开关 |
+| P5 | Planner、`reply_likelihood` + `dynamic_gate`、`talk_value`、群级开关 | Planner 首轮标签可追溯；门控先观察后启用；主动接话只在 `#主动 开` 的群生效且能被 `#主动 关` 立即停掉 |
+| P6 | 表情、知识库、错字、完整控制台 | 每项可单独开关 |
 
 - P1 虽然只做“最小 Episode”，但必须有 Episode 来源结构和游标，否则事实没有稳定证据；不能把噪声过滤、证据失效推到长期学习之后。
 - 各阶段有依赖：禁用 P1 后 P3/P4 不能完全独立运行；所谓“独立回退”是**有依赖的功能关闭与数据兼容回退**，不是每阶段互不相干。
@@ -924,7 +880,7 @@ p = 1 / (1 + exp(-logit))
 
 - `bootstrap.py:75` 前：`_import_startup_module("chat.memory.models")`，确保 `create_all` 看到表；模型模块不得反向导入业务。
 - `bootstrap.py:78` 后：`chat.memory.migrate.ensure_schema()`；失败写降级状态，不阻止聊天。
-- `bootstrap.py:87` 后：导入 `chat.recall`（notice）、`chat.reminder`、`chat.memory.jobs`；job 注册固定 ID、可重复调用、关闭时清理；执行时检查 `is_database_ready()` 和 `get_bots()`，无 Bot 时跳过，不绑定过期 Bot。
+- `bootstrap.py:87` 后：导入 `chat.recall`（notice）、`chat.memory.jobs`；job 注册固定 ID、可重复调用、关闭时清理；执行时检查 `is_database_ready()` 和 `get_bots()`，无 Bot 时跳过，不绑定过期 Bot。
 - `chat/types.py:30`：`ChatRequest` 加 `message_id`、`event_id`、`reply_to_id`、`occurred_at`、`turn_key`、`trigger_seq`、`generation`；`ChatResponse` 加 `turn_id`、`generation`。
 - `adapter/core/bot.py`：新增 `MessageRefs`、`RecallInfo`、`extract_message_refs(event)`、`extract_recall(event)`、`supports_reply()`、`build_reply_segment()`；平台差异在 `adapter/platforms/*`；业务层不 import 平台类型。
 - `chat/message_adapter.py:244`：`session_id_for_event` 不变；`adapt_message_event` 填新字段；ID 由适配器抽取，不在业务层用 `_value(event, "id", "message_id")` 猜。
@@ -933,8 +889,8 @@ p = 1 / (1 + exp(-logit))
 - `chat/service.py:354`：记忆块拼进 `persona_text`，不新增 system message；`363` 回灌；`370/452/474` 写 `chat_turn_item`，发送成功后才 `visible=true`。
 - `chat/router.py:150`：进入防抖缓冲；`163` 走发送状态机；新增 `on_notice` 撤回 matcher；`record_group_message` 路径也持久化。P5 时 `_context_rule` / `_ai_fallback_rule` 共用一个 `_proactive_gate(bot, event, cfg)`，结果缓存在 event 上；gate 通过时 `_context_rule` 返回 false、由 `_ai_fallback_rule` 绕过 `_match_context` 进入 `process`（本轮 user 由 process 写），gate 不通过时 `_handle_context` 写普通上下文。`@`/人格名路径不经过概率门，但仍可与待处理缓冲合并并标 `forced`。
 - 新增 `chat/behavior/reply_gate.py`（P5）：`reply_likelihood` 纯函数；`DynamicReplyGate` 和 `IdleBackoff` 按 tenant 保存内存状态；只在 P5 接入路由。
-- `chat/commands.py:120` 附近：新增 `#记住`、`#忘记`、`#画像`、`#记忆 开/关`、`#主动`、`#主动 开/关`、`#确认提醒`、`#取消提醒`；本人命令用本人权限，管理命令用 `manage_permission`，`#主动` 只允许群管理。不提供模式/概率/关键词/静默子命令。
-- `chat/tools/`：新增 `remember`、`forget`、`search_memory`、`search_knowledge`、`set_reminder`；`ToolSpec` 增加 `side_effect`、`allow_subject_override`；`ToolContext` 增加 `actor_id`、`authors`、`turn_id`、`proactive`；主动轮在 `tool_allowed` 直接拒绝有副作用工具；工具结果按 `(turn_id, tool_call_id)` 幂等。
+- `chat/commands.py:120` 附近：新增 `#记住`、`#忘记`、`#画像`、`#记忆 开/关`、`#主动`、`#主动 开/关`；本人命令用本人权限，管理命令用 `manage_permission`，`#主动` 只允许群管理。不提供模式/概率/关键词/静默子命令。
+- `chat/tools/`：新增 `remember`、`forget`、`search_memory`、`search_knowledge`；`ToolSpec` 增加 `side_effect`、`allow_subject_override`；`ToolContext` 增加 `actor_id`、`authors`、`turn_id`、`proactive`；主动轮在 `tool_allowed` 直接拒绝有副作用工具；工具结果按 `(turn_id, tool_call_id)` 幂等。
 - `chat/providers/routing.py`：`resolve(task, session_id)` 返回候选列表；fallback 在模型调用边界；`chat/service.py:_session_provider` 改为调用它。
 - `console/server.py:12/26`：导入并挂载 `chat` 路由；`console/routes/chat.py` 所有资源按 tenant 校验。
 - `console/routes/config.py:149`：补 chat 记忆/行为显式 schema；保存时校验类型/范围/交叉条件。
@@ -958,17 +914,17 @@ p = 1 / (1 + exp(-logit))
 | JSON 不合法 | Pydantic 校验；失败重试 1 次；不推进游标；不写半成品 |
 | 撤回/删除后残留 | tombstone、证据 invalid、事实立即退出、Episode stale、画像 stale、marker 禁止重建 |
 | 多段发送失败 | 第一段失败停止；后续失败标 partial；只把实际 sent 的段写历史；QQ `msg_seq` 交给 SDK |
-| 主动发送不可达 | 提醒/后台发送失败记录并在控制台可见；不假装送达；先做平台验收 |
+| 主动发送不可达 | 后台发送失败记录并在控制台可见；不假装送达；先做平台验收 |
 | 错字伤专名 | 保护名单 + 默认关闭 + 只改语气词 |
 | 表情包隐私 | 群采集默认关；只存 hash/描述；白名单群；控制台可清空 |
-| 主动回复扰民 | P5 默认关；白名单群；`talk_value` 可调低到 0；小时窗口预算和 Planner `no_action` 共同抑噪；@ 可随时打断；群管理可一键关。不设未经验证的 5 分钟/60 秒/5 条/小时硬上限 |
+| 主动回复扰民 | P5 默认关，群级 `#主动 开` 才参与；`talk_value` 可调低到 0；小时窗口预算和 Planner `no_action` 共同抑噪；@ 可随时打断；群管理可一键关。不设未经验证的 5 分钟/60 秒/5 条/小时硬上限 |
 | 主动轮越权 | 主动轮只允许只读工具；批次含主动消息时整轮禁用副作用工具；不主动私聊 |
 | 迁移失败被吞 | chat 专用迁移显式校验；失败禁用写入/job 并报告；不靠 `exec_list` 吞异常 |
 | 许可证/来源 | MaiBot 是 GPL-3.0 + EULA；个人使用可直接复制/迁移；保留来源注释，未来分发再处理合规 |
 
 ## 20. 明确不做
 
-- HeartFlow 整套状态机：情绪/规划/表达已覆盖有效部分。
+- HeartFlow 整套状态机：规划/表达已覆盖有效部分。
 - LPMM 的向量 + 知识图谱 + PPR：没有 embedding 模型；1–2 跳关系扩展够用。
 - MongoDB、独立图数据库、gRPC sidecar、Redis、Qdrant、Ollama：额外部署。
 - 通用插件/组件系统：fxbot 已有 tool registry + 子插件。
@@ -976,9 +932,9 @@ p = 1 / (1 + exp(-logit))
 - 复杂 Big Five/多维情绪计算：不可验证，收益低。
 - 跨群身份合并：与租户隔离冲突。
 - 自动采集全群图片做表情库：隐私风险，默认不做。
-- 无人值守的主动私聊：扰民风险，默认不做；群内主动接话可以显式开启，但必须白名单、`talk_value` 可调、可一键关闭，且主动轮不能调用副作用工具；不设未经验证的硬性频率上限。
+- 无人值守的主动私聊：扰民风险，默认不做；群内主动接话可以显式开启，但 `talk_value` 可调、可一键关闭，且主动轮不能调用副作用工具；不设未经验证的硬性频率上限。
 - 通用 EventBus、DI、backend registry、空 Protocol：没有第二种实现前不做。
-- 跨平台完全等价承诺：防抖、引用、主动提醒、撤回接收可以有清晰能力差异；不支持时显式降级。
+- 跨平台完全等价承诺：防抖、引用、主动接话、撤回接收可以有清晰能力差异；不支持时显式降级。
 - 把 MaiBot 阈值当作已验证常量：保留能力，用本仓库的误学率、召回质量、重复率、打断成功率、送达率、每轮成本做验收。
 
 ## 21. Codex 评审逐条对照
@@ -999,7 +955,7 @@ p = 1 / (1 + exp(-logit))
 | S1 clear/hydrate 无持久化边界 | DB generation + cleared_at；hydrate 锁与幂等；重启不复活 | 6.8、9.4、18 |
 | 数据模型缺时间/tenant/状态 | 显式时间、UTC、状态、唯一约束、反查索引 | 6 |
 | 迁移不能吞异常 | chat 专用 migrate，显式校验、失败降级 | 6.9 |
-| UTC 字段与输入语义 | naive UTC + aware 读取；occurred/ingested/asserted/hit 分开；提醒 offset | 6、13.3 |
+| UTC 字段与输入语义 | naive UTC + aware 读取；occurred/ingested/asserted/hit 分开 | 6 |
 | 引用发送直接报错 | 适配器 reply/reference + 能力降级 | 9.3、18 |
 | 撤回事件形状不同 | 平台 `extract_recall`；tombstone；先到/后到竞态 | 10.4 |
 | 防抖/拆分/多段承载 | 唯一 flush 所有者；发送状态；QQ msg_seq 交给 SDK；后台不存 matcher | 9.1、9.2 |
@@ -1009,7 +965,7 @@ p = 1 / (1 + exp(-logit))
 | RapidFuzz 0–100 量纲 | 统一 /100 或阈值 75/85；零分处理 | 8.2、10.5、12.1 |
 | 命中不等于更可信 | confidence 只由独立证据/确认/人工改变 | 7.3、14 |
 | Prompt 注入要信任边界 | 工具授权/tenant/参数限制为主；资料标不可信 | 8.4 |
-| 持久化/隐私开关要拆开 | history/learn/privacy 三分；payload 白名单 | 15、7.1 |
+| 持久化/学习开关要拆开 | history/learn 两分；payload 白名单 | 15、7.1 |
 | 成本按调用/token/图片 | 全局+租户预算、并发、图片去重、前台优先 | 15、19 |
 | 配置 schema/校验/热更新 | 显式 console schema、交叉校验、job 重读 | 15、18 |
 | 个人命令不要复用管理权限 | 本人权限与 `manage_permission` 分开 | 5.2 |
@@ -1025,8 +981,6 @@ p = 1 / (1 + exp(-logit))
 - `content_hash` 不再包含标题；Episode 用稳定 `batch_id + topic_index`。
 - `confidence` 不再因检索命中提升；`hits` 只排序。
 - `chat_relation` 不再用空串表示未知实体；未知跳过，非用户实体用 `object_kind + object_key`。
-- `chat_reminder` 增加确认、claim、重试、送达结果。
-- `chat_behavior` 增加原始样本表，周聚合不反推未记录行为。
 - `chat_knowledge_chunk` 增加 `(tenant, doc_id, seq)` 唯一约束；文档 staging→active。
 - 主动回复不再提前到 P0.5：P0.5 只做防抖、打断、分条、引用；P5 先做 Planner，再做 `reply_likelihood` + `dynamic_gate`，不实现 classical willing。
 - 删除上一版自拟的主动回复硬限制：5 分钟冷却、任意 Bot 回复后 60 秒、10 分钟 5 条、每小时上限、连续被忽略自动静默；MaiBot 源码和当前文档均未找到这些数，改用 Planner `no_action`、小时窗口预算和 `no_action_backoff`。
@@ -1299,6 +1253,6 @@ P1 不依赖主动门控；P0.5-4 可与 P1 的一部分并行，但不要先写
 8. P0.5-3 分条/发送。
 9. P0.5-4 引用。
 
-P0/P0.5 到此为止。P1-P4 按本文设计推进；P5 再做 Planner + 最新门控 + 情绪/行为。
+P0/P0.5 到此为止。P1-P4 按本文设计推进；P5 再做 Planner + 最新门控。
 
 每个提交完成后：只在改动文件跑 ruff，跑对应 `unittest`，再进入下一步。

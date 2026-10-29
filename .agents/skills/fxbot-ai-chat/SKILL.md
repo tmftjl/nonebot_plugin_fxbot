@@ -22,7 +22,8 @@ Use this skill for:
 - chat DB models, repository, migrations, bootstrap imports;
 - chat configuration, console routes, and chat console UI;
 - memory extraction, retrieval, profile, episodes, and lifecycle;
-- debounce, splitting, sending, quoting, interruption, planner, and proactive gate.
+- debounce, splitting, sending, quoting, interruption, planner, and proactive gate;
+- `chat/focus/` shared-group planning (MaiBot `src/maisaka/focus/`).
 
 Do not use it for unrelated framework, membership, console, or subplugin work.
 
@@ -57,9 +58,10 @@ P5 is explicit work, not an automatic continuation. Do not implement the proacti
 - Use `utils/cache.py` for in-process caches. Prefix tuple keys with the domain and invalidate at the write entry point.
 - Use explicit `CREATE TABLE/INDEX IF NOT EXISTS` and column checks for chat migrations. Do not rely on `exec_list` swallowing exceptions.
 - Generated text is not visible history. Only successfully sent turn items with `visible=true` feed the next turn.
-- Initial DB failure degrades memory writes/extraction but must not disable basic chat. Forget/delete requests must fail loudly.
+- Initial DB failure degrades long-term memory reads/writes and learning, but must not disable basic chat.
 - A P5 gate is sampled once per event. If it passes, `_context_rule` returns false and `_ai_fallback_rule` bypasses `_match_context`; otherwise `_handle_context` writes history. Never let both paths write the same user message.
-- Proactive turns use only read-only tools. `remember`, `forget`, profile, reminder, and admin tools are rejected for the whole batch if any message is proactive.
+- Focus 接管聊天时，路由登记后直接返回：普通防抖、规划器与 proactive gate 都不再参与；回复仍由该聊天自己的回复模型生成并发送到自己的目标。
+- Proactive turns use only read-only tools (`query_memory`, `query_person_profile`, `web_search`); admin tools are rejected for the whole batch if any message is proactive.
 - Do not invent cooldowns or caps. There is no fixed 5-minute/60-second/5-per-10-minute/hourly limit. Use only MaiBot's `talk_value` window budget and `no_action_backoff`.
 
 ## MaiBot Code Migration
@@ -72,7 +74,7 @@ Direct-copy candidates:
 - `src/maisaka/turn_trigger/dynamic_gate.py` and `idle_backoff.py` → same module;
 - Planner prompts, parsers, and scheduling structure → `chat/planner.py` and debounce;
 - expression, jargon, typo algorithms and prompts → the corresponding chat modules;
-- memory extraction prompts and JSON schemas → `chat/memory/extract.py`.
+- A_Memorix memory kernel → vendored at `chat/amemorix/`; do not reintroduce the removed `chat/memory/extract.py` pipeline.
 
 Do not copy MaiBot's platform adapters, OneBot/QQ sending, or global config loader. Reconnect those through FxBot's `adapter/platforms/*`, `ConfigManager`, permission model, and repository layer.
 
@@ -96,7 +98,7 @@ Implement items one at a time, but commit a whole phase as a single commit once 
 - **P0-2**: fresh DB, repeated migration, broken migration, missing column; UTC round-trip; DB-failure startup.
 - **P0-3**: restart continuity; clear-then-restart; history trim; late image description after recall; cross-tenant read failure.
 - **P0-4**: model failure, empty response, first-segment failure, duplicate send; generated-but-not-sent excluded from history; clear during generation.
-- **P0-5**: clear clears memory/DB/in-flight work; `max_history` hot reload; invalid config does not crash startup.
+- **P0-5**: clear clears memory/DB/in-flight work; `max_context_size` hot reload; invalid config does not crash startup.
 - **P0.5-1**: same-author burst, cross-author, window reset, 30-second cap, forced flush, no duplicate user append.
 - **P0.5-2**: A1→A2 aborts A1; A1→B1 lets A1 finish; partial send is not rolled back.
 - **P0.5-3**: long text, first/middle segment failure, concurrent turns, no interleaving per tenant.

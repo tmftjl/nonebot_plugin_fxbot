@@ -13,9 +13,15 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from src.plugins.nonebot_plugin_fxbot.db import base_models
 from src.plugins.nonebot_plugin_fxbot.utils.tz import as_shanghai, as_shanghai_local
 from src.plugins.nonebot_plugin_fxbot.chat.memory import state, migrate
-from src.plugins.nonebot_plugin_fxbot.chat.memory.models import ChatTurn, ChatMessage, ChatTurnItem, ChatSessionState
+from src.plugins.nonebot_plugin_fxbot.chat.memory.models import (
+    ChatTurn,
+    ChatMessage,
+    ChatTurnItem,
+    ChatSessionState,
+    ChatRecallTombstone,
+)
 
-_ALL_MODELS = (ChatMessage, ChatTurn, ChatTurnItem, ChatSessionState)
+_ALL_MODELS = (ChatMessage, ChatTurn, ChatTurnItem, ChatSessionState, ChatRecallTombstone)
 _EXPECTED_INDEXES = {index.name for model in _ALL_MODELS for index in model.__table__.indexes}
 
 

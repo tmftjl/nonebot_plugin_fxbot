@@ -2,6 +2,7 @@
 <script setup lang="ts">
 import { ref, watch, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
+import PageHeader from '@/components/PageHeader.vue'
 import { configApi } from '@/api'
 import ConfigCard from '@/components/ConfigCard.vue'
 import type { ConfigTab } from '@/types/schema'
@@ -14,8 +15,8 @@ const props = withDefaults(defineProps<Props>(), {
   activeTab: ''
 })
 
-const loading = ref(false)
 const saving = ref(false)
+const loaded = ref(false)
 const configs = ref<Record<string, any>>({})
 const tabs = ref<ConfigTab[]>([])
 const currentTabKey = ref('')
@@ -63,7 +64,6 @@ const setCardData = (cardKey: string, data: Record<string, any>) => {
 }
 
 const loadData = async () => {
-  loading.value = true
   try {
     const [tabsData, configData] = await Promise.all([
       configApi.getTabs(),
@@ -80,7 +80,7 @@ const loadData = async () => {
   } catch (e: any) {
     ElMessage.error('加载配置失败: ' + (e?.message || e))
   } finally {
-    loading.value = false
+    loaded.value = true
   }
 }
 
@@ -92,7 +92,12 @@ const saveConfig = async () => {
     hasChanges.value = false
     await loadData()
   } catch (e: any) {
-    ElMessage.error('保存失败: ' + (e?.message || e))
+    if (e?.response?.status === 409) {
+      ElMessage.error('配置已在其他页面被修改，请刷新后重试')
+      await loadData()
+    } else {
+      ElMessage.error('保存失败: ' + (e?.message || e))
+    }
   } finally {
     saving.value = false
   }
@@ -104,12 +109,14 @@ onMounted(() => {
 </script>
 
 <template>
-  <div v-loading="loading" class="config-view">
-    <div v-if="!tabs.length" class="empty-state">
+  <div class="config-view">
+    <PageHeader :title="currentTab()?.title || '插件配置'" subtitle="修改后点击卡片右上角的保存按钮生效" />
+
+    <div v-if="loaded && !tabs.length" class="empty-state">
       <el-empty description="暂无配置" />
     </div>
 
-    <div v-else class="cards-container">
+    <div v-else-if="loaded" class="cards-container">
       <transition name="fade" mode="out-in">
         <div :key="currentTabKey" class="tab-content">
           <template v-for="tab in tabs" :key="tab.key">
@@ -143,31 +150,7 @@ onMounted(() => {
 
 <style scoped lang="scss">
 .config-view {
-  padding: 24px;
-}
-
-.view-header {
-  margin-bottom: 32px;
-  
-  .view-title {
-    font-size: 28px;
-    font-weight: 800;
-    color: var(--color-text);
-    margin: 0 0 8px 0;
-    letter-spacing: -0.03em;
-  }
-
-  .view-desc {
-    font-size: 14px;
-    color: var(--color-text-secondary);
-    margin: 0;
-  }
-}
-
-.empty-state {
-  padding: 60px 0;
-  display: flex;
-  justify-content: center;
+  padding: 24px 28px 32px;
 }
 
 .cards-container {

@@ -17,14 +17,21 @@ from sqlmodel import select
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from src.plugins.nonebot_plugin_fxbot.db import base_models
-from src.plugins.nonebot_plugin_fxbot.chat import router, service as service_module
+from src.plugins.nonebot_plugin_fxbot.chat import (
+    typo as typo_module,
+    router,
+    service as service_module,
+    session as session_module,
+)
 from src.plugins.nonebot_plugin_fxbot.chat.tools import ToolRuntime
 from src.plugins.nonebot_plugin_fxbot.chat.types import ChatRequest, ChatResponse
 from src.plugins.nonebot_plugin_fxbot.chat.memory import state as memory_state, migrate
 from src.plugins.nonebot_plugin_fxbot.chat.service import ChatService
 from src.plugins.nonebot_plugin_fxbot.chat.session import ChatSessionStore
+from src.plugins.nonebot_plugin_fxbot.chat.behavior import response as response_module
 from src.plugins.nonebot_plugin_fxbot.chat.providers import LLMResponse, provider_manager
-from src.plugins.nonebot_plugin_fxbot.chat.memory.models import ChatTurn, ChatMessage, ChatTurnItem
+from src.plugins.nonebot_plugin_fxbot.chat.memory.models import ChatTurn, ChatTrace, ChatMessage, ChatTurnItem
+from src.plugins.nonebot_plugin_fxbot.chat.message_receive import sender as sender_module, history as history_module
 from src.plugins.nonebot_plugin_fxbot.chat.behavior.debounce import PendingBatch
 from src.plugins.nonebot_plugin_fxbot.chat.memory.repository import ChatRepository, chat_repository
 
@@ -55,13 +62,19 @@ class _FakeConfig:
     def get_system(self) -> dict[str, object]:
         return {
             "chat": {
-                "max_history": 10,
-                "image_description": False,
+                "max_context_size": 10,
                 "persona": "",
                 "provider": "",
-                "enabled_tools": ["__disabled__"],
+                "response_splitter": {"max_sentence_num": 200, "max_split_num": 3},
             }
         }
+
+
+class _TypoSilent:
+    """断言原文的发送用例关闭错字模拟。"""
+
+    def get_system(self) -> dict[str, object]:
+        return {"chat": {"typo": {"enable": False}}}
 
 
 class _FakeProvider:
@@ -73,6 +86,11 @@ class _FakeProvider:
 
 @asynccontextmanager
 async def _fake_lease(_name: str):
+    yield _FakeProvider()
+
+
+@asynccontextmanager
+async def _fake_fallback(_task: str, _session_id: str):
     yield _FakeProvider()
 
 
@@ -193,6 +211,43 @@ class RepositoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((first, second), (True, False))
         self.assertEqual(after, [{"role": "assistant", "content": "回复"}])
 
+    async def test_partial_send_keeps_prefix_visible(self) -> None:
+        async with self.maker() as session:
+            turn = ChatTurn(tenant="tenant", turn_key="turn-parts", status="generating")
+            turn_id = await self.repo.upsert_turn(turn, session=session)
+            ids = [
+                await self.repo.append_turn_item(
+                    ChatTurnItem(
+                        tenant="tenant",
+                        turn_id=turn_id,
+                        item_seq=seq,
+                        role="assistant",
+                        content=text,
+                        visible=False,
+                        send_status="pending",
+                    ),
+                    session=session,
+                )
+                for seq, text in ((1, "第一段"), (2, "第二段"))
+            ]
+            await session.commit()
+            await self.repo.mark_turn_item_sent("tenant", ids[0], session=session)
+            await session.commit()
+            turns = await ChatTurn.select_rows(tenant="tenant", turn_key="turn-parts", session=session)
+            partial_status = turns[0].status
+            prefix = await self.repo.get_recent_messages("tenant", 10, session=session)
+            await self.repo.mark_turn_item_sent("tenant", ids[1], session=session)
+            await session.commit()
+            turns = await ChatTurn.select_rows(tenant="tenant", turn_key="turn-parts", session=session)
+            sent_status = turns[0].status
+            whole = await self.repo.get_recent_messages("tenant", 10, session=session)
+
+        self.assertEqual(partial_status, "partial")
+        # 进程在第一段之后中断，重启也要能看到已发出的前缀
+        self.assertEqual(prefix, [{"role": "assistant", "content": "第一段"}])
+        self.assertEqual(sent_status, "sent")
+        self.assertEqual([row["content"] for row in whole], ["第一段", "第二段"])
+
     async def test_clear_removes_rows_and_increments_generation(self) -> None:
         async with self.maker() as session:
             await self._message(session, "tenant", "msg:1", "一", 1)
@@ -212,6 +267,50 @@ class RepositoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state.generation, 2)
         self.assertIsNotNone(state.cleared_at)
         self.assertEqual((messages, turns, items), ([], [], []))
+
+    async def test_generation_check_and_write_cannot_be_split_by_clear(self) -> None:
+        async with self.maker() as session:
+            await self.repo.upsert_turn(ChatTurn(tenant="tenant", turn_key="locked"), session=session)
+            await session.commit()
+        checked = asyncio.Event()
+        release = asyncio.Event()
+        clearing = asyncio.Event()
+        current_turn = self.repo._current_turn
+
+        async def pause_after_check(*args: object, **kwargs: object) -> bool:
+            current = await current_turn(*args, **kwargs)
+            checked.set()
+            await release.wait()
+            return current
+
+        async def write() -> None:
+            async with self.maker() as session:
+                await self.repo.update_turn("tenant", "locked", generation=0, generated_text="旧回复", session=session)
+                await session.commit()
+
+        async def clear() -> None:
+            async with self.maker() as session:
+                clearing.set()
+                await self.repo.clear_tenant("tenant", session=session)
+                await session.commit()
+
+        with patch.object(self.repo, "_current_turn", side_effect=pause_after_check):
+            write_task = asyncio.create_task(write())
+            clear_task = None
+            try:
+                await asyncio.wait_for(checked.wait(), timeout=5)
+                clear_task = asyncio.create_task(clear())
+                await asyncio.wait_for(clearing.wait(), timeout=5)
+                done, _pending = await asyncio.wait({clear_task}, timeout=0.05)
+                self.assertEqual(done, set())
+            finally:
+                release.set()
+                await asyncio.wait_for(asyncio.gather(write_task, *([clear_task] if clear_task else [])), timeout=5)
+
+        async with self.maker() as session:
+            self.assertEqual(await ChatTurn.select_rows(tenant="tenant", session=session), [])
+            state = await self.repo.get_session_state("tenant", session=session)
+            self.assertEqual(state.generation, 1)
 
 
 class HydrateTests(unittest.IsolatedAsyncioTestCase):
@@ -275,6 +374,36 @@ class HydrateTests(unittest.IsolatedAsyncioTestCase):
 
         restore.assert_not_awaited()
         self.assertTrue(self.store.is_hydrated("tenant"))
+
+
+class ImageDescriptionLearningTests(unittest.IsolatedAsyncioTestCase):
+    """图片描述写回持久化历史。"""
+
+    class _Config:
+        def get_system(self) -> dict[str, object]:
+            return {
+                "chat": {
+                    "max_context_size": 10,
+                    "model_routing": {"vision": "vp"},
+                }
+            }
+
+    async def test_writes_description_back(self) -> None:
+        service = ChatService(ChatSessionStore())
+        with (
+            patch.object(service_module, "get_config_manager", return_value=self._Config()),
+            patch.object(history_module, "fallback_provider", new=_fake_fallback),
+            patch.object(history_module, "describe_sources", new=AsyncMock(return_value=["一只猫"])),
+            patch.object(service_module.memory_state, "is_ready", return_value=True),
+            patch.object(service, "_hydrate", new=AsyncMock()),
+            patch.object(chat_repository, "append_message", new=AsyncMock(return_value=5)),
+            patch.object(chat_repository, "update_message_content", new=AsyncMock()) as update,
+        ):
+            await service.record_group_message("tenant", "u", "小明", "看图", is_group=True, images=["http://img"])
+
+        update.assert_awaited_once()
+        self.assertIn("一只猫", update.await_args.args[2])
+        self.assertIn("一只猫", service.session_store.get("tenant")[0]["content"])
 
 
 class TurnPersistenceTests(unittest.IsolatedAsyncioTestCase):
@@ -347,7 +476,7 @@ class TurnPersistenceTests(unittest.IsolatedAsyncioTestCase):
         ):
             await self.service.mark_sent(request, response, 0, "pmid")
 
-        mark.assert_awaited_once_with("tenant", 5, "pmid")
+        mark.assert_awaited_once_with("tenant", 5, "pmid", generation=0)
 
 
 class RestartContinuityTests(unittest.IsolatedAsyncioTestCase):
@@ -447,6 +576,97 @@ class EmptyAndFailedSendTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(mark.await_count, 2)
 
+    async def test_mark_sent_records_actual_sent_text(self) -> None:
+        request = _request()
+        response = ChatResponse(text="干净文本", metadata={"turn_item_ids": [5]})
+        self.service.session_store.append("tenant", {"role": "user", "content": "你好"})
+        with (
+            patch.object(memory_state, "is_ready", return_value=True),
+            patch.object(chat_repository, "mark_turn_item_sent", new=AsyncMock()),
+            patch.object(service_module, "get_config_manager", return_value=_FakeConfig()),
+        ):
+            await self.service.mark_sent(request, response, 0, None, content="错字文本")
+
+        self.assertEqual(
+            self.service.session_store.get("tenant"),
+            [{"role": "user", "content": "你好"}, {"role": "assistant", "content": "错字文本"}],
+        )
+
+
+class SendTraceTests(unittest.IsolatedAsyncioTestCase):
+    """发送阶段补写轮次追踪。"""
+
+    async def asyncSetUp(self) -> None:
+        await base_models.init_database()
+        await migrate.ensure_schema()
+        memory_state.mark_ready()
+        self.addCleanup(memory_state.mark_ready)
+        self.tenant = f"trace-{uuid4().hex}"
+        self.addAsyncCleanup(chat_repository.clear_tenant, self.tenant)
+
+    async def _send(self, outcome: str) -> ChatTrace:
+        request = _request(
+            session_id=self.tenant,
+            group_id=None,
+            turn_id=uuid4().hex,
+            dedupe_key=f"msg:{uuid4().hex}",
+            trigger_kind="private",
+        )
+        await chat_repository.save_trace(
+            self.tenant,
+            turn_id=request.turn_id,
+            trigger_kind="private",
+            request_preview="你好",
+            injected="{}",
+            budget=json.dumps({"tools": 2}),
+            provider="fake",
+            latency_ms=100,
+        )
+        service = SimpleNamespace(
+            session_store=ChatSessionStore(),
+            is_current=lambda *args: True,
+            is_latest=lambda *args: True,
+            mark_sending=AsyncMock(),
+            mark_sent=AsyncMock(),
+            mark_send_failed=AsyncMock(),
+            mark_send_aborted=AsyncMock(),
+        )
+        matcher = SimpleNamespace(send=AsyncMock())
+        if outcome == "second_failure":
+            matcher.send.side_effect = [None, RuntimeError("net down")]
+        response = ChatResponse(text="第一段。第二段。", epoch=0, metadata={"reply_parts": ["第一段", "第二段"]})
+        with (
+            patch.object(sender_module, "typing_time", return_value=0.0),
+            patch.object(sender_module, "send_voice", AsyncMock()),
+            patch.object(sender_module, "send_emoji", AsyncMock()),
+        ):
+            await sender_module.send_parts(service, request, response, None, matcher)
+        async with base_models.async_maker() as session:
+            rows = await ChatTrace.select_rows(tenant=self.tenant, turn_id=request.turn_id, session=session)
+        return rows[0]
+
+    async def test_success_appends_send_stage_to_budget(self) -> None:
+        row = await self._send("success")
+        budget = json.loads(row.budget)
+        self.assertEqual(budget["tools"], 2)
+        self.assertEqual(budget["send"]["sent_parts"], 2)
+        self.assertEqual(budget["send"]["total_parts"], 2)
+        self.assertIsNone(budget["send"]["failed_index"])
+        self.assertFalse(budget["send"]["cancelled"])
+        self.assertGreaterEqual(budget["send"]["send_ms"], 0)
+        self.assertEqual(row.latency_ms, 100 + budget["send"]["send_ms"])
+        self.assertEqual(row.error, "")
+
+    async def test_second_part_failure_records_index_and_error(self) -> None:
+        row = await self._send("second_failure")
+        budget = json.loads(row.budget)
+        self.assertEqual(budget["tools"], 2)
+        self.assertEqual(budget["send"]["sent_parts"], 1)
+        self.assertEqual(budget["send"]["total_parts"], 2)
+        self.assertEqual(budget["send"]["failed_index"], 1)
+        self.assertIn("RuntimeError", row.error)
+        self.assertIn("net down", row.error)
+
 
 class SendStateTests(unittest.IsolatedAsyncioTestCase):
     """真实服务下的空响应、发送失败与清空失效。"""
@@ -508,7 +728,7 @@ class SendStateTests(unittest.IsolatedAsyncioTestCase):
 
         response = await self._process(request, store, empty_lease)
 
-        self.assertEqual(response.text, "  ")
+        self.assertEqual(response.text, "")
         self.assertNotIn("turn_item_ids", response.metadata)
         turn = await self._turn(request)
         self.assertEqual((turn.status, turn.error), ("failed", "空响应"))
@@ -668,6 +888,20 @@ class _RecordingMatcher:
 _LONG_REPLY = "第一段。" * 100
 
 
+class _NoMergeRandom:
+    """固定随机数，避免概率合并在断言消息条数时生效。"""
+
+    def random(self) -> float:
+        return 0.99
+
+    def choice(self, values: list[str]) -> str:
+        return values[0]
+
+
+# 压缩分段时组尾分隔符不再发送，还原原文要补回每段末尾的句号
+_LONG_PARTS = ["第一段。" * 33 + "第一段", "第一段。" * 32 + "第一段", "第一段。" * 32 + "第一段"]
+
+
 class SplitSendTests(unittest.IsolatedAsyncioTestCase):
     """长回复拆分、分段失败与同租户串行发送。"""
 
@@ -708,8 +942,10 @@ class SplitSendTests(unittest.IsolatedAsyncioTestCase):
     ) -> bool:
         with (
             patch.object(service_module, "get_config_manager", return_value=_FakeConfig()),
+            patch.object(typo_module, "get_config_manager", return_value=_TypoSilent()),
             patch.object(provider_manager, "lease", self._lease_for(text)),
-            patch.object(service_module, "part_delay", return_value=0.0),
+            patch.object(sender_module, "typing_time", return_value=0.0),
+            patch.object(response_module, "random", _NoMergeRandom()),
         ):
             return await ChatService(store).process_and_send(request, ToolRuntime(matcher=matcher))
 
@@ -733,8 +969,8 @@ class SplitSendTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(await self._send(request, store, matcher))
 
-        self.assertEqual(matcher.sent, ["第一段。" * 30, "第一段。" * 30, "第一段。" * 40])
-        self.assertEqual("".join(matcher.sent), _LONG_REPLY)
+        self.assertEqual(matcher.sent, _LONG_PARTS)
+        self.assertEqual("".join(part + "。" for part in matcher.sent), _LONG_REPLY)
         self.assertEqual((await self._turn(request)).status, "sent")
         items = await self._assistant_items(request)
         self.assertEqual([item.part_index for item in items], [0, 1, 2])
@@ -768,7 +1004,7 @@ class SplitSendTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(await self._send(request, store, matcher))
 
-        self.assertEqual(matcher.sent, ["第一段。" * 30])
+        self.assertEqual(matcher.sent, [_LONG_PARTS[0]])
         self.assertEqual((await self._turn(request)).status, "partial")
         items = await self._assistant_items(request)
         self.assertEqual([item.send_status for item in items], ["sent", "failed", "skipped"])
@@ -777,7 +1013,7 @@ class SplitSendTests(unittest.IsolatedAsyncioTestCase):
             await chat_repository.get_recent_messages(self.tenant, 10),
             [
                 {"role": "user", "content": "User(user): 你好"},
-                {"role": "assistant", "content": "第一段。" * 30},
+                {"role": "assistant", "content": _LONG_PARTS[0]},
             ],
         )
 
@@ -802,8 +1038,10 @@ class SplitSendTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(service_module, "get_config_manager", return_value=_FakeConfig()),
+            patch.object(typo_module, "get_config_manager", return_value=_TypoSilent()),
             patch.object(provider_manager, "lease", labelled_lease),
-            patch.object(service_module, "part_delay", return_value=0.0),
+            patch.object(sender_module, "typing_time", return_value=0.0),
+            patch.object(response_module, "random", _NoMergeRandom()),
         ):
             await asyncio.gather(
                 ChatService(store).process_and_send(first, ToolRuntime(matcher=matcher)),
@@ -913,6 +1151,25 @@ class ClearTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(restored.get(self.tenant), [])
         self.assertEqual(restored.epoch(self.tenant), 1)
 
+    async def test_concurrent_clears_keep_latest_generation(self) -> None:
+        service = ChatService(ChatSessionStore())
+        events: list[str] = []
+
+        async def clear_tenant(_session_id: str) -> int:
+            events.append("start")
+            if events.count("start") == 1:
+                await asyncio.sleep(0.02)
+                events.append("end")
+                return 1
+            events.append("end")
+            return 2
+
+        with patch.object(history_module, "clear_tenant", side_effect=clear_tenant):
+            await asyncio.gather(service.clear_session(self.tenant), service.clear_session(self.tenant))
+
+        self.assertEqual(events, ["start", "end", "start", "end"])
+        self.assertEqual(service.session_store.epoch(self.tenant), 2)
+
     async def test_clear_invalidates_in_flight_reply(self) -> None:
         service = ChatService(ChatSessionStore())
         epoch = service.session_store.epoch(self.tenant)
@@ -921,21 +1178,131 @@ class ClearTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(service.is_current(self.tenant, epoch))
 
+    async def _assert_database_empty(self) -> None:
+        """确认清空后没有旧轮次、孤立条目或消息残留。"""
+        async with base_models.async_maker() as session:
+            for model in (ChatTurn, ChatTurnItem, ChatMessage):
+                self.assertEqual(await model.select_rows(tenant=self.tenant, session=session), [])
+        self.assertEqual(await chat_repository.get_recent_messages(self.tenant, 10), [])
+
+    async def test_clear_while_provider_is_generating_leaves_no_content(self) -> None:
+        for database_only in (False, True):
+            with self.subTest(database_only=database_only):
+                started = asyncio.Event()
+                release = asyncio.Event()
+                service = ChatService(ChatSessionStore())
+                request = _request(session_id=self.tenant, turn_id=uuid4().hex, dedupe_key=uuid4().hex)
+
+                class _PausedProvider:
+                    async def chat(self, messages: list[dict[str, object]], tools: object = None) -> LLMResponse:
+                        started.set()
+                        await release.wait()
+                        return LLMResponse(content="清空前启动的回复")
+
+                @asynccontextmanager
+                async def paused_lease(_name: str):
+                    yield _PausedProvider()
+
+                with (
+                    patch.object(service_module, "get_config_manager", return_value=_FakeConfig()),
+                    patch.object(provider_manager, "lease", paused_lease),
+                ):
+                    task = asyncio.create_task(service.process(request))
+                    try:
+                        await asyncio.wait_for(started.wait(), timeout=5)
+                        if database_only:
+                            await chat_repository.clear_tenant(self.tenant)
+                        else:
+                            await service.clear_session(self.tenant)
+                    finally:
+                        release.set()
+                        await asyncio.wait_for(task, timeout=5)
+                await self._assert_database_empty()
+
+    async def test_clear_between_generated_text_and_items_leaves_no_orphans(self) -> None:
+        request = _request(session_id=self.tenant, accepted_epoch=0)
+        persisted = await history_module.persist_turn_start(request, "用户消息", 0)
+        update_turn = chat_repository.update_turn
+
+        async def clear_after_update(*args: object, **kwargs: object) -> None:
+            await update_turn(*args, **kwargs)
+            await chat_repository.clear_tenant(self.tenant)
+
+        with patch.object(chat_repository, "update_turn", side_effect=clear_after_update):
+            item_ids = await history_module.persist_turn_end(
+                request, persisted, LLMResponse(content="旧回复"), "p", "旧图片描述", ["描述"], ["旧回复"]
+            )
+
+        self.assertIsNone(item_ids)
+        await self._assert_database_empty()
+
+    async def test_stale_callbacks_cannot_modify_reused_ids(self) -> None:
+        request = _request(session_id=self.tenant, accepted_epoch=0)
+        persisted = await history_module.persist_turn_start(request, "旧消息", 0)
+        self.assertIsNotNone(persisted)
+        turn_id, message_id = persisted
+        old_items = await history_module.persist_turn_end(
+            request, persisted, LLMResponse(content="旧回复"), "p", "旧消息", [], ["旧回复"]
+        )
+        response = ChatResponse(text="旧回复", epoch=0, metadata={"turn_item_ids": old_items})
+        generation = await chat_repository.clear_tenant(self.tenant)
+        async with base_models.async_maker() as session:
+            session.add(ChatTurn(id=turn_id, tenant=self.tenant, turn_key=request.turn_id, generation=generation))
+            session.add(ChatMessage(id=message_id, tenant=self.tenant, dedupe_key="new", content="新消息"))
+            session.add(
+                ChatTurnItem(
+                    id=old_items[0],
+                    tenant=self.tenant,
+                    turn_id=turn_id,
+                    item_seq=1,
+                    role="assistant",
+                    content="新回复",
+                    visible=False,
+                    send_status="pending",
+                )
+            )
+            await session.commit()
+
+        store = ChatSessionStore()
+        service = ChatService(store)
+        await history_module.persist_turn_end(
+            request, persisted, LLMResponse(content="过期生成"), "p", "过期描述", ["描述"], ["过期生成", "过期第二段"]
+        )
+        await history_module.mark_sending(request, response)
+        await history_module.mark_sent(service, request, response, platform_message_id="old-platform-id", limit=10)
+        await history_module.mark_send_aborted(request, response)
+        await history_module.mark_send_failed(request, response, RuntimeError("old failure"))
+        await history_module.mark_turn_aborted(request)
+        await history_module.mark_turn_failed(request, RuntimeError("old generation failure"))
+        await history_module.end_turn_without_reply(request, "old-provider")
+        self.assertIsNone(await history_module.persist_turn_start(request, "过期重试", 0))
+
+        async with base_models.async_maker() as session:
+            turns = await ChatTurn.select_rows(tenant=self.tenant, session=session)
+            items = await ChatTurnItem.select_rows(tenant=self.tenant, session=session)
+            messages = await ChatMessage.select_rows(tenant=self.tenant, session=session)
+        self.assertEqual([(turn.status, turn.generated_text, turn.error) for turn in turns], [("received", "", "")])
+        self.assertEqual(
+            [(item.content, item.visible, item.send_status, item.platform_message_id) for item in items],
+            [("新回复", False, "pending", None)],
+        )
+        self.assertEqual([message.content for message in messages], ["新消息"])
+        self.assertEqual(store.get(self.tenant), [])
+
 
 class _MutableConfig:
     """用例中可修改配置项的假配置。"""
 
-    def __init__(self, max_history: int) -> None:
-        self.max_history = max_history
+    def __init__(self, max_context_size: int) -> None:
+        self.max_context_size = max_context_size
 
     def get_system(self) -> dict[str, object]:
         return {
             "chat": {
-                "max_history": self.max_history,
-                "image_description": False,
+                "max_context_size": self.max_context_size,
                 "persona": "",
                 "provider": "",
-                "enabled_tools": ["__disabled__"],
+                "response_splitter": {"enable": False},
             }
         }
 
@@ -953,10 +1320,125 @@ class MaxHistoryTests(unittest.IsolatedAsyncioTestCase):
             patch.object(memory_state, "is_ready", return_value=False),
         ):
             await service.process(_request(session_id="hot", turn_id="turn-1", dedupe_key="msg:1"))
-            config.max_history = 1
+            config.max_context_size = 1
             await service.process(_request(session_id="hot", turn_id="turn-2", dedupe_key="msg:2"))
 
         self.assertEqual(len(store.get("hot")), 1)
+
+
+class _SplitConfig:
+    """群聊与私聊历史条数分开配置。"""
+
+    def __init__(self) -> None:
+        self.group = 10
+        self.private = 3
+
+    def get_system(self) -> dict[str, object]:
+        return {
+            "chat": {
+                "max_context_size": self.group,
+                "max_private_context_size": self.private,
+                "persona": "",
+                "provider": "",
+                "response_splitter": {"max_sentence_num": 200, "max_split_num": 3},
+            }
+        }
+
+
+class HistoryLimitTests(unittest.IsolatedAsyncioTestCase):
+    """群聊与私聊各用各的历史条数。"""
+
+    def test_defaults_and_missing_key(self) -> None:
+        self.assertEqual(service_module.history_limit({}, True), 30)
+        self.assertEqual(service_module.history_limit({}, False), 60)
+        self.assertEqual(service_module.history_limit({"max_private_context_size": 7}, False), 7)
+        self.assertEqual(service_module.history_limit({"max_private_context_size": "7"}, False), 0)
+
+    async def test_hydrate_uses_session_type(self) -> None:
+        config = _SplitConfig()
+        service = ChatService(ChatSessionStore())
+        with (
+            patch.object(service_module, "get_config_manager", return_value=config),
+            patch.object(service, "_hydrate", new=AsyncMock()) as hydrate,
+        ):
+            await service.ensure_hydrated("dm", is_group=False)
+            await service.ensure_hydrated("group", is_group=True)
+        self.assertEqual([call.args[1] for call in hydrate.await_args_list], [3, 10])
+
+
+class ZeroHistoryLimitTests(unittest.IsolatedAsyncioTestCase):
+    """上限为 0 时不落库、不累积，但仍照常生成回复。"""
+
+    async def asyncSetUp(self) -> None:
+        await base_models.init_database()
+        await migrate.ensure_schema()
+        memory_state.mark_ready()
+        self.addCleanup(memory_state.mark_ready)
+        self.tenant = f"zero-{uuid4().hex}"
+        self.addAsyncCleanup(chat_repository.clear_tenant, self.tenant)
+        self.config = _SplitConfig()
+
+    async def _process(self, request: ChatRequest, store: ChatSessionStore) -> ChatResponse:
+        with (
+            patch.object(service_module, "get_config_manager", return_value=self.config),
+            patch.object(session_module, "get_config_manager", return_value=self.config),
+            patch.object(provider_manager, "lease", _fake_lease),
+        ):
+            return await ChatService(store).process(request)
+
+    async def _rows(self, model: type, **values: object) -> list:
+        async with base_models.async_maker() as session:
+            return await model.select_rows(tenant=self.tenant, session=session, **values)
+
+    def _request(self, *, group_id: str | None, trigger_kind: str) -> ChatRequest:
+        return _request(
+            session_id=self.tenant,
+            group_id=group_id,
+            user_name="Alice",
+            turn_id=uuid4().hex,
+            dedupe_key=f"msg:{uuid4().hex}",
+            trigger_kind=trigger_kind,
+        )
+
+    async def test_private_zero_skips_storage_and_memory(self) -> None:
+        self.config.private = 0
+        store = ChatSessionStore()
+        response = await self._process(self._request(group_id=None, trigger_kind="private"), store)
+
+        self.assertEqual(response.text, "回复")
+        self.assertEqual(store.get(self.tenant), [])
+        self.assertEqual(store.take_dropped(self.tenant), [])
+        self.assertEqual(await chat_repository.get_recent_messages(self.tenant, 10), [])
+        self.assertEqual(await self._rows(ChatTurn), [])
+        self.assertEqual(await self._rows(ChatTrace), [])
+
+    async def test_group_zero_skips_storage_and_memory(self) -> None:
+        self.config.group = 0
+        store = ChatSessionStore()
+        response = await self._process(self._request(group_id="group", trigger_kind="mention"), store)
+
+        self.assertEqual(response.text, "回复")
+        self.assertEqual(store.get(self.tenant), [])
+        self.assertEqual(store.take_dropped(self.tenant), [])
+        self.assertEqual(await chat_repository.get_recent_messages(self.tenant, 10), [])
+        self.assertEqual(await self._rows(ChatTurn), [])
+
+    async def test_non_zero_keeps_recording(self) -> None:
+        self.config.private = 3
+        store = ChatSessionStore()
+        request = self._request(group_id=None, trigger_kind="private")
+        response = await self._process(request, store)
+        await ChatService(store).mark_sent(request, response)
+
+        self.assertEqual(response.text, "回复")
+        self.assertEqual(
+            store.get(self.tenant),
+            [
+                {"role": "user", "content": "Alice(user): 你好"},
+                {"role": "assistant", "content": "回复"},
+            ],
+        )
+        self.assertNotEqual(await chat_repository.get_recent_messages(self.tenant, 10), [])
 
 
 class BatchPersistenceTests(unittest.IsolatedAsyncioTestCase):

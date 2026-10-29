@@ -9,33 +9,119 @@ import asyncio
 import hashlib
 from uuid import uuid4
 from typing import Any
+from datetime import datetime, timezone
 from dataclasses import dataclass
 
 from PIL import Image, ImageOps
 from nonebot import logger
 
 from .types import MentionRef, ChatRequest, TriggerKind, InboundSegment
+from .voice import transcribe_event
+from ..config import get_manager as get_config_manager
 from ..adapter import (
     ReplyInfo,
     normalize_id,
+    event_is_tome,
     event_message,
     event_user_id,
     event_group_id,
     event_user_name,
     event_plain_text,
+    extract_forward_ids,
     get_platform_adapter,
+    extract_raw_emoji_sources,
     extract_raw_image_sources,
 )
+from ..utils.tz import now, to_naive_utc
 from ..utils.http import ResponseTooLargeError, read_limited, ensure_public_http_url, get_shared_async_client
 
-_MAX_IMAGE_COUNT = 4
-_MAX_IMAGE_BYTES = 5 * 1024 * 1024
-_MAX_IMAGE_SIDE = 1024
+_MAX_IMAGE_COUNT = 64
+_MAX_IMAGE_BYTES = 16 * 1024 * 1024
+_MAX_IMAGE_SIDE = 512
 _MAX_IMAGE_BYTES_SENT = 1024 * 1024
 _MAX_REDIRECTS = 3
 _MAX_QUOTED_CHARS = 500
 _MAX_MENTIONS = 10
 _MAX_NAME_CHARS = 32
+_IMAGE_SIDES = {"normal": 512, "high": 1024}
+_DEFAULT_LIMIT = object()
+_OVERSIZED_READ_BYTES = 32 * 1024 * 1024
+
+
+def _visual() -> dict[str, Any]:
+    """读取视觉配置；读取失败按空配置处理。"""
+    try:
+        value = get_config_manager().get_system()["chat"].get("visual") or {}
+    except Exception:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _max_image_count() -> int:
+    """单条消息最多处理的图片数；0 表示不接收图片。"""
+    value = _visual().get("max_image_num", _MAX_IMAGE_COUNT)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return _MAX_IMAGE_COUNT
+    return value
+
+
+def _max_image_bytes() -> int | None:
+    """图片大小上限；0 表示不限。"""
+    value = _visual().get("max_image_size_mb", _MAX_IMAGE_BYTES / 1024 / 1024)
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        value = _MAX_IMAGE_BYTES / 1024 / 1024
+    return int(value * 1024 * 1024) or None
+
+
+def _max_image_side() -> int:
+    """图片最长边；normal 512，high 1024。"""
+    quality = str(_visual().get("image_quality") or "normal")
+    return _IMAGE_SIDES.get(quality, _MAX_IMAGE_SIDE)
+
+
+def _handle_oversized() -> bool:
+    """过大图片是否处理；关闭时仍按大小上限直接跳过。"""
+    return bool(_visual().get("handle_oversized_images", True))
+
+
+def _oversized_method() -> str:
+    """过大图片处理方式：compress 或 discard。"""
+    method = str(_visual().get("oversized_image_handle_method") or "compress")
+    return method if method in {"compress", "discard"} else "compress"
+
+
+def _download_limit(limit: int | None, *, compress_oversized: bool) -> int | None:
+    """压缩模式下先按硬上限读入，再压到配置大小。"""
+    if limit is None or not compress_oversized or not _handle_oversized() or _oversized_method() != "compress":
+        return limit
+    return max(limit, _OVERSIZED_READ_BYTES)
+
+
+def _compress_to_limit(data: bytes, limit: int) -> bytes:
+    """把过大图片按画质和尺寸逐级压到目标字节内；失败返回原数据。"""
+    try:
+        image = ImageOps.exif_transpose(Image.open(io.BytesIO(data)))
+        image.load()
+    except Exception:
+        return data
+    if image.mode in {"RGBA", "LA", "P"}:
+        rgba = image.convert("RGBA")
+        background = Image.new("RGB", rgba.size, (255, 255, 255))
+        background.paste(rgba, mask=rgba.getchannel("A"))
+        image = background
+    elif image.mode != "RGB":
+        image = image.convert("RGB")
+    original = image.copy()
+    for side in (_MAX_IMAGE_SIDE, 1024, 768, 512, 384, 256, 160):
+        candidate = original.copy()
+        candidate.thumbnail((side, side))
+        for quality in (85, 70, 55, 40):
+            buffer = io.BytesIO()
+            candidate.save(buffer, format="JPEG", quality=quality, optimize=True)
+            result = buffer.getvalue()
+            if result and len(result) <= limit:
+                return result
+    return data
 
 
 def _image_mime(data: bytes) -> str:
@@ -60,7 +146,8 @@ def _compress_image(data: bytes) -> bytes:
         image.load()
     except Exception:
         return data
-    if max(image.size) <= _MAX_IMAGE_SIDE and len(data) <= _MAX_IMAGE_BYTES_SENT:
+    side = _max_image_side()
+    if max(image.size) <= side and len(data) <= _MAX_IMAGE_BYTES_SENT:
         return data
     if image.mode in {"RGBA", "LA", "P"}:
         rgba = image.convert("RGBA")
@@ -69,14 +156,16 @@ def _compress_image(data: bytes) -> bytes:
         image = background
     elif image.mode != "RGB":
         image = image.convert("RGB")
-    image.thumbnail((_MAX_IMAGE_SIDE, _MAX_IMAGE_SIDE))
+    image.thumbnail((side, side))
     buffer = io.BytesIO()
     image.save(buffer, format="JPEG", quality=85, optimize=True)
     return buffer.getvalue() or data
 
 
-async def _fetch_remote_image(url: str) -> bytes:
+async def _fetch_remote_image(url: str, limit: int | None | object = _DEFAULT_LIMIT) -> bytes:
     """下载公网图片：逐跳校验重定向，流式读取并限制大小。"""
+    if limit is _DEFAULT_LIMIT:
+        limit = _max_image_bytes()
     client = await get_shared_async_client()
     for _ in range(_MAX_REDIRECTS + 1):
         await ensure_public_http_url(url)
@@ -88,28 +177,53 @@ async def _fetch_remote_image(url: str) -> bytes:
                 url = str(response.url.join(location))
                 continue
             response.raise_for_status()
-            return await read_limited(response.aiter_bytes(), response.headers.get("content-length"), _MAX_IMAGE_BYTES)
+            # 0 表示不限模型侧大小，但读取仍保留硬上限，避免超大响应撑爆内存
+            return await read_limited(
+                response.aiter_bytes(), response.headers.get("content-length"), limit or 32 * 1024 * 1024
+            )
     raise ValueError("重定向次数过多")
 
 
-async def _load_image(source: str | bytes) -> bytes:
+async def _load_image(
+    source: str | bytes,
+    limit: int | None | object = _DEFAULT_LIMIT,
+    *,
+    compress_oversized: bool = True,
+) -> bytes:
     """加载图片源；只接受内联字节、base64 和公网 http(s) URL，拒绝本地路径。"""
+    if limit is _DEFAULT_LIMIT:
+        limit = _max_image_bytes()
+    read_limit = _download_limit(limit, compress_oversized=compress_oversized)
     if isinstance(source, bytes):
         data = source
     else:
         value = str(source or "").strip()
         if value.startswith("base64://"):
             encoded = value[9:]
-            if len(encoded) > _MAX_IMAGE_BYTES * 4 // 3 + 4:
+            if read_limit is not None and len(encoded) > read_limit * 4 // 3 + 4:
                 raise ResponseTooLargeError("base64 图片超过大小上限")
             data = base64.b64decode(encoded)
         elif value:
-            return await _fetch_remote_image(value)
+            data = await _fetch_remote_image(value, limit=read_limit)
         else:
             raise ValueError("图片源为空")
-    if len(data) > _MAX_IMAGE_BYTES:
-        raise ResponseTooLargeError(f"图片超过大小上限：{len(data)} > {_MAX_IMAGE_BYTES}")
+    if limit is not None and len(data) > limit:
+        if compress_oversized and _handle_oversized() and _oversized_method() == "compress":
+            data = await asyncio.to_thread(_compress_to_limit, data, limit)
+        if len(data) > limit:
+            raise ResponseTooLargeError(f"图片超过大小上限：{len(data)} > {limit}")
     return data
+
+
+async def load_image_bytes(source: str | bytes, *, limit: int | None | object = _DEFAULT_LIMIT) -> bytes:
+    """按调用方上限加载图片原始字节；表情采集用自己的大小配置，不压缩。"""
+    return await _load_image(source, limit=limit, compress_oversized=False)
+
+
+def emoji_sources_for_event(event: Any) -> list[str | bytes]:
+    """提取消息里的表情包图片源，不下载或解码。"""
+    sources = extract_raw_emoji_sources(event_message(event))
+    return list(dict.fromkeys(source for source in sources if source))
 
 
 def image_sources_for_event(event: Any, reply: ReplyInfo | None = None) -> list[str | bytes]:
@@ -117,7 +231,7 @@ def image_sources_for_event(event: Any, reply: ReplyInfo | None = None) -> list[
     sources = extract_raw_image_sources(event_message(event))
     if not sources and reply is not None:
         sources = list(reply.image_sources)
-    return list(dict.fromkeys(source for source in sources if source))[:_MAX_IMAGE_COUNT]
+    return list(dict.fromkeys(source for source in sources if source))[: _max_image_count()]
 
 
 async def load_images(sources: list[str | bytes]) -> list[str]:
@@ -125,8 +239,9 @@ async def load_images(sources: list[str | bytes]) -> list[str]:
 
     images: list[str] = []
     seen: set[str | bytes] = set()
+    limit = _max_image_count()
     for source in sources:
-        if len(images) >= _MAX_IMAGE_COUNT:
+        if len(images) >= limit:
             break
         key: str | bytes = source if isinstance(source, bytes) else str(source or "")
         if not key or key in seen:
@@ -190,6 +305,19 @@ def _self_ids(bot: Any) -> set[str]:
     return values
 
 
+def mention_flags(bot: Any, event: Any) -> tuple[bool, bool]:
+    """同步读取提及 Bot 和其他成员的标记，忽略全体提及。"""
+    try:
+        if not event_group_id(event):
+            return event_is_tome(event), False
+        targets = set(get_platform_adapter(bot).mention_targets(event_message(event), {"all"}))
+        self_ids = _self_ids(bot)
+        return event_is_tome(event) or bool(targets & self_ids), bool(targets - self_ids)
+    except Exception:
+        logger.opt(exception=True).debug("[Chat] 读取提及标记失败")
+        return False, False
+
+
 async def _member_name(bot: Any, group_id: str, user_id: str, event: Any) -> str:
     """查询 @ 目标昵称，失败时只保留 ID。"""
     try:
@@ -236,6 +364,14 @@ async def collect_mentions(
         for ref, name in zip(missing, names):
             ref.name = name
     return refs
+
+
+def message_text(event: Any) -> str:
+    """纯文本；消息只有合并转发时补一个占位，让 AI 知道可以展开。"""
+    text = event_plain_text(event)
+    if text:
+        return text
+    return "[合并转发消息]" if extract_forward_ids(event_message(event)) else ""
 
 
 def platform_for_bot(bot: Any) -> str:
@@ -309,6 +445,14 @@ def event_identity(bot: Any, event: Any) -> MessageIdentity:
 
 async def adapt_message_event(bot: Any, event: Any, *, trigger_kind: TriggerKind) -> ChatRequest:
     """适配 NoneBot 消息事件。"""
+    received_at = to_naive_utc(now())
+    occurred_at = received_at
+    event_time = getattr(event, "time", None)
+    if isinstance(event_time, (int, float)) and not isinstance(event_time, bool):
+        try:
+            occurred_at = to_naive_utc(datetime.fromtimestamp(event_time, tz=timezone.utc))
+        except (ValueError, OverflowError, OSError):
+            pass
     user_id = normalize_id(event_user_id(event)) or ""
     group_id = normalize_id(event_group_id(event))
     identity = event_identity(bot, event)
@@ -318,10 +462,12 @@ async def adapt_message_event(bot: Any, event: Any, *, trigger_kind: TriggerKind
             segments.append(InboundSegment(type=str(seg.type), data=dict(seg.data)))
     except Exception:
         pass
-    reply, mentions = await asyncio.gather(
+    reply, mentions, voice_text = await asyncio.gather(
         _reply_info(bot, event),
         collect_mentions(bot, event, group_id),
+        transcribe_event(event),
     )
+    text = " ".join(part for part in (message_text(event), voice_text) if part)
     return ChatRequest(
         session_id=identity.session_id,
         turn_id=uuid4().hex,
@@ -331,14 +477,15 @@ async def adapt_message_event(bot: Any, event: Any, *, trigger_kind: TriggerKind
         event_id=identity.event_id,
         message_id=identity.message_id,
         reply_to_message_id=identity.reply_to_message_id,
+        occurred_at=occurred_at,
         user_id=user_id,
         user_name=event_user_name(event, user_id),
         group_id=group_id,
-        text=event_plain_text(event),
+        text=text,
         segments=segments,
         images=await load_images(image_sources_for_event(event, reply)),
         quoted_text=_quoted_text(reply),
         platform=platform_for_bot(bot),
-        metadata={"event": event},
+        metadata={"event": event, "received_at": received_at.isoformat()},
         mentions=mentions,
     )

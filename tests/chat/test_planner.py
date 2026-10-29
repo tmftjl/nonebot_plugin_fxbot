@@ -3,47 +3,49 @@
 from __future__ import annotations
 
 import json
+import asyncio
 import unittest
 from uuid import uuid4
+from types import SimpleNamespace
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException
 from sqlmodel import select
 from src.plugins.nonebot_plugin_fxbot.db import base_models
-from src.plugins.nonebot_plugin_fxbot.chat import service as service_module
+from src.plugins.nonebot_plugin_fxbot.chat import planner as planner_module, service as service_module
 from src.plugins.nonebot_plugin_fxbot.chat.tools import ToolRuntime
-from src.plugins.nonebot_plugin_fxbot.chat.types import ChatRequest
+from src.plugins.nonebot_plugin_fxbot.chat.types import ChatRequest, ChatResponse
 from src.plugins.nonebot_plugin_fxbot.chat.memory import state as memory_state, migrate
 from src.plugins.nonebot_plugin_fxbot.chat.planner import (
-    Plan,
     parse_plan,
+    build_prompt,
     request_plan,
     plan_features,
 )
-from src.plugins.nonebot_plugin_fxbot.chat.service import ChatService, _PlanContext
+from src.plugins.nonebot_plugin_fxbot.chat.replyer import generator
+from src.plugins.nonebot_plugin_fxbot.chat.service import ChatService
 from src.plugins.nonebot_plugin_fxbot.chat.session import ChatSessionStore
 from src.plugins.nonebot_plugin_fxbot.chat.providers import LLMResponse, provider_manager
 from src.plugins.nonebot_plugin_fxbot.console.routes import chat as chat_routes
+from src.plugins.nonebot_plugin_fxbot.chat.heart_flow import plan_flow
 from src.plugins.nonebot_plugin_fxbot.chat.memory.models import ChatTurn, ChatPlannerSample
 from src.plugins.nonebot_plugin_fxbot.chat.memory.repository import chat_repository
+from src.plugins.nonebot_plugin_fxbot.chat.heart_flow.plan_flow import PlanContext as _PlanContext
 
 
 class _FakeConfig:
     """只提供对话与规划需要的配置。"""
 
     def __init__(self, planner: dict[str, object] | None = None) -> None:
-        self.planner = planner or {"enabled": False, "mode": "simple", "max_rounds": 1, "wait_seconds": 60}
+        self.planner = planner or {"mode": "simple", "wait_seconds": 60}
 
     def get_system(self) -> dict[str, object]:
         return {
             "chat": {
-                "max_history": 10,
-                "image_description": False,
+                "max_context_size": 10,
                 "persona": "",
                 "provider": "",
-                "enabled_tools": [],
-                "memory": {"history_enabled": True},
                 "model_routing": {"planner": ""},
                 "planner": self.planner,
             }
@@ -121,17 +123,41 @@ class PlanParsingTests(unittest.TestCase):
         self.assertIsNone(parse_plan({"action": "tool:shell"}, ["web_search"]))
         self.assertIsNone(parse_plan({"action": "tool:"}, ["web_search"]))
 
-    def test_fetch_knowledge_requires_tool(self) -> None:
-        self.assertIsNone(parse_plan({"action": "fetch_knowledge", "query": "x"}, ["web_search"]))
-        plan = parse_plan({"action": "fetch_knowledge", "query": "x"}, ["search_knowledge"])
-        assert plan is not None
-        self.assertEqual(plan.tool, "search_knowledge")
-        self.assertEqual(plan.arguments, {"query": "x"})
-
     def test_invalid_payloads(self) -> None:
         for payload in (None, "", "not json", {"action": "dance"}, []):
             with self.subTest(payload=payload):
                 self.assertIsNone(parse_plan(payload, []))
+
+    def test_reply_reference_is_parsed(self) -> None:
+        plan = parse_plan({"action": "text_reply", "reply_reference": "  顺着话题接一句  "}, [])
+        assert plan is not None
+        self.assertEqual(plan.reply_reference, "顺着话题接一句")
+        self.assertEqual(parse_plan({"action": "text_reply"}, []).reply_reference, "")  # type: ignore[union-attr]
+
+    def test_passive_prompt_asks_for_guidance(self) -> None:
+        passive_note = build_prompt([], [], passive=True)[-1]["content"]
+        self.assertIn("reply_reference", passive_note)
+        self.assertNotIn("reply_reference", build_prompt([], [], passive=False)[-1]["content"])
+
+    def test_tool_definitions_show_parameters(self) -> None:
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "web_search",
+                    "description": "联网搜索",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"query": {"type": "string"}, "count": {"type": "integer"}},
+                        "required": ["query"],
+                    },
+                },
+            }
+        ]
+        note = build_prompt([], tools)[-1]["content"]
+        self.assertIn("- web_search: 联网搜索", note)
+        self.assertIn("query(string)*", note)
+        self.assertIn("count(integer)", note)
 
     def test_features_are_lightweight(self) -> None:
         request = _request(
@@ -171,6 +197,13 @@ class RequestPlanTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(await request_plan(provider, [{"role": "user", "content": "hi"}], []))
         self.assertEqual(provider.plan_calls, 2)
 
+    async def test_accepts_tool_definitions(self) -> None:
+        provider = _PlannerProvider({"action": "tool:web_search", "arguments": {"query": "x"}})
+        tools = [{"type": "function", "function": {"name": "web_search", "description": "联网搜索", "parameters": {}}}]
+        plan = await request_plan(provider, [{"role": "user", "content": "hi"}], tools)
+        assert plan is not None
+        self.assertEqual((plan.action, plan.tool, plan.arguments), ("tool", "web_search", {"query": "x"}))
+
 
 class PlannerServiceTests(unittest.IsolatedAsyncioTestCase):
     """真实服务下规划动作对回复与样本的影响。"""
@@ -188,8 +221,9 @@ class PlannerServiceTests(unittest.IsolatedAsyncioTestCase):
         config = _FakeConfig(planner)
         with (
             patch.object(service_module, "get_config_manager", return_value=config),
-            patch.object(service_module, "planner_config", return_value=config.planner),
+            patch.object(plan_flow, "planner_config", return_value=config.planner),
             patch.object(provider_manager, "lease", _lease(provider)),
+            patch.object(generator, "web_runtime", return_value=SimpleNamespace(enabled=True)),
         ):
             response = await service.process(request)
         return service, provider, response
@@ -204,21 +238,21 @@ class PlannerServiceTests(unittest.IsolatedAsyncioTestCase):
             statement = select(ChatPlannerSample).where(ChatPlannerSample.tenant == tenant)
             return list((await session.execute(statement)).scalars().all())
 
-    async def test_planner_disabled_does_not_call_model(self) -> None:
+    async def test_simple_mode_does_not_call_model(self) -> None:
         request = _request(self.tenant)
         service, provider, response = await self._run(request, {"action": "no_reply"})
         self.assertEqual(provider.plan_calls, 0)
         self.assertEqual(response.text, "回复")
         self.assertFalse(await self._samples(self.tenant))
 
-    async def test_simple_mode_ignores_enabled_planner(self) -> None:
+    async def test_simple_mode_skips_planner(self) -> None:
         request = _request(self.tenant)
         provider = _PlannerProvider({"action": "no_reply"})
         service = ChatService(ChatSessionStore())
-        config = _FakeConfig({"enabled": True, "mode": "simple"})
+        config = _FakeConfig({"mode": "simple"})
         with (
             patch.object(service_module, "get_config_manager", return_value=config),
-            patch.object(service_module, "planner_config", return_value=config.planner),
+            patch.object(plan_flow, "planner_config", return_value=config.planner),
             patch.object(provider_manager, "lease", _lease(provider)),
         ):
             response = await service.process(request)
@@ -230,7 +264,7 @@ class PlannerServiceTests(unittest.IsolatedAsyncioTestCase):
         _service, provider, response = await self._run(
             request,
             {"action": "text_reply"},
-            {"enabled": True, "mode": "complex"},
+            {"mode": "complex"},
         )
         self.assertEqual(provider.plan_calls, 1)
         self.assertEqual(provider.reply_messages is not None, True)
@@ -240,12 +274,26 @@ class PlannerServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((samples[0].action, samples[0].label), ("text_reply", 1))
         self.assertEqual(samples[0].model, "fake-model")
 
+    async def test_silent_and_wait_outcomes(self) -> None:
+        for action in ("no_reply", "end_conversation", "wait"):
+            with self.subTest(action=action):
+                request = _request(self.tenant)
+                context = SimpleNamespace(request=request, provider_name="fake")
+                plan = planner_module.Plan(action, wait_seconds=30)
+                if action == "wait":
+                    outcome = await plan_flow.plan_wait(None, context, plan)
+                    self.assertEqual(outcome.pause, 30)
+                else:
+                    with patch.object(plan_flow, "end_turn_without_reply", AsyncMock()):
+                        outcome = await plan_flow.plan_silent(None, context, plan)
+                    self.assertTrue(outcome.finished)
+
     async def test_no_reply_ends_turn_without_assistant_history(self) -> None:
         request = _request(self.tenant)
         service, _provider, response = await self._run(
             request,
             {"action": "no_reply"},
-            {"enabled": True, "mode": "complex"},
+            {"mode": "complex"},
         )
         self.assertEqual(response.text, "")
         self.assertEqual(response.metadata.get("plan_action"), "no_reply")
@@ -259,7 +307,7 @@ class PlannerServiceTests(unittest.IsolatedAsyncioTestCase):
         _service, _provider, response = await self._run(
             request,
             {"action": "end_conversation"},
-            {"enabled": True, "mode": "complex"},
+            {"mode": "complex"},
         )
         self.assertEqual(response.text, "")
         self.assertEqual(await self._turn_status(request), "ended")
@@ -269,7 +317,7 @@ class PlannerServiceTests(unittest.IsolatedAsyncioTestCase):
         _service, provider, response = await self._run(
             request,
             RuntimeError("network"),
-            {"enabled": True, "mode": "complex"},
+            {"mode": "complex"},
         )
         self.assertEqual(provider.plan_calls, 2)
         self.assertEqual(response.text, "回复")
@@ -281,20 +329,41 @@ class PlannerServiceTests(unittest.IsolatedAsyncioTestCase):
         _service, provider, response = await self._run(
             request,
             {"action": "emoji_reply"},
-            {"enabled": True, "mode": "complex"},
+            {"mode": "complex"},
         )
         self.assertEqual(response.metadata.get("plan_action"), "emoji_reply")
         assert provider.reply_messages is not None
         self.assertTrue(any("只回一个自然的表情" in str(message.get("content")) for message in provider.reply_messages))
 
+    async def test_passive_replyer_injects_guidance(self) -> None:
+        request = _request(self.tenant)
+        _service, provider, response = await self._run(
+            request,
+            {"action": "text_reply", "reply_reference": "顺着爬山话题接一句"},
+            {"mode": "complex", "passive_replyer": True},
+        )
+        self.assertEqual(response.text, "回复")
+        assert provider.reply_messages is not None
+        self.assertTrue(any("顺着爬山话题接一句" in str(message.get("content")) for message in provider.reply_messages))
+
+    async def test_guidance_is_ignored_when_passive_off(self) -> None:
+        request = _request(self.tenant)
+        _service, provider, _response = await self._run(
+            request,
+            {"action": "text_reply", "reply_reference": "不该出现"},
+            {"mode": "complex"},
+        )
+        assert provider.reply_messages is not None
+        self.assertFalse(any("不该出现" in str(message.get("content")) for message in provider.reply_messages))
+
     async def test_tool_action_goes_through_executor(self) -> None:
         request = _request(self.tenant)
         executor = AsyncMock(return_value={"ok": True, "result": "搜索完成"})
-        with patch.object(service_module, "execute_tool", executor):
+        with patch.object(plan_flow, "execute_tool", executor):
             _service, provider, response = await self._run(
                 request,
                 {"action": "tool:web_search", "arguments": {"query": "天气"}},
-                {"enabled": True, "mode": "complex"},
+                {"mode": "complex"},
             )
         executor.assert_awaited_once()
         self.assertEqual(executor.await_args.args[0], "web_search")
@@ -302,7 +371,7 @@ class PlannerServiceTests(unittest.IsolatedAsyncioTestCase):
         assert provider.reply_messages is not None
         self.assertTrue(any("搜索完成" in str(message.get("content")) for message in provider.reply_messages))
 
-    async def test_wait_rebuild_merges_new_messages(self) -> None:
+    async def test_rebuild_merges_new_messages(self) -> None:
         request = _request(self.tenant)
         service = ChatService(ChatSessionStore())
         entry = {"role": "user", "content": "Alice(user): 你好"}
@@ -318,38 +387,112 @@ class PlannerServiceTests(unittest.IsolatedAsyncioTestCase):
             persona_text="人格",
             memory_block="记忆",
             current_content="Alice(user): 你好",
-            history_budget=12000,
             limit=10,
             provider_name="",
         )
-        outcome = await service._plan_wait(context, Plan("wait", wait_seconds=0))
-        self.assertFalse(outcome.finished)
-        assert outcome.messages is not None
-        joined = "\n".join(str(message.get("content")) for message in outcome.messages)
+        messages = await plan_flow.rebuild_messages(service, context)
+        joined = "\n".join(str(message.get("content")) for message in messages)
         self.assertIn("Bob(bob): 新消息", joined)
         self.assertEqual(joined.count("Alice(user): 你好"), 1)
 
-    async def test_wait_aborts_when_new_trigger_arrives(self) -> None:
-        request = _request(self.tenant, trigger_seq=1)
+    async def test_wait_is_aborted_when_new_trigger_arrives(self) -> None:
+        request = _request(self.tenant, trigger_seq=1, accepted_epoch=0)
         service = ChatService(ChatSessionStore())
         service.session_store.next_seq(self.tenant, request.user_id)
         service.session_store.next_seq(self.tenant, request.user_id)
-        context = _PlanContext(
-            request=request,
-            messages=[],
-            entry={},
-            epoch=0,
-            runtime=ToolRuntime(),
-            allowed_names=set(),
-            persona_text="",
-            memory_block="",
-            current_content="",
-            history_budget=12000,
-            limit=10,
-            provider_name="",
-        )
-        outcome = await service._plan_wait(context, Plan("wait", wait_seconds=0))
-        self.assertTrue(outcome.finished)
+        with patch.object(ChatService, "_mark_turn_aborted", AsyncMock()) as aborted:
+            self.assertFalse(await service._pause_turn(request, 5))
+        aborted.assert_awaited_once()
+
+    async def test_wait_replans_before_replying(self) -> None:
+        request = _request(self.tenant)
+
+        class _SeqPlanner(_PlannerProvider):
+            async def chat_json(self, messages, schema=None, model=None):
+                self.plan_calls += 1
+                return {"action": "wait", "wait_seconds": 0} if self.plan_calls == 1 else {"action": "text_reply"}
+
+        provider = _SeqPlanner({"action": "text_reply"})
+        service = ChatService(ChatSessionStore())
+        config = _FakeConfig({"mode": "complex", "wait_seconds": 60})
+        with (
+            patch.object(service_module, "get_config_manager", return_value=config),
+            patch.object(plan_flow, "planner_config", return_value=config.planner),
+            patch.object(provider_manager, "lease", _lease(provider)),
+            patch.object(planner_module, "_WAIT_MIN", 0),
+        ):
+            response = await service.process(request)
+        self.assertEqual(provider.plan_calls, 2)
+        self.assertEqual(response.metadata.get("plan_action"), "text_reply")
+        self.assertEqual(response.text, "回复")
+
+    async def test_wait_releases_turn_lock(self) -> None:
+        request = _request(self.tenant)
+        service = ChatService(ChatSessionStore())
+        calls: list[int] = []
+
+        async def fake_process(_self: object, _request: ChatRequest, _runtime: object, **_kwargs: object):
+            calls.append(1)
+            if len(calls) == 1:
+                return ChatResponse(text="", epoch=0, metadata={"wait_seconds": 0.5})
+            return ChatResponse(text="", epoch=0)
+
+        with patch.object(ChatService, "_process_locked", fake_process):
+            task = asyncio.create_task(service.process_and_send(request))
+            await asyncio.sleep(0.05)
+            lock = service.session_store.turn_lock(request.session_id)
+            self.assertFalse(lock.locked())
+            await asyncio.wait_for(lock.acquire(), timeout=0.5)
+            lock.release()
+            self.assertFalse(await asyncio.wait_for(task, timeout=2))
+        self.assertEqual(len(calls), 2)
+
+    async def test_new_message_wakes_the_wait(self) -> None:
+        request = _request(self.tenant)
+        service = ChatService(ChatSessionStore())
+
+        async def fake_process(_self: object, _request: ChatRequest, _runtime: object, **_kwargs: object):
+            if not _request.metadata.get("waited"):
+                _request.metadata["waited"] = True
+                return ChatResponse(text="", epoch=0, metadata={"wait_seconds": 5})
+            return ChatResponse(text="", epoch=0)
+
+        with (
+            patch.object(ChatService, "_process_locked", fake_process),
+            patch.object(plan_flow, "steering_enabled", return_value=True),
+        ):
+            task = asyncio.create_task(service.process_and_send(request))
+            await asyncio.sleep(0.05)
+            service.session_store.mark_seen(request.session_id, "msg:new")
+            self.assertFalse(await asyncio.wait_for(task, timeout=2))
+
+    async def test_new_message_during_planning_replans(self) -> None:
+        request = _request(self.tenant)
+        store = ChatSessionStore()
+        store.mark_seen(self.tenant, "msg:setup")
+
+        class _Interrupted(_PlannerProvider):
+            async def chat_json(self, messages, schema=None, model=None):
+                self.plan_calls += 1
+                if self.plan_calls == 1:
+                    store.mark_seen(self.tenant, "msg:other")
+                    await asyncio.sleep(0.4)
+                    return {"action": "no_reply"}
+                return {"action": "text_reply"}
+
+        provider = _Interrupted({"action": "text_reply"})
+        service = ChatService(store)
+        config = _FakeConfig({"mode": "complex"})
+        with (
+            patch.object(service_module, "get_config_manager", return_value=config),
+            patch.object(plan_flow, "planner_config", return_value=config.planner),
+            patch.object(provider_manager, "lease", _lease(provider)),
+            patch.object(plan_flow, "steering_enabled", return_value=True),
+        ):
+            response = await service.process(request)
+        self.assertEqual(provider.plan_calls, 2)
+        self.assertEqual(response.metadata.get("plan_action"), "text_reply")
+        self.assertEqual(response.text, "回复")
 
 
 class PlannerRepositoryTests(unittest.IsolatedAsyncioTestCase):

@@ -3,6 +3,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus as UploadIcon } from '@element-plus/icons-vue'
+import PageHeader from '@/components/PageHeader.vue'
 import { dataApi, configApi, renewalApi, metaApi } from '@/api'
 import type { GroupRecord, RenewalCode } from '@/types/api'
 import type { UploadFile } from 'element-plus'
@@ -18,7 +19,6 @@ function getApiErrorMessage(e: any): string {
   return detail || e?.message || String(e)
 }
 
-const loading = ref(false)
 const groups = ref<GroupRecord[]>([])
 const codes = ref<RenewalCode[]>([])
 const bots = ref<string[]>([])
@@ -152,7 +152,6 @@ const pagedGroups = computed(() => {
 const totalPages = computed(() => Math.ceil(filteredGroups.value.length / pageSize.value))
 
 const loadData = async () => {
-  loading.value = true
   try {
     const [data, codesData, config, botsData] = await Promise.all([
       dataApi.getAll(),
@@ -197,8 +196,6 @@ const loadData = async () => {
     bots.value = botsData.bots || []
   } catch (e: any) {
     ElMessage.error('加载数据失败: ' + (e?.message || e))
-  } finally {
-    loading.value = false
   }
 }
 
@@ -540,7 +537,9 @@ onMounted(() => {
 </script>
 
 <template>
-  <div v-loading="loading" class="membership-view">
+  <div class="membership-view">
+    <PageHeader title="会员续费" subtitle="群组到期、续费码与批量通知" />
+
     <div class="panel">
       <div class="panel-header">
         <div class="toolbar" style="display: flex; justify-content: space-between; align-items: center;">
@@ -808,32 +807,7 @@ onMounted(() => {
 
 <style scoped lang="scss">
 .membership-view {
-  padding: 24px;
-}
-
-.panel {
-  background: var(--color-bg-card);
-  backdrop-filter: blur(10px);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  padding: 24px;
-  margin-bottom: 20px;
-  box-shadow: var(--shadow-sm);
-  transition: var(--transition);
-
-  &:hover {
-    box-shadow: var(--shadow-md);
-  }
-}
-
-.panel-header {
-  margin-bottom: 20px;
-}
-
-.panel-title {
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--color-text);
+  padding: 24px 28px 32px;
 }
 
 .toolbar {
@@ -853,18 +827,18 @@ onMounted(() => {
 }
 
 .input {
-  padding: 10px 14px;
+  padding: 9px 12px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  background: var(--color-bg-tertiary);
+  background: var(--color-bg-secondary);
   color: var(--color-text);
   font-size: 13px;
-  transition: var(--transition);
+  transition: border-color 0.15s ease;
 
   &:focus {
     outline: none;
     border-color: var(--color-primary);
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+    box-shadow: 0 0 0 1px var(--color-primary);
   }
 }
 
@@ -888,45 +862,10 @@ onMounted(() => {
   cursor: pointer;
 }
 
-.btn {
-  padding: 11px 24px;
-  border: none;
-  border-radius: var(--radius-md);
-  font-size: 14px;
-  font-weight: 700;
-  cursor: pointer;
-  transition: var(--transition);
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-
-  &:hover {
-    transform: translateY(-2px);
-    box-shadow: var(--shadow-lg);
-  }
-}
-
-.btn-primary {
-  background: linear-gradient(135deg, var(--color-primary), var(--color-primary-light));
-  color: white;
-  box-shadow: var(--shadow-sm);
-}
-
-.btn-secondary {
-  background: linear-gradient(135deg, var(--color-info), #0891b2);
-  color: white;
-}
-
-.btn-sm {
-  padding: 7px 14px;
-  font-size: 13px;
-}
-
 .table-container {
   overflow-x: auto;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-sm);
 }
 
 .data-table {
@@ -934,30 +873,29 @@ onMounted(() => {
   border-collapse: collapse;
 
   thead {
-    background: linear-gradient(135deg, var(--color-bg-tertiary), var(--color-border-light));
+    background: var(--color-bg-tertiary);
   }
 
   th, td {
     padding: 12px 16px;
     text-align: left;
-    border-bottom: 1px solid var(--color-border);
-    transition: var(--transition-fast);
+    border-bottom: 1px solid var(--color-border-light);
   }
 
   th {
-    font-weight: 700;
-    color: var(--color-text);
-    font-size: 14px;
+    color: var(--color-text-secondary);
+    font-size: 12px;
+    font-weight: 600;
     white-space: nowrap;
   }
 
   td {
-    color: var(--color-text-secondary);
+    color: var(--color-text);
     font-size: 13px;
   }
 
   tbody tr {
-    transition: var(--transition-fast);
+    transition: background-color 0.15s ease;
 
     &:hover {
       background: var(--color-bg-tertiary);
@@ -972,66 +910,62 @@ onMounted(() => {
 .status-badge {
   display: inline-flex;
   align-items: center;
-  padding: 5px 14px;
-  border-radius: 16px;
+  padding: 3px 10px;
+  border-radius: 999px;
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 500;
 
   &.status-active {
-    background: rgba(16, 185, 129, 0.15);
+    background: rgba(85, 171, 73, 0.12);
     color: var(--color-success);
-    border: 1px solid rgba(16, 185, 129, 0.3);
+    border: 1px solid rgba(85, 171, 73, 0.25);
   }
 
-  &.status-soon {
-    background: rgba(245, 158, 11, 0.15);
-    color: var(--color-warning);
-    border: 1px solid rgba(245, 158, 11, 0.3);
-  }
-
+  &.status-soon,
   &.status-today {
-    background: rgba(245, 158, 11, 0.15);
+    background: rgba(217, 139, 27, 0.12);
     color: var(--color-warning);
-    border: 1px solid rgba(245, 158, 11, 0.3);
+    border: 1px solid rgba(217, 139, 27, 0.25);
   }
 
   &.status-expired {
-    background: rgba(239, 68, 68, 0.15);
+    background: rgba(217, 74, 74, 0.12);
     color: var(--color-danger);
-    border: 1px solid rgba(239, 68, 68, 0.3);
+    border: 1px solid rgba(217, 74, 74, 0.25);
   }
 }
 
 .btn-action {
-  padding: 7px 12px;
-  border: none;
-  border-radius: var(--radius-md);
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: var(--transition);
   margin: 0 3px;
-  color: white;
+  padding: 6px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
 
   &:hover {
-    transform: translateY(-2px);
-    box-shadow: var(--shadow-md);
+    background: var(--color-border-light);
+    color: var(--color-text);
   }
 
   &.btn-remind {
-    background: var(--color-info);
+    color: var(--color-info);
   }
 
   &.btn-remark {
-    background: #8b5cf6;
+    color: var(--color-primary);
   }
 
   &.btn-extend {
-    background: var(--color-success);
+    color: var(--color-success);
   }
 
   &.btn-leave {
-    background: var(--color-danger);
+    color: var(--color-danger);
   }
 }
 
@@ -1129,20 +1063,18 @@ onMounted(() => {
 }
 
 .code-card {
-  background: var(--color-bg-card);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  padding: 18px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  transition: var(--transition);
+  padding: 16px 18px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-secondary);
+  transition: border-color 0.15s ease;
 
   &:hover {
-    transform: translateY(-3px);
-    box-shadow: var(--shadow-lg);
-    border-color: var(--color-primary);
+    border-color: var(--color-text-tertiary);
   }
 }
 
@@ -1166,27 +1098,21 @@ onMounted(() => {
 }
 
 .btn-copy {
-  padding: 8px 16px;
-  background: linear-gradient(135deg, var(--color-primary), var(--color-primary-light));
-  color: white;
-  border: none;
+  padding: 7px 14px;
+  border: 1px solid var(--color-primary);
   border-radius: var(--radius-md);
+  background: var(--color-primary);
+  color: #fff;
+  font-family: inherit;
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 500;
   cursor: pointer;
-  transition: var(--transition);
+  transition: background-color 0.15s ease;
 
   &:hover {
-    transform: translateY(-2px);
-    box-shadow: var(--shadow-md);
+    border-color: var(--color-primary-hover);
+    background: var(--color-primary-hover);
   }
-}
-
-.empty-state {
-  padding: 60px 20px;
-  text-align: center;
-  color: var(--color-text-tertiary);
-  font-size: 14px;
 }
 
 .image-upload-area {

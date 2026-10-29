@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import asyncio
 import unittest
 from types import SimpleNamespace
 from datetime import datetime, timezone
@@ -10,10 +11,12 @@ from unittest.mock import AsyncMock, patch
 
 from src.plugins.nonebot_plugin_fxbot.chat import router, service as service_module, commands, message_adapter
 from src.plugins.nonebot_plugin_fxbot.chat.types import ChatRequest, ChatResponse
+from src.plugins.nonebot_plugin_fxbot.chat.replyer import prompt as prompt_module, generator
 from src.plugins.nonebot_plugin_fxbot.chat.service import ChatService
 from src.plugins.nonebot_plugin_fxbot.chat.session import ChatSessionStore
 from src.plugins.nonebot_plugin_fxbot.chat.behavior import debounce, reply_gate
 from src.plugins.nonebot_plugin_fxbot.console.routes import chat as chat_routes
+from src.plugins.nonebot_plugin_fxbot.chat.message_receive import sender as sender_module
 from src.plugins.nonebot_plugin_fxbot.chat.behavior.debounce import FORCED_FLUSH_SECONDS, PendingBatch
 from src.plugins.nonebot_plugin_fxbot.config.system_defaults import SYSTEM_DEFAULTS, validate_system_config
 from src.plugins.nonebot_plugin_fxbot.chat.behavior.reply_gate import (
@@ -27,21 +30,21 @@ from src.plugins.nonebot_plugin_fxbot.adapter.platforms.onebot12 import OneBotV1
 
 
 def _pick(overrides: dict[str, object]) -> dict[str, object]:
-    value = copy.deepcopy(SYSTEM_DEFAULTS["chat"]["proactive"])
+    value = copy.deepcopy(SYSTEM_DEFAULTS["chat"]["reply_timing"])
     value.update(overrides)
     return value
 
 
 class _Config:
-    def __init__(self, proactive: dict[str, object]) -> None:
-        self.proactive = proactive
+    def __init__(self, reply_timing: dict[str, object]) -> None:
+        self.reply_timing = reply_timing
 
     def get_system(self) -> dict[str, object]:
-        return {"chat": {"proactive": self.proactive}}
+        return {"chat": {"reply_timing": self.reply_timing}}
 
 
-def _patch_gate_config(proactive: dict[str, object]):
-    return patch.object(reply_gate, "get_config_manager", return_value=_Config(proactive))
+def _patch_gate_config(reply_timing: dict[str, object]):
+    return patch.object(reply_gate, "get_config_manager", return_value=_Config(reply_timing))
 
 
 def _make_bot() -> SimpleNamespace:
@@ -69,21 +72,20 @@ def _request(trigger_kind: str = "proactive", *, text: str = "你好", message_i
 
 
 class ConfigValidationTests(unittest.TestCase):
-    """chat.proactive 默认值与显式校验。"""
+    """chat.reply_timing 里的主动接话默认值与显式校验。"""
 
     def test_defaults_validate(self) -> None:
         validate_system_config({"chat": copy.deepcopy(SYSTEM_DEFAULTS["chat"])})
-        proactive = SYSTEM_DEFAULTS["chat"]["proactive"]
-        self.assertFalse(proactive["enabled"])
-        self.assertEqual(proactive["gate_mode"], "observe")
-        self.assertEqual(proactive["talk_value"], 1.0)
+        reply_timing = SYSTEM_DEFAULTS["chat"]["reply_timing"]
+        self.assertEqual(reply_timing["talk_value"], 1.0)
+        self.assertNotIn("enabled", reply_timing)
+        self.assertNotIn("gate_mode", reply_timing)
+        self.assertNotIn("proactive", SYSTEM_DEFAULTS["chat"])
 
     def test_invalid_values_are_rejected(self) -> None:
         cases = (
             {"talk_value": 1.5},
-            {"gate_mode": "block"},
-            {"enabled": "yes"},
-            {"group_allowlist": "g1"},
+            {"enable_talk_value_rules": "yes"},
             {"talk_value_rules": [{"time": "09:00-25:00", "value": 1.0}]},
             {"talk_value_rules": [{"time": "09:00-18:00", "value": 2}]},
             {"no_action_backoff_start_count": 0},
@@ -92,13 +94,13 @@ class ConfigValidationTests(unittest.TestCase):
         for override in cases:
             with self.subTest(override=override):
                 chat = copy.deepcopy(SYSTEM_DEFAULTS["chat"])
-                chat["proactive"] = _pick(override)
+                chat["reply_timing"] = _pick(override)
                 with self.assertRaises(ValueError):
                     validate_system_config({"chat": chat})
 
-    def test_proactive_must_be_object(self) -> None:
+    def test_reply_timing_must_be_object(self) -> None:
         chat = copy.deepcopy(SYSTEM_DEFAULTS["chat"])
-        chat["proactive"] = None
+        chat["reply_timing"] = None
         with self.assertRaises(ValueError):
             validate_system_config({"chat": chat})
 
@@ -140,6 +142,31 @@ class TalkValueTests(unittest.TestCase):
             self.assertAlmostEqual(talk_value_for("t", at=datetime(2026, 1, 1, 23, 30, tzinfo=timezone.utc)), 0.4)
             self.assertAlmostEqual(talk_value_for("t", at=datetime(2026, 1, 1, 1, 30, tzinfo=timezone.utc)), 0.4)
             self.assertAlmostEqual(talk_value_for("t", at=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)), 0.9)
+
+    def test_empty_or_star_time_covers_all_day(self) -> None:
+        for time_range in ("", "*", "  "):
+            rules = [{"tenant": "", "time": time_range, "value": 0.4}]
+            config = _pick({"talk_value": 0.9, "enable_talk_value_rules": True, "talk_value_rules": rules})
+            with _patch_gate_config(config):
+                for hour in (0, 9, 23):
+                    at = datetime(2026, 1, 1, hour, 0, tzinfo=timezone.utc)
+                    self.assertAlmostEqual(talk_value_for("t", at=at), 0.4)
+
+    def test_time_range_precedes_all_day_rule(self) -> None:
+        rules = [
+            {"tenant": "", "time": "", "value": 0.4},
+            {"tenant": "", "time": "09:00-18:59", "value": 1.0},
+        ]
+        with _patch_gate_config(_pick({"talk_value": 0.9, "enable_talk_value_rules": True, "talk_value_rules": rules})):
+            self.assertAlmostEqual(talk_value_for("t", at=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)), 1.0)
+            self.assertAlmostEqual(talk_value_for("t", at=datetime(2026, 1, 1, 20, 0, tzinfo=timezone.utc)), 0.4)
+
+    def test_all_day_time_is_valid(self) -> None:
+        chat = copy.deepcopy(SYSTEM_DEFAULTS["chat"])
+        chat["reply_timing"] = _pick(
+            {"talk_value_rules": [{"tenant": "", "time": "", "value": 0.5}, {"tenant": "", "time": "*", "value": 0.5}]}
+        )
+        validate_system_config({"chat": chat})
 
 
 class IdleBackoffTests(unittest.TestCase):
@@ -270,7 +297,7 @@ class _Registry:
 def _chat_cfg() -> dict[str, object]:
     return {
         "enabled": True,
-        "max_history": 10,
+        "max_context_size": 10,
         "group_allowlist": [],
         "private_enabled": False,
         "command_prefixes": ["/", "#"],
@@ -281,14 +308,8 @@ def _chat_cfg() -> dict[str, object]:
 class RouterEnforcementTests(unittest.IsolatedAsyncioTestCase):
     """普通群消息的路由只采样一次，通过后绕过 _match_context。"""
 
-    def _patches(
-        self, gate: _Gate, *, switch: bool = True, settings: dict[str, object] | None = None
-    ) -> tuple[object, ...]:
-        cfg = _pick({"enabled": True, "gate_mode": "enforce", "group_allowlist": ["g1"]})
-        if settings:
-            cfg.update(settings)
+    def _patches(self, gate: _Gate, *, switch: bool | None = True) -> tuple[object, ...]:
         return (
-            patch.object(router, "proactive_config", return_value=cfg),
             patch.object(router, "proactive_switch", new=AsyncMock(return_value=switch)),
             patch.object(router, "default_reply_gate_registry", _Registry(gate)),
             patch.object(router, "default_debounce_registry", debounce.DebounceRegistry()),
@@ -302,7 +323,7 @@ class RouterEnforcementTests(unittest.IsolatedAsyncioTestCase):
     async def test_gate_pass_lets_ai_fallback_bypass_context_match(self) -> None:
         gate = _Gate()
         patches = self._patches(gate)
-        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7], patches[8]:
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7]:
             event = _make_event()
             self.assertFalse(await router._context_rule(_make_bot(), event))
             self.assertTrue(getattr(event, router._PROACTIVE_ATTR, False))
@@ -313,18 +334,18 @@ class RouterEnforcementTests(unittest.IsolatedAsyncioTestCase):
     async def test_gate_fail_keeps_context_history(self) -> None:
         gate = _Gate(would_trigger=False)
         patches = self._patches(gate)
-        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7], patches[8]:
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7]:
             event = _make_event()
             self.assertTrue(await router._context_rule(_make_bot(), event))
             self.assertFalse(getattr(event, router._PROACTIVE_ATTR, False))
             self.assertFalse(await router._ai_fallback_rule(_make_bot(), event))
         self.assertEqual(gate.triggered, 0)
 
-    async def test_observe_or_disabled_never_passes(self) -> None:
-        for settings in ({"gate_mode": "observe"}, {"enabled": False}, {"group_allowlist": ["other"]}):
-            with self.subTest(settings=settings):
+    async def test_unset_or_off_switch_never_passes(self) -> None:
+        for switch in (None, False):
+            with self.subTest(switch=switch):
                 gate = _Gate()
-                patches = self._patches(gate, settings=settings)
+                patches = self._patches(gate, switch=switch)
                 with (
                     patches[0],
                     patches[1],
@@ -334,7 +355,6 @@ class RouterEnforcementTests(unittest.IsolatedAsyncioTestCase):
                     patches[5],
                     patches[6],
                     patches[7],
-                    patches[8],
                 ):
                     event = _make_event()
                     self.assertTrue(await router._context_rule(_make_bot(), event))
@@ -354,7 +374,6 @@ class RouterEnforcementTests(unittest.IsolatedAsyncioTestCase):
                     patches[5],
                     patches[6],
                     patches[7],
-                    patches[8],
                 ):
                     self.assertTrue(await router._context_rule(_make_bot(), _make_event()))
                 self.assertEqual(gate.triggered, 0)
@@ -382,6 +401,60 @@ class RouterEnforcementTests(unittest.IsolatedAsyncioTestCase):
             await router._handle_ai_fallback(_make_bot(), event, SimpleNamespace(finish=AsyncMock()))
         self.assertEqual(adapt.await_args.kwargs["trigger_kind"], "proactive")
         self.assertEqual(gate.forced, [])
+
+
+class TriggerOrderTests(unittest.IsolatedAsyncioTestCase):
+    """序号按到达顺序分配：适配慢的旧消息不能拿到更新的序号。"""
+
+    async def test_slow_adaptation_does_not_take_the_newer_seq(self) -> None:
+        store = ChatSessionStore()
+        seen: dict[str, int] = {}
+        first_started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def process_and_send(request: ChatRequest, _runtime: object) -> bool:
+            seen[str(request.message_id)] = request.trigger_seq
+            return False
+
+        async def adapt(bot: object, event: SimpleNamespace, *, trigger_kind: str) -> ChatRequest:
+            if event.message_id == "m1":
+                first_started.set()
+                await release.wait()
+            identity = message_adapter.event_identity(bot, event)
+            return ChatRequest(
+                session_id=identity.session_id,
+                user_id="user",
+                group_id=None,
+                text="你好",
+                turn_id=f"turn-{event.message_id}",
+                dedupe_key=identity.dedupe_key,
+                trigger_kind=trigger_kind,  # type: ignore[arg-type]
+                message_id=event.message_id,
+            )
+
+        service = SimpleNamespace(
+            session_store=store,
+            ensure_hydrated=AsyncMock(),
+            process_and_send=AsyncMock(side_effect=process_and_send),
+        )
+        matcher = SimpleNamespace(finish=AsyncMock())
+        with (
+            patch.object(router, "chat_service", service),
+            patch.object(router, "default_reply_gate_registry", _Registry(_Gate())),
+            patch.object(router, "default_debounce_registry", debounce.DebounceRegistry()),
+            patch.object(router, "adapt_message_event", new=adapt),
+            patch.object(debounce.PendingBatch, "wait", new=AsyncMock()),
+            patch.object(router.default_runtime_factory, "create", return_value=object()),
+            patch.object(message_adapter, "get_platform_adapter", return_value=OneBotV12MessageAdapter()),
+        ):
+            slow = asyncio.create_task(
+                router._handle_ai_fallback(_make_bot(), _make_event(group_id=None, message_id="m1"), matcher)
+            )
+            await asyncio.wait_for(first_started.wait(), 1.0)
+            await router._handle_ai_fallback(_make_bot(), _make_event(group_id=None, message_id="m2"), matcher)
+            release.set()
+            await asyncio.wait_for(slow, 1.0)
+        self.assertEqual(seen, {"m1": 1, "m2": 2})
 
 
 class DebounceProactiveTests(unittest.TestCase):
@@ -413,7 +486,8 @@ class DebounceProactiveTests(unittest.TestCase):
         self.assertLessEqual(batch.deadline, 100.0 + FORCED_FLUSH_SECONDS)
         merged = batch.merge()
         self.assertEqual(merged.trigger_kind, "mention")
-        self.assertTrue(merged.proactive)
+        # 有人 @ 时按普通轮回复，不能沿用主动轮的工具限制与「不发言就结束」
+        self.assertFalse(merged.proactive)
 
     def test_proactive_joins_existing_batch_without_extending(self) -> None:
         batch = self._batch("mention", started=100.0, deadline=101.0)
@@ -423,7 +497,7 @@ class DebounceProactiveTests(unittest.TestCase):
         self.assertEqual(batch.deadline, 101.0)
         merged = batch.merge()
         self.assertEqual(merged.trigger_kind, "mention")
-        self.assertTrue(merged.proactive)
+        self.assertFalse(merged.proactive)
 
     def test_proactive_only_batch_keeps_kind(self) -> None:
         batch = self._batch()
@@ -440,21 +514,21 @@ class ServiceRestrictionTests(unittest.IsolatedAsyncioTestCase):
     """主动轮的引用与工具限制。"""
 
     async def test_proactive_does_not_quote(self) -> None:
-        service = ChatService(ChatSessionStore())
         request = _request("proactive")
         request.message_id = "100"
         runtime = SimpleNamespace(bot=object())
-        self.assertIsNone(service._quote_payload(request, runtime, "回复"))
+        self.assertEqual(sender_module.first_payload(None, request, runtime, "回复", []), "回复")
         request.proactive = False
         request.trigger_kind = "mention"
+        built = object()
         with (
-            patch.object(service_module, "should_quote", return_value=True),
-            patch.object(service_module, "supports_reply", return_value=True),
-            patch.object(service_module, "build_message", return_value=object()),
-            patch.object(service_module, "build_reply_segment", return_value=object()),
-            patch.object(service_module, "build_message_segment", return_value=object()),
+            patch.object(sender_module, "decide_quote", return_value=(True, 1.0)),
+            patch.object(sender_module, "supports_reply", return_value=True),
+            patch.object(sender_module, "build_message", return_value=built),
+            patch.object(sender_module, "build_reply_segment", return_value=object()),
+            patch.object(sender_module, "build_message_segment", return_value=object()),
         ):
-            self.assertIsNotNone(service._quote_payload(request, runtime, "回复"))
+            self.assertIs(sender_module.first_payload(None, request, runtime, "回复", []), built)
 
     async def test_proactive_tools_are_read_only(self) -> None:
         specs = [
@@ -462,23 +536,22 @@ class ServiceRestrictionTests(unittest.IsolatedAsyncioTestCase):
             SimpleNamespace(name="like"),
             SimpleNamespace(name="mute_member"),
         ]
-        config = SimpleNamespace(get_system=lambda: {"chat": {"enabled_tools": []}})
         with (
-            patch.object(service_module, "get_config_manager", return_value=config),
-            patch.object(service_module.default_registry, "list", return_value=specs),
+            patch.object(generator.default_registry, "list", return_value=specs),
             patch.object(
-                service_module.default_registry,
+                generator.default_registry,
                 "to_openai_tools",
                 return_value=[{"function": {"name": spec.name}} for spec in specs],
             ),
-            patch.object(service_module, "tool_allowed", new=AsyncMock(return_value=True)),
+            patch.object(generator, "tool_allowed", new=AsyncMock(return_value=True)),
+            patch.object(generator, "web_runtime", return_value=SimpleNamespace(enabled=True)),
         ):
-            names, tools = await service_module._allowed_tools(SimpleNamespace(), proactive=True)
+            names, tools = await generator.allowed_tools(SimpleNamespace(), proactive=True)
         self.assertEqual(names, {"web_search"})
         self.assertEqual([tool["function"]["name"] for tool in tools], ["web_search"])
 
     async def test_scene_hint_marks_proactive(self) -> None:
-        hint = service_module._scene_hint(_request("proactive"), "小助手")
+        hint = prompt_module.scene_hint(_request("proactive"), "小助手")
         self.assertIn("主动接话", hint)
         self.assertIn("不要 @ 人", hint)
 
@@ -522,10 +595,7 @@ class CommandTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_private_set_is_rejected(self) -> None:
         matcher = _FinishMatcher()
-        with (
-            patch.object(commands, "proactive_config", return_value=_pick({})),
-            patch.object(commands, "session_id_for_event", return_value="tenant"),
-        ):
+        with patch.object(commands, "session_id_for_event", return_value="tenant"):
             with self.assertRaises(_Finished):
                 await commands._handle_proactive(_make_bot(), _make_event("#主动 开", group_id=None), matcher)  # type: ignore[arg-type]
         self.assertIn("只用于群聊", matcher.messages[-1])
@@ -533,10 +603,8 @@ class CommandTests(unittest.IsolatedAsyncioTestCase):
     async def test_group_set_requires_manage_and_persists(self) -> None:
         matcher = _FinishMatcher()
         setter = AsyncMock()
-        cfg = _pick({"enabled": True, "group_allowlist": ["g1"]})
         event = _make_event("#主动 开")
         with (
-            patch.object(commands, "proactive_config", return_value=cfg),
             patch.object(commands, "session_id_for_event", return_value="tenant"),
             patch.object(commands, "_can_manage", new=AsyncMock(return_value=False)),
         ):
@@ -545,7 +613,6 @@ class CommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("群主或管理员", matcher.messages[-1])
 
         with (
-            patch.object(commands, "proactive_config", return_value=cfg),
             patch.object(commands, "session_id_for_event", return_value="tenant"),
             patch.object(commands, "_can_manage", new=AsyncMock(return_value=True)),
             patch.object(commands, "set_proactive_switch", new=setter),
@@ -557,13 +624,11 @@ class CommandTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_query_reports_effective_state(self) -> None:
         matcher = _FinishMatcher()
-        cfg = _pick({"enabled": True, "gate_mode": "enforce", "group_allowlist": ["g1"]})
         gate = SimpleNamespace(
             snapshot=lambda _limit: {"window": {"expected_replies": 1.5, "actual_replies": 1, "scored_rounds": 3}}
         )
         registry = SimpleNamespace(peek=lambda _tenant: gate)
         with (
-            patch.object(commands, "proactive_config", return_value=cfg),
             patch.object(commands, "session_id_for_event", return_value="tenant"),
             patch.object(commands, "proactive_switch", new=AsyncMock(return_value=True)),
             patch.object(commands, "talk_value_for", return_value=0.8),
@@ -572,7 +637,7 @@ class CommandTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(_Finished):
                 await commands._handle_proactive(_make_bot(), _make_event("#主动"), matcher)  # type: ignore[arg-type]
         message = matcher.messages[-1]
-        self.assertIn("本群：开启", message)
+        self.assertIn("本群主动接话：开启", message)
         self.assertIn("talk_value：0.80", message)
         self.assertIn("预计 1.50", message)
 
@@ -581,16 +646,12 @@ class ConsoleProactiveTests(unittest.IsolatedAsyncioTestCase):
     """控制台门控接口附带当前开关。"""
 
     async def test_payload_includes_settings(self) -> None:
-        cfg = _pick({"enabled": True, "gate_mode": "enforce", "group_allowlist": ["g1"]})
         with (
-            patch.object(chat_routes, "proactive_config", return_value=cfg),
             patch.object(chat_routes, "proactive_switch", new=AsyncMock(return_value=True)),
             patch.object(chat_routes, "talk_value_for", return_value=0.6),
             patch.object(chat_routes.default_reply_gate_registry, "peek", return_value=None),
         ):
             payload = await chat_routes.get_reply_gate("onebot:bot:group:g1", 10)
-        self.assertEqual(payload["proactive"]["gate_mode"], "enforce")
-        self.assertTrue(payload["proactive"]["group_allowed"])
         self.assertTrue(payload["proactive"]["switch"])
         self.assertAlmostEqual(payload["proactive"]["talk_value"], 0.6)
         self.assertEqual(payload["backoff"]["pending"], 0)

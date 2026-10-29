@@ -46,8 +46,8 @@ class GeminiProvider(ChatProvider):
         self,
         messages: list[dict[str, Any]],
     ) -> tuple[str | None, list[Any]]:
-        """将 OpenAI 风格消息转换为 Gemini 格式。"""
-        system_instruction = None
+        """将 OpenAI 风格消息转换为 Gemini 格式；多条系统消息按顺序合并。"""
+        system_chunks: list[str] = []
         contents: list[Any] = []
 
         for msg in messages:
@@ -55,7 +55,7 @@ class GeminiProvider(ChatProvider):
             content = msg.get("content", "")
 
             if role == "system":
-                system_instruction = str(content)
+                system_chunks.append(str(content))
             elif role == "user":
                 if isinstance(content, list):
                     parts = []
@@ -97,6 +97,7 @@ class GeminiProvider(ChatProvider):
                 ]
                 contents.append(types.UserContent(parts=parts))
 
+        system_instruction = "\n\n".join(chunk for chunk in system_chunks if chunk.strip()) or None
         return system_instruction, contents
 
     def _convert_tools_to_gemini_format(

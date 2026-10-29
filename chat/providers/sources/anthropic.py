@@ -42,8 +42,8 @@ class AnthropicProvider(ChatProvider):
         self,
         messages: list[dict[str, Any]],
     ) -> tuple[str, list[dict[str, Any]]]:
-        """将 OpenAI 风格消息转换为 Anthropic 格式。"""
-        system_prompt = ""
+        """将 OpenAI 风格消息转换为 Anthropic 格式；多条系统消息按顺序合并。"""
+        system_chunks: list[str] = []
         converted: list[dict[str, Any]] = []
 
         for msg in messages:
@@ -51,7 +51,7 @@ class AnthropicProvider(ChatProvider):
             content = msg.get("content", "")
 
             if role == "system":
-                system_prompt = str(content)
+                system_chunks.append(str(content))
             elif role == "user":
                 if isinstance(content, list):
                     blocks: list[dict[str, Any]] = []
@@ -112,6 +112,7 @@ class AnthropicProvider(ChatProvider):
                     }
                 )
 
+        system_prompt = "\n\n".join(chunk for chunk in system_chunks if chunk.strip())
         return system_prompt, converted
 
     async def chat(
@@ -149,9 +150,10 @@ class AnthropicProvider(ChatProvider):
             raise
 
         response = LLMResponse(role="assistant", raw_response=resp)
+        text_blocks: list[str] = []
         for block in resp.content:
             if block.type == "text":
-                response.content = block.text
+                text_blocks.append(block.text)
             elif block.type == "tool_use":
                 response.tool_calls.append(
                     {
@@ -164,6 +166,7 @@ class AnthropicProvider(ChatProvider):
                     }
                 )
                 response.tool_call_ids.append(block.id)
+        response.content = "".join(text_blocks)
         return response
 
     async def chat_stream(

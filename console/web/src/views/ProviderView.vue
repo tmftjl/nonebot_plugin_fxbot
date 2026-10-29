@@ -1,9 +1,17 @@
 <!-- -*- coding: utf-8 -*- -->
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Plus, Refresh, Search } from '@element-plus/icons-vue'
+import PageHeader from '@/components/PageHeader.vue'
+import PillTabs from '@/components/PillTabs.vue'
 import { providerApi } from '@/api'
-import type { ProviderItem, ProviderTypeOption } from '@/types/api'
+import type {
+  ModelRoutingData,
+  ModelRoutingTask,
+  ProviderItem,
+  ProviderTypeOption,
+} from '@/types/api'
 
 interface ProviderForm {
   name: string
@@ -14,20 +22,38 @@ interface ProviderForm {
   model: string
   timeout: number
   embedding_dim: number | null
+  voice: string
 }
+
+const tabs = [
+  { key: 'models', label: '模型设置', hint: 'Provider 与服务模型' },
+  { key: 'routing', label: '功能分配', hint: '对话、规划与抽取使用哪个模型' },
+] as const
+
+type TabKey = (typeof tabs)[number]['key']
 
 const capabilityOptions = [
   { label: '对话', value: 'chat' },
   { label: '嵌入', value: 'embedding' },
+  { label: '语音识别', value: 'stt' },
+  { label: '语音合成', value: 'tts' },
 ]
 
-const loading = ref(false)
+const activeTab = ref<TabKey>('models')
 const saving = ref(false)
+const loaded = ref(false)
 const providers = ref<ProviderItem[]>([])
 const typeOptions = ref<ProviderTypeOption[]>([])
 const dialogVisible = ref(false)
 const editingName = ref<string | null>(null)
 const form = ref<ProviderForm>(emptyForm())
+const selectedProvider = ref('')
+const providerQuery = ref('')
+
+const routing = ref<ModelRoutingData | null>(null)
+const routingLoading = ref(false)
+const routingSaving = ref(false)
+const selectedTask = ref('')
 
 function emptyForm(): ProviderForm {
   return {
@@ -39,15 +65,16 @@ function emptyForm(): ProviderForm {
     model: '',
     timeout: 60,
     embedding_dim: null,
+    voice: '',
   }
 }
 
 const availableTypeOptions = computed(() =>
-  typeOptions.value.filter((item) => item.provider_type === form.value.provider_type)
+  typeOptions.value.filter((item) => item.provider_type === form.value.provider_type),
 )
 
 const currentTypeOption = computed(() =>
-  availableTypeOptions.value.find((item) => item.type === form.value.type)
+  availableTypeOptions.value.find((item) => item.type === form.value.type),
 )
 
 const baseUrlPlaceholder = computed(() => {
@@ -57,15 +84,74 @@ const baseUrlPlaceholder = computed(() => {
   return currentTypeOption.value?.default_base_url || 'https://api.example.com/v1'
 })
 
-const capabilityLabel = (value: string) => value === 'embedding' ? '嵌入' : '对话'
+const defaultProvider = computed(() => providers.value.find((item) => item.is_default)?.name || '')
+
+const visibleProviders = computed(() => {
+  let list = providers.value
+  if (selectedProvider.value) list = list.filter((item) => item.name === selectedProvider.value)
+  const keyword = providerQuery.value.trim().toLowerCase()
+  if (keyword) {
+    list = list.filter((item) =>
+      [item.name, item.model, item.type_label, item.type].some((value) =>
+        String(value || '').toLowerCase().includes(keyword),
+      ),
+    )
+  }
+  return list
+})
+
+const currentTask = computed<ModelRoutingTask | null>(
+  () => routing.value?.tasks.find((item) => item.task === selectedTask.value) || null,
+)
+
+const taskProviders = computed(() => {
+  const capability = currentTask.value?.provider_type || 'chat'
+  return (routing.value?.providers || []).filter((item) => item.provider_type === capability)
+})
+
+const isAutoCapability = (value?: string) =>
+  value === 'stt' || value === 'tts' || value === 'embedding'
+
+const assignedProvider = computed(() => {
+  const fallback = isAutoCapability(currentTask.value?.provider_type) ? '' : routing.value?.default_provider
+  const name = currentTask.value?.provider || fallback || ''
+  return providers.value.find((item) => item.name === name) || null
+})
+
+const taskFallbackLabel = computed(() => {
+  if (isAutoCapability(currentTask.value?.provider_type)) return '自动选择'
+  return `跟随默认${routing.value?.default_provider ? `（${routing.value.default_provider}）` : ''}`
+})
+
+const taskHint = computed(() => {
+  if (currentTask.value?.provider_type === 'stt')
+    return '留空时自动使用第一个语音识别 Provider；这里只决定由哪个 Provider 执行业务。'
+  if (currentTask.value?.provider_type === 'tts')
+    return '留空时自动使用第一个语音合成 Provider；这里只决定由哪个 Provider 执行业务。'
+  if (currentTask.value?.provider_type === 'embedding')
+    return '留空时自动使用第一个嵌入 Provider；这里只决定由哪个 Provider 执行业务。'
+  return '未单独分配时沿用默认对话模型；这里只决定由哪个 Provider 执行该任务。'
+})
+
+const capabilityLabel = (value: string) =>
+  value === 'embedding'
+    ? '嵌入'
+    : value === 'stt'
+      ? '语音识别'
+      : value === 'tts'
+        ? '语音合成'
+        : '对话'
+
+const capabilityInitial = (value: string) =>
+  value === 'embedding' ? 'E' : value === 'stt' ? 'S' : value === 'tts' ? 'T' : 'C'
 
 const applyTypeDefaults = (option?: ProviderTypeOption) => {
   if (!option) return
   form.value.base_url = option.default_base_url || ''
   form.value.timeout = option.default_timeout || 60
-  form.value.embedding_dim = form.value.provider_type === 'embedding'
-    ? (option.default_embedding_dim ?? 1536)
-    : null
+  form.value.embedding_dim =
+    form.value.provider_type === 'embedding' ? (option.default_embedding_dim ?? 1536) : null
+  form.value.voice = form.value.provider_type === 'tts' ? (option.default_voice ?? 'alloy') : ''
 }
 
 const firstTypeOption = (capability: string) =>
@@ -85,7 +171,6 @@ const onTypeChange = () => {
 }
 
 const loadProviders = async () => {
-  loading.value = true
   try {
     const res = await providerApi.list()
     if (!res.success || !res.data) {
@@ -94,11 +179,35 @@ const loadProviders = async () => {
     }
     providers.value = res.data.providers || []
     typeOptions.value = res.data.types || []
+    if (selectedProvider.value && !providers.value.some((item) => item.name === selectedProvider.value)) {
+      selectedProvider.value = ''
+    }
+    if (routing.value) await loadRouting()
   } catch (e) {
     console.error(e)
     ElMessage.error('加载 Provider 失败，请稍后再试')
   } finally {
-    loading.value = false
+    loaded.value = true
+  }
+}
+
+const loadRouting = async () => {
+  routingLoading.value = true
+  try {
+    const res = await providerApi.routing()
+    if (!res.success || !res.data) {
+      ElMessage.error(res.message || '加载功能分配失败')
+      return
+    }
+    routing.value = res.data
+    if (!res.data.tasks.some((item) => item.task === selectedTask.value)) {
+      selectedTask.value = res.data.tasks[0]?.task || ''
+    }
+  } catch (e) {
+    console.error(e)
+    ElMessage.error('加载功能分配失败，请稍后再试')
+  } finally {
+    routingLoading.value = false
   }
 }
 
@@ -129,6 +238,7 @@ const openEditDialog = (item: ProviderItem) => {
     model: item.model,
     timeout: item.timeout || 60,
     embedding_dim: item.embedding_dim ?? null,
+    voice: item.voice || '',
   }
   dialogVisible.value = true
 }
@@ -158,8 +268,10 @@ const saveProvider = async () => {
     ElMessage.warning('超时时间需大于 0')
     return
   }
-  if (form.value.provider_type === 'embedding'
-    && (!form.value.embedding_dim || form.value.embedding_dim <= 0)) {
+  if (
+    form.value.provider_type === 'embedding' &&
+    (!form.value.embedding_dim || form.value.embedding_dim <= 0)
+  ) {
     ElMessage.warning('请输入向量维度')
     return
   }
@@ -175,6 +287,7 @@ const saveProvider = async () => {
       model: form.value.model.trim(),
       timeout: form.value.timeout,
       embedding_dim: form.value.embedding_dim,
+      voice: form.value.voice.trim(),
     }
     const res = editingName.value
       ? await providerApi.update(editingName.value, payload)
@@ -201,12 +314,20 @@ const setDefault = async (item: ProviderItem) => {
       ElMessage.error(res.message || '设置失败')
       return
     }
-    ElMessage.success(`已将「${item.name}」设为默认`)
+    ElMessage.success(`已将「${item.name}」设为默认模型`)
     await loadProviders()
   } catch (e) {
     console.error(e)
     ElMessage.error('设置失败，请稍后再试')
   }
+}
+
+const onUseChange = (item: ProviderItem, checked: boolean) => {
+  if (!checked) {
+    if (item.is_default) ElMessage.info('默认模型不能取消，直接勾选其他模型即可切换')
+    return
+  }
+  if (!item.is_default) void setDefault(item)
 }
 
 const deleteProvider = async (item: ProviderItem) => {
@@ -234,90 +355,276 @@ const deleteProvider = async (item: ProviderItem) => {
   }
 }
 
+const updateTaskProvider = async (value: string) => {
+  if (!currentTask.value || routingSaving.value) return
+  routingSaving.value = true
+  try {
+    const res = await providerApi.setRouting(currentTask.value.task, value)
+    if (!res.success) {
+      ElMessage.error(res.message || '保存失败')
+      return
+    }
+    ElMessage.success(value ? `已分配给「${value}」` : '已改为跟随默认模型')
+    await loadRouting()
+  } catch (e) {
+    console.error(e)
+    ElMessage.error('保存失败，请稍后再试')
+  } finally {
+    routingSaving.value = false
+  }
+}
+
+watch(activeTab, (value) => {
+  if (value === 'routing' && !routing.value) void loadRouting()
+})
+
 onMounted(() => {
-  loadProviders()
+  void loadProviders()
 })
 </script>
 
 <template>
-  <div v-loading="loading" class="provider-view">
-    <div class="page-head">
-      <div class="page-heading">
-        <h2 class="page-title">Provider 管理</h2>
-        <p class="page-subtitle">
-          共 {{ providers.length }} 个 Provider
-          <span v-if="providers.length"> · 默认对话：{{ providers.find((item) => item.is_default)?.name || '未设置' }}</span>
-        </p>
-      </div>
-      <div class="toolbar-right">
-        <button class="btn btn-secondary" @click="loadProviders">刷新</button>
-        <button class="btn btn-primary" :disabled="!typeOptions.length" @click="openCreateDialog">+ 添加 Provider</button>
-      </div>
-    </div>
+  <div class="provider-view">
+    <PageHeader
+      title="模型配置"
+      :subtitle="`共 ${providers.length} 个 Provider · 默认对话：${defaultProvider || '未设置'}`"
+    >
+      <template #actions>
+        <el-button :icon="Refresh" @click="loadProviders">刷新</el-button>
+        <el-button type="primary" :icon="Plus" :disabled="!typeOptions.length" @click="openCreateDialog">
+          添加 Provider
+        </el-button>
+      </template>
+    </PageHeader>
 
-    <div v-if="!loading && providers.length === 0" class="empty-state">
-      <div class="empty-icon">🔌</div>
-      <div class="empty-title">还没有 Provider</div>
-      <p class="empty-desc">
-        {{ typeOptions.length ? '添加一个模型服务，AI 对话才能工作。' : '未检测到可用的 Provider SDK，请先安装依赖。' }}
-      </p>
-      <button v-if="typeOptions.length" class="btn btn-primary" @click="openCreateDialog">添加第一个 Provider</button>
-    </div>
+    <PillTabs v-model="activeTab" :items="tabs" class="config-tabs" />
 
-    <div v-else class="provider-grid">
-      <article v-for="item in providers" :key="item.name" class="provider-card">
-        <div class="provider-top">
-          <div class="provider-avatar" :class="item.provider_type">
-            {{ item.provider_type === 'embedding' ? 'E' : 'C' }}
+    <Transition name="tab-swap" mode="out-in">
+      <div v-if="activeTab === 'models'" key="models" class="models-layout">
+        <aside class="vendor-side">
+          <div class="vendor-head">
+            <span class="vendor-title">模型服务商</span>
+            <el-button link type="primary" :icon="Plus" @click="openCreateDialog">添加</el-button>
           </div>
-          <div class="provider-heading">
-            <div class="provider-name-row">
-              <span class="provider-name" :title="item.name">{{ item.name }}</span>
-              <span v-if="item.is_default" class="badge">默认</span>
-            </div>
-            <div class="provider-tags">
-              <span class="chip">{{ item.type_label }}</span>
-              <span class="chip capability" :class="item.provider_type">
-                {{ capabilityLabel(item.provider_type) }}
-              </span>
-            </div>
-          </div>
-        </div>
-
-        <div class="provider-fields">
-          <div class="field-row">
-            <span class="field-label">模型</span>
-            <span class="field-value" :title="item.model">{{ item.model || '—' }}</span>
-          </div>
-          <div class="field-row">
-            <span class="field-label">地址</span>
-            <span class="field-value mono" :title="item.base_url">{{ item.base_url || '—' }}</span>
-          </div>
-          <div class="field-row">
-            <span class="field-label">密钥</span>
-            <span class="field-value" :class="{ muted: !item.has_api_key }">
-              {{ item.has_api_key ? '已配置' : '未配置' }}
-            </span>
-          </div>
-          <div v-if="item.provider_type === 'embedding'" class="field-row">
-            <span class="field-label">维度</span>
-            <span class="field-value">{{ item.embedding_dim || '—' }}</span>
-          </div>
-        </div>
-
-        <div class="provider-actions">
           <button
-            v-if="item.provider_type === 'chat' && !item.is_default"
-            class="link-btn"
-            @click="setDefault(item)"
+            type="button"
+            class="vendor-item"
+            :class="{ active: !selectedProvider }"
+            @click="selectedProvider = ''"
           >
-            设为默认
+            <span class="vendor-avatar all">全</span>
+            <span class="vendor-body">
+              <span class="vendor-name">全部模型</span>
+              <span class="vendor-meta">{{ providers.length }} 个 Provider</span>
+            </span>
           </button>
-          <button class="link-btn" @click="openEditDialog(item)">编辑</button>
-          <button class="link-btn danger" @click="deleteProvider(item)">删除</button>
-        </div>
-      </article>
-    </div>
+          <button
+            v-for="item in providers"
+            :key="item.name"
+            type="button"
+            class="vendor-item"
+            :class="{ active: selectedProvider === item.name }"
+            :title="item.name"
+            @click="selectedProvider = item.name"
+          >
+            <span class="vendor-avatar" :class="item.provider_type">
+              {{ capabilityInitial(item.provider_type) }}
+            </span>
+            <span class="vendor-body">
+              <span class="vendor-name">
+                {{ item.name }}
+                <span v-if="item.is_default" class="vendor-default">默认</span>
+              </span>
+              <span class="vendor-meta">{{ item.type_label }} · {{ item.model }}</span>
+            </span>
+          </button>
+        </aside>
+
+        <section class="models-main">
+          <div class="models-toolbar">
+            <el-input
+              v-model="providerQuery"
+              class="search-input"
+              clearable
+              placeholder="搜索 Provider 或模型"
+              :prefix-icon="Search"
+            />
+            <span class="toolbar-hint">{{ visibleProviders.length }} 个模型</span>
+          </div>
+
+          <el-table v-if="loaded && (visibleProviders.length || providerQuery)" :data="visibleProviders" row-key="name">
+            <el-table-column label="模型名称" min-width="220">
+              <template #default="{ row }">
+                <div class="model-name">
+                  {{ row.name }}
+                  <el-tag v-if="row.is_default" size="small" type="warning" effect="plain">默认</el-tag>
+                </div>
+                <div class="model-sub">{{ row.type_label }}</div>
+              </template>
+            </el-table-column>
+            <el-table-column prop="model" label="模型" min-width="180" show-overflow-tooltip />
+            <el-table-column label="能力" width="84">
+              <template #default="{ row }">
+                <el-tag size="small" :type="row.provider_type === 'chat' ? 'success' : 'info'" effect="plain">
+                  {{ capabilityLabel(row.provider_type) }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="超时" width="84">
+              <template #default="{ row }">{{ row.timeout }}s</template>
+            </el-table-column>
+            <el-table-column label="密钥" width="84">
+              <template #default="{ row }">
+                <span :class="{ missing: !row.has_api_key }">{{ row.has_api_key ? '已配置' : '未配置' }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="使用" width="76">
+              <template #default="{ row }">
+                <el-tooltip
+                  :disabled="row.provider_type === 'chat'"
+                  content="只有对话 Provider 可以作为默认模型"
+                  placement="top"
+                >
+                  <el-checkbox
+                    :model-value="row.is_default"
+                    :disabled="row.provider_type !== 'chat'"
+                    @change="(checked: boolean | string | number) => onUseChange(row, Boolean(checked))"
+                  />
+                </el-tooltip>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="130" fixed="right">
+              <template #default="{ row }">
+                <el-button link type="primary" @click="openEditDialog(row)">编辑</el-button>
+                <el-button link type="danger" @click="deleteProvider(row)">删除</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+
+          <div v-else-if="loaded" class="empty-state">
+            <div class="empty-icon">🔌</div>
+            <div class="empty-title">还没有 Provider</div>
+            <p class="empty-desc">
+              {{
+                typeOptions.length
+                  ? '添加一个模型服务，AI 对话才能工作。'
+                  : '未检测到可用的 Provider SDK，请先安装依赖。'
+              }}
+            </p>
+            <el-button v-if="typeOptions.length" type="primary" @click="openCreateDialog">添加第一个 Provider</el-button>
+          </div>
+        </section>
+      </div>
+
+      <div v-else key="routing" class="routing-layout">
+        <aside class="task-side">
+          <div class="vendor-head">
+            <span class="vendor-title">功能任务</span>
+            <el-button link type="primary" :icon="Refresh" :loading="routingLoading" @click="loadRouting">
+              刷新
+            </el-button>
+          </div>
+          <button
+            v-for="task in routing?.tasks || []"
+            :key="task.task"
+            type="button"
+            class="task-item"
+            :class="{ active: selectedTask === task.task }"
+            @click="selectedTask = task.task"
+          >
+            <span class="task-name">{{ task.label }}</span>
+            <span class="task-meta">
+              {{
+                task.provider ||
+                (isAutoCapability(task.provider_type)
+                  ? '自动选择'
+                  : `跟随默认 · ${routing?.default_provider || '未设置'}`)
+              }}
+            </span>
+          </button>
+          <div v-if="!routing?.tasks.length" class="task-empty">暂无任务</div>
+        </aside>
+
+        <section v-loading="routingLoading" class="panel task-main">
+          <template v-if="currentTask">
+            <div class="task-title-row">
+              <div>
+                <h3 class="panel-title">{{ currentTask.label }}</h3>
+                <p class="task-desc">{{ currentTask.description }}</p>
+              </div>
+              <el-tag size="small" :type="currentTask.provider ? 'success' : 'info'">
+                {{
+                  currentTask.provider
+                    ? '单独分配'
+                    : isAutoCapability(currentTask.provider_type)
+                      ? '自动选择'
+                      : '跟随默认'
+                }}
+              </el-tag>
+            </div>
+
+            <div class="form-block">
+              <div class="form-label">分配模型</div>
+              <el-select
+                :model-value="currentTask.provider"
+                class="provider-select"
+                :loading="routingSaving"
+                @change="(value: string) => updateTaskProvider(value)"
+              >
+                <el-option value="" :label="taskFallbackLabel" />
+                <el-option
+                  v-for="provider in taskProviders"
+                  :key="provider.name"
+                  :value="provider.name"
+                  :label="`${provider.name} · ${provider.model || provider.type_label}`"
+                />
+              </el-select>
+              <div class="form-hint">{{ taskHint }}</div>
+            </div>
+
+            <div class="detail-grid">
+              <div class="detail-item">
+                <span class="detail-label">实际模型</span>
+                <span class="detail-value">{{ assignedProvider?.model || '—' }}</span>
+              </div>
+              <div class="detail-item">
+                <span class="detail-label">接口类型</span>
+                <span class="detail-value">{{ assignedProvider?.type_label || '—' }}</span>
+              </div>
+              <div class="detail-item">
+                <span class="detail-label">超时</span>
+                <span class="detail-value">
+                  {{ assignedProvider ? `${assignedProvider.timeout} 秒` : '—' }}
+                </span>
+              </div>
+              <div class="detail-item">
+                <span class="detail-label">密钥</span>
+                <span class="detail-value">
+                  {{ assignedProvider ? (assignedProvider.has_api_key ? '已配置' : '未配置') : '—' }}
+                </span>
+              </div>
+            </div>
+
+            <div class="form-block">
+              <div class="form-label">故障转移顺序</div>
+              <div class="fallback-row">
+                <el-tag
+                  v-for="name in routing?.fallback_providers || []"
+                  :key="name"
+                  size="small"
+                  effect="plain"
+                >
+                  {{ name }}
+                </el-tag>
+                <span v-if="!routing?.fallback_providers?.length" class="form-hint">未配置备用 Provider</span>
+              </div>
+              <div class="form-hint">主 Provider 调用失败时按此顺序尝试；顺序在系统配置的 provider_fallback 中维护。</div>
+            </div>
+          </template>
+          <el-empty v-else description="暂无功能任务" />
+        </section>
+      </div>
+    </Transition>
 
     <el-dialog
       v-model="dialogVisible"
@@ -349,12 +656,7 @@ onMounted(() => {
 
         <el-form-item label="接口类型">
           <el-select v-model="form.type" style="width: 100%" @change="onTypeChange">
-            <el-option
-              v-for="opt in availableTypeOptions"
-              :key="opt.type"
-              :label="opt.label"
-              :value="opt.type"
-            />
+            <el-option v-for="opt in availableTypeOptions" :key="opt.type" :label="opt.label" :value="opt.type" />
           </el-select>
         </el-form-item>
 
@@ -380,7 +682,13 @@ onMounted(() => {
 
         <div class="form-row">
           <el-form-item label="超时时间（秒）">
-            <el-input-number v-model="form.timeout" :min="1" :max="600" controls-position="right" style="width: 100%" />
+            <el-input-number
+              v-model="form.timeout"
+              :min="1"
+              :max="600"
+              controls-position="right"
+              style="width: 100%"
+            />
           </el-form-item>
           <el-form-item v-if="form.provider_type === 'embedding'" label="向量维度">
             <el-input-number
@@ -390,6 +698,9 @@ onMounted(() => {
               controls-position="right"
               style="width: 100%"
             />
+          </el-form-item>
+          <el-form-item v-if="form.provider_type === 'tts'" label="音色">
+            <el-input v-model="form.voice" placeholder="alloy" />
           </el-form-item>
         </div>
       </el-form>
@@ -403,274 +714,167 @@ onMounted(() => {
 
 <style scoped lang="scss">
 .provider-view {
-  padding: 24px;
-
-  * {
-    box-sizing: border-box;
-  }
+  padding: 24px 28px 32px;
 }
 
-.page-head {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 24px;
-  flex-wrap: wrap;
+.config-tabs {
+  width: fit-content;
+  max-width: 100%;
+  margin-bottom: 18px;
 }
 
-.page-heading {
-  min-width: 0;
-}
-
-.page-title {
-  margin: 0 0 6px;
-}
-
-.page-subtitle {
-  margin: 0;
-  color: var(--color-text-secondary);
-  font-size: 13px;
-}
-
-.toolbar-right {
-  display: flex;
-  gap: 10px;
-}
-
-.btn {
-  padding: 9px 18px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-md);
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: var(--transition);
-
-  &:hover:not(:disabled) {
-    transform: translateY(-1px);
-    box-shadow: var(--shadow-md);
-  }
-
-  &:disabled {
-    cursor: not-allowed;
-    opacity: 0.5;
-  }
-}
-
-.btn-primary {
-  background: linear-gradient(135deg, var(--color-primary), var(--color-primary-light));
-  color: #fff;
-  box-shadow: var(--shadow-sm);
-}
-
-.btn-secondary {
-  background: var(--color-bg-tertiary);
-  border-color: var(--color-border);
-  color: var(--color-text-secondary);
-
-  &:hover {
-    color: var(--color-primary);
-    border-color: var(--color-primary);
-    box-shadow: none;
-  }
-}
-
-.provider-grid {
+.models-layout,
+.routing-layout {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: 16px;
+  grid-template-columns: 236px minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
 }
 
-.provider-card {
-  position: relative;
+.vendor-side,
+.task-side {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 20px;
-  overflow: hidden;
-  background: var(--color-bg-card);
+  gap: 2px;
+  padding: 10px;
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-sm);
-  transition: var(--transition);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-card);
+}
 
-  &::before {
-    content: '';
-    position: absolute;
-    inset: 0 0 auto;
-    height: 3px;
-    background: linear-gradient(90deg, var(--color-primary), var(--color-info));
-    opacity: 0;
-    transition: var(--transition);
-  }
+.vendor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 6px 10px;
+}
+
+.vendor-title {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.vendor-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
 
   &:hover {
-    transform: translateY(-3px);
-    border-color: var(--color-primary);
-    box-shadow: var(--shadow-lg);
+    background: var(--color-bg-tertiary);
+  }
 
-    &::before {
-      opacity: 1;
+  &.active {
+    background: var(--color-primary-soft);
+
+    .vendor-name {
+      color: var(--color-primary);
     }
   }
 }
 
-.provider-top {
+.vendor-avatar {
   display: flex;
-  align-items: flex-start;
-  gap: 12px;
-}
-
-.provider-avatar {
   flex: none;
-  display: flex;
   align-items: center;
   justify-content: center;
-  width: 42px;
-  height: 42px;
-  border-radius: 12px;
-  background: linear-gradient(135deg, var(--color-primary), var(--color-info));
-  box-shadow: var(--shadow-sm);
-  color: #fff;
-  font-size: 17px;
-  font-weight: 800;
-
-  &.embedding {
-    background: linear-gradient(135deg, var(--color-info), #8b5cf6);
-  }
-}
-
-.provider-heading {
-  min-width: 0;
-  flex: 1;
-}
-
-.provider-name-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.provider-name {
-  overflow: hidden;
-  color: var(--color-text);
-  font-size: 15px;
-  font-weight: 700;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.badge {
-  flex: none;
-  padding: 2px 8px;
-  border: 1px solid rgba(59, 130, 246, 0.25);
-  border-radius: 999px;
-  background: rgba(59, 130, 246, 0.12);
-  color: var(--color-primary);
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.provider-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 6px;
-}
-
-.chip {
-  padding: 2px 8px;
-  border: 1px solid var(--color-border);
-  border-radius: 999px;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
   background: var(--color-bg-tertiary);
   color: var(--color-text-secondary);
-  font-size: 11px;
+  font-size: 12px;
+  font-weight: 600;
 
   &.chat {
-    border-color: rgba(59, 130, 246, 0.25);
-    background: rgba(59, 130, 246, 0.1);
+    background: var(--color-primary-soft);
     color: var(--color-primary);
   }
 
-  &.embedding {
-    border-color: rgba(139, 92, 246, 0.25);
-    background: rgba(139, 92, 246, 0.1);
-    color: #8b5cf6;
+  &.all {
+    background: var(--color-bg-tertiary);
+    color: var(--color-text);
   }
 }
 
-.provider-fields {
+.vendor-body {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 12px 14px;
-  border-radius: var(--radius-lg);
-  background: var(--color-bg-secondary);
-}
-
-.field-row {
-  display: flex;
-  gap: 12px;
+  gap: 2px;
   min-width: 0;
-  font-size: 12px;
-  line-height: 1.6;
 }
 
-.field-label {
-  flex: none;
-  width: 34px;
-  color: var(--color-text-tertiary);
-}
-
-.field-value {
-  min-width: 0;
+.vendor-name {
   overflow: hidden;
-  color: var(--color-text-secondary);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-
-  &.mono {
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  }
-
-  &.muted {
-    color: var(--color-danger);
-  }
-}
-
-.provider-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 6px;
-  margin-top: auto;
-  padding-top: 12px;
-  border-top: 1px solid var(--color-border-light);
-}
-
-.link-btn {
-  padding: 5px 10px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--color-primary);
+  color: var(--color-text);
   font-size: 13px;
   font-weight: 600;
-  cursor: pointer;
-  transition: var(--transition-fast);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
-  &:hover {
-    background: rgba(59, 130, 246, 0.1);
-  }
+.vendor-default {
+  margin-left: 4px;
+  color: var(--color-primary);
+  font-size: 10px;
+  font-weight: 500;
+}
 
-  &.danger {
-    color: var(--color-danger);
+.vendor-meta {
+  overflow: hidden;
+  color: var(--color-text-tertiary);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
-    &:hover {
-      background: rgba(239, 68, 68, 0.1);
-    }
-  }
+.models-main {
+  min-width: 0;
+}
+
+.models-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.search-input {
+  width: 280px;
+}
+
+.toolbar-hint {
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+}
+
+.model-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-text);
+  font-weight: 600;
+  word-break: break-all;
+}
+
+.model-sub {
+  margin-top: 2px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+.missing {
+  color: var(--color-danger);
 }
 
 .empty-state {
@@ -698,11 +902,129 @@ onMounted(() => {
   font-size: 13px;
 }
 
+.task-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+
+  &:hover {
+    background: var(--color-bg-tertiary);
+  }
+
+  &.active {
+    background: var(--color-primary-soft);
+
+    .task-name {
+      color: var(--color-primary);
+    }
+  }
+}
+
+.task-name {
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.task-meta {
+  overflow: hidden;
+  color: var(--color-text-tertiary);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-empty {
+  padding: 24px 8px;
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+  text-align: center;
+}
+
+.task-main {
+  min-height: 360px;
+}
+
+.task-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.task-desc {
+  margin: 6px 0 0;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.form-block {
+  margin-bottom: 20px;
+}
+
+.form-label {
+  margin-bottom: 8px;
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.provider-select {
+  width: 100%;
+  max-width: 420px;
+}
+
 .form-hint {
   margin-top: 6px;
   color: var(--color-text-tertiary);
   font-size: 12px;
   line-height: 1.6;
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+  padding: 14px 16px;
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-secondary);
+}
+
+.detail-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.detail-label {
+  color: var(--color-text-tertiary);
+  font-size: 11px;
+}
+
+.detail-value {
+  overflow: hidden;
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fallback-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .form-row {
@@ -711,18 +1033,44 @@ onMounted(() => {
   gap: 16px;
 }
 
+.tab-swap-enter-active,
+.tab-swap-leave-active {
+  transition:
+    opacity 0.16s ease,
+    transform 0.16s ease;
+}
+
+.tab-swap-enter-from {
+  opacity: 0;
+  transform: translateY(6px);
+}
+
+.tab-swap-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tab-swap-enter-active,
+  .tab-swap-leave-active {
+    transition: none;
+  }
+}
+
+@media (max-width: 960px) {
+  .models-layout,
+  .routing-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 @media (max-width: 640px) {
   .provider-view {
     padding: 16px;
   }
 
-  .provider-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .toolbar-right {
+  .search-input {
     width: 100%;
-    justify-content: flex-end;
   }
 
   .form-row {

@@ -114,6 +114,14 @@ class OneBotV11MessageAdapter(PlatformAdapter):
     async def get_message(self, bot, message_id):
         return await self._api(bot, "get_msg", message_id=message_id)
 
+    async def get_forward_messages(self, bot, forward_id):
+        """OneBot 实现里转发 ID 有的叫 id，有的叫 message_id。"""
+        try:
+            payload = await self._api(bot, "get_forward_msg", id=str(forward_id))
+        except Exception:
+            payload = await self._api(bot, "get_forward_msg", message_id=str(forward_id))
+        return _parse_forward_nodes(payload)
+
     def extract_recall(self, event: Any) -> RecallInfo | None:
         """识别 group_recall / friend_recall 通知。"""
         notice = str(getattr(event, "notice_type", "") or "")
@@ -258,3 +266,78 @@ class OneBotV11MessageAdapter(PlatformAdapter):
             await self._api(bot, "send_private_forward_msg", user_id=int(user_id_value), messages=nodes)
             return True
         return False
+
+
+def _segments(content: Any) -> list[Any]:
+    """把转发节点的内容归一成消息段列表。"""
+    if content is None:
+        return []
+    if isinstance(content, str):
+        return [{"type": "text", "data": {"text": content}}]
+    try:
+        return list(content)
+    except TypeError:
+        return []
+
+
+def _field(segment: Any, key: str) -> Any:
+    if isinstance(segment, dict):
+        return segment.get(key)
+    return getattr(segment, key, None)
+
+
+def _node_text(segment: Any) -> str:
+    kind = str(_field(segment, "type") or "")
+    data = _field(segment, "data") or {}
+    if not isinstance(data, dict):
+        data = {}
+    if kind == "text":
+        return str(data.get("text") or "")
+    if kind == "image":
+        return "[图片]"
+    if kind in {"record", "voice", "audio"}:
+        return "[语音]"
+    if kind == "at":
+        return f"@{data.get('qq') or ''}"
+    if kind in {"face", "mface"}:
+        return "[表情]"
+    if kind == "forward":
+        return "[嵌套转发]"
+    return ""
+
+
+def _parse_forward_nodes(payload: Any) -> list[dict[str, Any]]:
+    """把 get_forward_msg 的结果归一成昵称、正文和嵌套转发 ID。"""
+    raw_nodes = payload.get("messages") if isinstance(payload, dict) else payload
+    if not isinstance(raw_nodes, (list, tuple)):
+        return []
+    nodes: list[dict[str, Any]] = []
+    for item in raw_nodes:
+        data = item.get("data") if isinstance(item, dict) and isinstance(item.get("data"), dict) else item
+        if not isinstance(data, dict):
+            continue
+        raw_sender = data.get("sender")
+        sender: dict[str, Any] = raw_sender if isinstance(raw_sender, dict) else {}
+        content = data.get("message")
+        if content is None:
+            content = data.get("content")
+            if content is None:
+                content = data.get("raw_message")
+        parts: list[str] = []
+        nested: list[str] = []
+        for segment in _segments(content):
+            if str(_field(segment, "type") or "") == "forward":
+                seg_data = _field(segment, "data")
+                forward_id = seg_data.get("id") or seg_data.get("forward_id") if isinstance(seg_data, dict) else None
+                if isinstance(forward_id, str) and forward_id:
+                    nested.append(forward_id)
+            parts.append(_node_text(segment))
+        nodes.append(
+            {
+                "name": str(sender.get("card") or sender.get("nickname") or sender.get("user_name") or ""),
+                "user_id": str(sender.get("user_id") or ""),
+                "text": "".join(parts).strip(),
+                "forwards": nested,
+            }
+        )
+    return nodes

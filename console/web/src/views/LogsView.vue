@@ -2,6 +2,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
+import PageHeader from '@/components/PageHeader.vue'
 import { getToken } from '@/api'
 
 interface LogEntry {
@@ -176,6 +177,8 @@ onUnmounted(() => {
 
 <template>
   <div class="logs-view">
+    <PageHeader title="运行日志" subtitle="实时日志流，可按等级和关键字过滤" />
+
     <div class="panel">
       <div class="toolbar">
         <select v-model="levelFilter" class="input level-select" aria-label="级别阈值">
@@ -212,13 +215,12 @@ onUnmounted(() => {
 </template>
 
 <style scoped lang="scss">
-.logs-view { height: 100%; box-sizing: border-box; display: flex; flex-direction: column; padding: 24px; }
-.panel { height: 100%; min-height: 0; display: flex; flex-direction: column; background: var(--color-bg-card); border: 1px solid var(--color-border); border-radius: var(--radius-lg); padding: 20px; box-sizing: border-box; }
+.logs-view { height: 100%; box-sizing: border-box; display: flex; flex-direction: column; padding: 24px 28px 22px; }
+.panel { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 16px 18px; margin-bottom: 0; box-sizing: border-box; }
 .toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
-.input { height: 34px; box-sizing: border-box; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-bg); color: var(--color-text); padding: 0 10px; }
+.input { height: 34px; box-sizing: border-box; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-bg-secondary); color: var(--color-text); padding: 0 10px; }
 .level-select { min-width: 110px; }
 .keyword-input { width: 240px; }
-.btn { height: 34px; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-bg-tertiary); color: var(--color-text); padding: 0 14px; cursor: pointer; transition: var(--transition); &:hover { color: var(--color-primary); border-color: var(--color-primary); } }
 .toolbar-status { display: flex; align-items: center; gap: 8px; margin-left: auto; color: var(--color-text-secondary); font-size: 13px; }
 .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--color-warning); &.connected { background: var(--color-success); } }
 .loss-notice { color: var(--color-danger); font-size: 13px; margin-bottom: 8px; }
@@ -232,6 +234,5 @@ onUnmounted(() => {
 .level-success .log-level { color: var(--color-success); }
 .level-warning .log-level { color: var(--color-warning); }
 .level-error .log-level, .level-critical .log-level { color: var(--color-danger); }
-.empty-state { padding: 40px; text-align: center; color: var(--color-text-tertiary); }
 .new-logs { align-self: center; margin-top: 8px; border: 1px solid var(--color-primary); border-radius: var(--radius-md); background: var(--color-bg-card); color: var(--color-primary); padding: 6px 14px; cursor: pointer; }
 </style>

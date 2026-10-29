@@ -51,3 +51,4 @@ class ToolSpec:
     args_model: type[BaseModel] | None = None  # type: ignore[name-defined]
     permission: str = ""
     title: str = ""
+    deferred: bool = False

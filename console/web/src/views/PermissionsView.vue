@@ -2,6 +2,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
+import PageHeader from '@/components/PageHeader.vue'
 import { permissionApi, metaApi } from '@/api'
 import type { PermissionConfig, LayerConfig } from '@/types/api'
 
@@ -10,8 +11,8 @@ type ListSection = 'whitelist' | 'blacklist'
 type ListType = keyof AccountList
 type InputValue = string | number
 
-const loading = ref(false)
 const saving = ref(false)
+const loaded = ref(false)
 const permissions = ref<PermissionConfig | null>(null)
 const pluginNames = ref<Record<string, string>>({})
 const commandNames = ref<Record<string, Record<string, string>>>({})
@@ -46,7 +47,6 @@ const getLevelLabel = (value: string) => {
 }
 
 const loadData = async () => {
-  loading.value = true
   try {
     const [perm, plugins, commands] = await Promise.all([
       permissionApi.get(),
@@ -61,7 +61,7 @@ const loadData = async () => {
   } catch (e: any) {
     ElMessage.error('加载权限失败: ' + (e?.message || e))
   } finally {
-    loading.value = false
+    loaded.value = true
   }
 }
 
@@ -177,14 +177,17 @@ onMounted(() => {
 </script>
 
 <template>
-  <div v-loading="loading" class="permissions-view">
-    <div class="panel">
+  <div class="permissions-view">
+    <PageHeader title="权限管理" subtitle="按全局、插件与命令配置权限等级和场景">
+      <template #actions>
+        <button class="btn btn-secondary" @click="openJsonDialog">编辑 JSON</button>
+        <button class="btn btn-primary" :disabled="!hasChanges" @click="savePermissions">保存配置</button>
+      </template>
+    </PageHeader>
+
+    <div v-if="loaded" class="panel">
       <div class="panel-header">
         <h3 class="panel-title">权限配置</h3>
-        <div class="toolbar-right">
-          <button class="btn btn-secondary btn-sm" @click="openJsonDialog">编辑JSON</button>
-          <button class="btn btn-primary btn-sm" :disabled="!hasChanges" @click="savePermissions">保存配置</button>
-        </div>
       </div>
 
       <div v-if="!permissions" class="empty-state">暂无权限配置</div>
@@ -518,88 +521,7 @@ onMounted(() => {
 
 <style scoped lang="scss">
 .permissions-view {
-  padding: 24px;
-  overflow-y: auto;
-  overflow-x: hidden;
-  -webkit-overflow-scrolling: touch;
-
-  * {
-    box-sizing: border-box;
-  }
-}
-
-.panel {
-  background: var(--color-bg-card);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  padding: 24px;
-  box-shadow: var(--shadow-sm);
-  transition: box-shadow 0.2s ease;
-
-  &:hover {
-    box-shadow: var(--shadow-md);
-  }
-}
-
-.panel-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 20px;
-}
-
-.panel-title {
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--color-text);
-  margin: 0;
-}
-
-.toolbar-right {
-  display: flex;
-  gap: 10px;
-}
-
-.btn {
-  padding: 8px 16px;
-  border: none;
-  border-radius: var(--radius-md);
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: var(--transition);
-
-  &:hover:not(:disabled) {
-    transform: translateY(-2px);
-    box-shadow: var(--shadow-md);
-  }
-
-  &:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-}
-
-.btn-primary {
-  background: linear-gradient(135deg, var(--color-primary), var(--color-primary-light));
-  color: white;
-}
-
-.btn-secondary {
-  background: linear-gradient(135deg, var(--color-info), #0891b2);
-  color: white;
-}
-
-.btn-sm {
-  padding: 7px 14px;
-  font-size: 13px;
-}
-
-.empty-state {
-  padding: 60px 20px;
-  text-align: center;
-  color: var(--color-text-tertiary);
-  font-size: 14px;
+  padding: 24px 28px 32px;
 }
 
 /* ==================== 手风琴样式 ==================== */
@@ -614,12 +536,10 @@ onMounted(() => {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   overflow: hidden;
-  transition: box-shadow 0.2s ease;
-  will-change: box-shadow;
   contain: layout style paint;
 
   &:hover {
-    box-shadow: var(--shadow-md);
+    border-color: var(--color-text-tertiary);
   }
 
   :deep(.el-card__body) {
@@ -630,14 +550,14 @@ onMounted(() => {
     margin-bottom: 16px;
 
     :deep(.el-card__header) {
-      background: linear-gradient(135deg, rgba(102, 126, 234, 0.1), rgba(118, 75, 162, 0.05));
+      background: var(--color-primary-soft);
       cursor: default;
-      border-bottom: 2px solid var(--color-border);
-      padding: 18px 24px;
+      border-bottom: 1px solid var(--color-border);
+      padding: 16px 20px;
     }
 
     :deep(.el-card__body) {
-      padding: 24px;
+      padding: 20px;
     }
 
     .plugin-header {
@@ -646,17 +566,17 @@ onMounted(() => {
       justify-content: space-between;
 
       span:first-child {
-        font-weight: 700;
-        font-size: 16px;
+        font-weight: 600;
+        font-size: 15px;
       }
     }
   }
 
   :deep(.el-card__header) {
-    padding: 18px 24px;
+    padding: 16px 20px;
     background: var(--color-bg-tertiary);
     cursor: pointer;
-    transition: background-color 0.2s ease;
+    transition: background-color 0.15s ease;
     user-select: none;
     border-bottom: 1px solid var(--color-border);
 
@@ -672,15 +592,15 @@ onMounted(() => {
 
     &.active {
       :deep(.el-card__header) {
-        background: linear-gradient(135deg, rgba(102, 126, 234, 0.1), rgba(118, 75, 162, 0.1));
+        background: var(--color-primary-soft);
         border-bottom: 1px solid var(--color-border);
       }
     }
   }
 
   .expand-icon {
-    font-size: 20px;
-    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    font-size: 18px;
+    transition: transform 0.2s ease;
   }
 
   .plugin-header.active .expand-icon {
@@ -688,8 +608,8 @@ onMounted(() => {
   }
 
   .plugin-name {
-    font-weight: 700;
-    font-size: 16px;
+    font-weight: 600;
+    font-size: 15px;
     color: var(--color-text);
   }
 
@@ -795,9 +715,9 @@ onMounted(() => {
     }
 
     &.active {
-      background: linear-gradient(135deg, rgba(102, 126, 234, 0.15), rgba(118, 75, 162, 0.1));
+      background: var(--color-primary-soft);
       color: var(--color-primary);
-      font-weight: 700;
+      font-weight: 600;
     }
   }
 }

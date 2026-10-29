@@ -5,6 +5,7 @@ from __future__ import annotations
 import unittest
 from uuid import UUID
 from types import SimpleNamespace
+from datetime import datetime, timezone
 from dataclasses import FrozenInstanceError
 from unittest.mock import AsyncMock, patch
 
@@ -188,6 +189,44 @@ class SessionDedupeTests(unittest.TestCase):
 
 class RequestAndRouterTests(unittest.IsolatedAsyncioTestCase):
     """请求字段和路由去重集成测试。"""
+
+    async def test_request_times_are_captured_before_adaptation(self) -> None:
+        received_at = datetime(2026, 10, 28, 1, 2, 3, tzinfo=timezone.utc)
+        completed_at = datetime(2026, 10, 28, 1, 3, 3, tzinfo=timezone.utc)
+        for fields, expected in (
+            ({"time": 1700000000}, datetime(2023, 11, 14, 22, 13, 20, tzinfo=timezone.utc)),
+            ({"time": 1700000000.5}, datetime(2023, 11, 14, 22, 13, 20, 500000, tzinfo=timezone.utc)),
+            ({"time": 0}, datetime(1970, 1, 1, tzinfo=timezone.utc)),
+            ({}, received_at),
+            ({"time": None}, received_at),
+            ({"time": "invalid"}, received_at),
+            ({"time": True}, received_at),
+            ({"time": float("nan")}, received_at),
+            ({"time": float("inf")}, received_at),
+            ({"time": 10**100}, received_at),
+        ):
+            with self.subTest(fields=fields):
+                with (
+                    patch.object(message_adapter, "now", return_value=received_at) as clock,
+                    patch.object(message_adapter, "get_platform_adapter", return_value=OneBotV12MessageAdapter()),
+                    patch.object(message_adapter, "_reply_info", new=AsyncMock(return_value=None)),
+                    patch.object(message_adapter, "collect_mentions", new=AsyncMock(return_value=[])),
+                    patch.object(message_adapter, "transcribe_event", new=AsyncMock(return_value="")),
+                    patch.object(message_adapter, "load_images", new=AsyncMock()) as load_images,
+                ):
+
+                    async def delayed_images(*args: object) -> list[str]:
+                        clock.return_value = completed_at
+                        return []
+
+                    load_images.side_effect = delayed_images
+                    request = await message_adapter.adapt_message_event(
+                        make_bot(), make_event(**fields), trigger_kind="mention"
+                    )
+                self.assertEqual(request.occurred_at, expected.replace(tzinfo=None))
+                self.assertIsNone(request.occurred_at.tzinfo)
+                self.assertEqual(request.metadata["received_at"], received_at.replace(tzinfo=None).isoformat())
+                clock.assert_called_once_with()
 
     async def test_request_identity_and_unique_turn(self) -> None:
         event = make_event(id="event", message_id="message", reply=SimpleNamespace(message_id="original"))

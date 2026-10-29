@@ -27,6 +27,7 @@ from ...chat.tools import ToolError, ToolContext, ToolRuntime, tool
     title="今日运势",
     description="获取今日运势，同一天内相同用户返回相同结果。",
     permission="entertain:today",
+    deferred=True,
     parameters={
         "type": "object",
         "properties": {
@@ -74,6 +75,7 @@ async def get_fortune_tool(ctx: ToolContext, rt: ToolRuntime, nickname: str = "�
     title="点歌",
     description="搜索并播放歌曲，自动播放搜索结果第一首。",
     permission="entertain:search",
+    deferred=True,
     parameters={
         "type": "object",
         "properties": {

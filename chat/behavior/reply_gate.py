@@ -1,7 +1,7 @@
 """主动接话的概率估计与动态门控。
 
-概率常数取自 MaiBot 发布权重（`src/maisaka/turn_trigger/`）；fxbot 尚未用自身样本校准，
-`gate_mode=observe` 时只记录，`enforce` 才参与路由。门控状态按租户保存在内存，重启即清零。
+概率常数取自 MaiBot 发布权重（`src/maisaka/turn_trigger/`）；fxbot 尚未用自身样本校准。
+门控状态按租户保存在内存，重启即清零；是否参与路由由群级 `#主动 开/关` 决定。
 """
 
 from __future__ import annotations
@@ -59,25 +59,25 @@ MAX_OBSERVATIONS = 200
 MAX_TENANTS = 2000
 MAX_SWITCH_TENANTS = 2000
 
-PROACTIVE_DEFAULTS: dict[str, Any] = SYSTEM_DEFAULTS["chat"]["proactive"]
+REPLY_TIMING_DEFAULTS: dict[str, Any] = SYSTEM_DEFAULTS["chat"]["reply_timing"]
 
 
-def proactive_config() -> dict[str, Any]:
-    """返回带默认值的主动接话配置；每次使用重新读取以支持热更新。"""
+def reply_timing_config() -> dict[str, Any]:
+    """返回带默认值的回复时机配置；每次使用重新读取以支持热更新。"""
     try:
-        value = get_config_manager().get_system()["chat"].get("proactive")
+        value = get_config_manager().get_system()["chat"].get("reply_timing")
     except Exception:
         value = None
-    merged = dict(PROACTIVE_DEFAULTS)
+    merged = dict(REPLY_TIMING_DEFAULTS)
     if isinstance(value, dict):
         merged.update(value)
     return merged
 
 
 def _setting_int(cfg: dict[str, Any], key: str, minimum: int = 0) -> int:
-    value = cfg.get(key, PROACTIVE_DEFAULTS[key])
+    value = cfg.get(key, REPLY_TIMING_DEFAULTS[key])
     if isinstance(value, bool) or not isinstance(value, int):
-        return int(PROACTIVE_DEFAULTS[key])
+        return int(REPLY_TIMING_DEFAULTS[key])
     return max(minimum, value)
 
 
@@ -98,13 +98,39 @@ def _in_time_range(minutes: int, start: int, end: int) -> bool:
     return start <= minutes <= end if start <= end else minutes >= start or minutes <= end
 
 
+_ALL_DAY_TIMES = frozenset({"", "*"})
+
+
+def _matching_rule_value(rules: list[dict[str, Any]], minutes: int) -> float | None:
+    """同范围内先看命中的时间段，没有命中再退到留空或 * 的全天规则。"""
+    fallback: float | None = None
+    for rule in rules:
+        value = rule.get("value")
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        time_range = str(rule.get("time") or "").strip()
+        if time_range in _ALL_DAY_TIMES:
+            if fallback is None:
+                fallback = min(1.0, max(0.0, float(value)))
+            continue
+        try:
+            start_text, end_text = time_range.split("-", 1)
+        except ValueError:
+            continue
+        start, end = _minute_of_day(start_text), _minute_of_day(end_text)
+        if start is None or end is None or not _in_time_range(minutes, start, end):
+            continue
+        return min(1.0, max(0.0, float(value)))
+    return fallback
+
+
 def talk_value_for(tenant: str, *, at: datetime | None = None) -> float:
-    """读取当前生效的 talk_value；分时段规则优先本租户，其次全局。"""
-    cfg = proactive_config()
+    """读取当前生效的 talk_value；本租户优先于全局，时间段优先于全天。"""
+    cfg = reply_timing_config()
     try:
-        default = float(cfg.get("talk_value", PROACTIVE_DEFAULTS["talk_value"]))
+        default = float(cfg.get("talk_value", REPLY_TIMING_DEFAULTS["talk_value"]))
     except (TypeError, ValueError):
-        default = float(PROACTIVE_DEFAULTS["talk_value"])
+        default = float(REPLY_TIMING_DEFAULTS["talk_value"])
     default = min(1.0, max(0.0, default))
     if not bool(cfg.get("enable_talk_value_rules")):
         return default
@@ -114,21 +140,10 @@ def talk_value_for(tenant: str, *, at: datetime | None = None) -> float:
     if not isinstance(rules, list):
         return default
     for scope in (tenant, ""):
-        for rule in rules:
-            if not isinstance(rule, dict) or str(rule.get("tenant") or "") != scope:
-                continue
-            time_range = str(rule.get("time") or "")
-            try:
-                start_text, end_text = time_range.split("-", 1)
-            except ValueError:
-                continue
-            start, end = _minute_of_day(start_text), _minute_of_day(end_text)
-            if start is None or end is None or not _in_time_range(minutes, start, end):
-                continue
-            value = rule.get("value")
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
-                continue
-            return min(1.0, max(0.0, float(value)))
+        scoped = [rule for rule in rules if isinstance(rule, dict) and str(rule.get("tenant") or "") == scope]
+        value = _matching_rule_value(scoped, minutes)
+        if value is not None:
+            return value
     return default
 
 
@@ -203,10 +218,9 @@ class ReplyLikelihoodInput:
     pending_count: int
 
 
-def summarize_pending_texts(texts: Sequence[str], *, has_at_bot: bool) -> tuple[bool, bool, bool]:
-    """从新消息文本得到 (at_other, has_question_mark, placeholder_only)。"""
+def summarize_pending_texts(texts: Sequence[str], *, at_other: bool = False) -> tuple[bool, bool, bool]:
+    """结合显式提及标记得到 (at_other, has_question_mark, placeholder_only)。"""
     stripped = [text.strip() for text in texts if text.strip()]
-    at_other = not has_at_bot and any("@" in text for text in stripped)
     has_question = any("?" in text or "？" in text for text in stripped)
     placeholder_only = bool(stripped) and all(text.startswith(MEDIA_PLACEHOLDER_PREFIXES) for text in stripped)
     return at_other, has_question, placeholder_only
@@ -422,6 +436,7 @@ class ReplyGate:
         self._observations: deque[GateObservation] = deque(maxlen=MAX_OBSERVATIONS)
         self._round_texts: list[str] = []
         self._round_has_at_bot = False
+        self._round_at_other = False
         self._pending = 0
         self._backoff = IdleBackoff()
 
@@ -431,6 +446,7 @@ class ReplyGate:
         texts: Sequence[str],
         *,
         has_at_bot: bool = False,
+        at_other: bool = False,
         now: float | None = None,
     ) -> GateObservation:
         """记录一条普通群消息；返回本轮若启用门控时的判定。"""
@@ -439,20 +455,22 @@ class ReplyGate:
         new_ids = self._gate.take_uncounted_message_ids([str(item) for item in message_ids if item])
         if not new_ids:
             # 重复投递不重复计入供需和观察，但仍返回当前判定供路由复用
-            snapshot, probability = self._likelihood(clean, has_at_bot, current, len(clean))
+            snapshot, probability = self._likelihood(clean, has_at_bot, at_other, current, len(clean))
             return self._record(snapshot, probability, current, record=False)
         self._note_external(current, len(clean))
         self._pending += len(clean)
         if not self._gate.is_round_open(current):
             self._round_texts = []
             self._round_has_at_bot = False
+            self._round_at_other = False
         self._round_texts.extend(clean)
         self._round_has_at_bot = self._round_has_at_bot or has_at_bot
+        self._round_at_other = self._round_at_other or at_other
         _, round_probability = self._likelihood(
-            self._round_texts, self._round_has_at_bot, current, len(self._round_texts)
+            self._round_texts, self._round_has_at_bot, self._round_at_other, current, len(self._round_texts)
         )
         self._gate.record_proactive_demand(round_probability, current)
-        snapshot, probability = self._likelihood(clean, has_at_bot, current, len(clean))
+        snapshot, probability = self._likelihood(clean, has_at_bot, at_other, current, len(clean))
         return self._record(snapshot, probability, current)
 
     def record_forced_turn(self, message_ids: Sequence[str], *, now: float | None = None) -> None:
@@ -476,7 +494,7 @@ class ReplyGate:
 
     def record_idle(self, *, now: float | None = None) -> None:
         """记录一次主动轮没有回复，驱动 no_action_backoff。"""
-        cfg = proactive_config()
+        cfg = reply_timing_config()
         current = self._clock() if now is None else now
         self._backoff.record_idle(
             current,
@@ -487,7 +505,7 @@ class ReplyGate:
 
     def backoff_delay(self, *, now: float | None = None) -> float:
         """当前退避剩余秒数；待处理消息达到阈值时返回 0。"""
-        cfg = proactive_config()
+        cfg = reply_timing_config()
         current = self._clock() if now is None else now
         return self._backoff.delay(
             current,
@@ -525,9 +543,9 @@ class ReplyGate:
         return self_count, total, seconds
 
     def _likelihood(
-        self, texts: Sequence[str], has_at_bot: bool, now: float, pending_count: int
+        self, texts: Sequence[str], has_at_bot: bool, at_other: bool, now: float, pending_count: int
     ) -> tuple[ReplyLikelihoodInput, float]:
-        at_other, has_question, placeholder_only = summarize_pending_texts(texts, has_at_bot=has_at_bot)
+        _, has_question, placeholder_only = summarize_pending_texts(texts, at_other=at_other)
         self_count, recent_total, seconds = self._recent(now)
         snapshot = ReplyLikelihoodInput(
             mention_bot=has_at_bot,

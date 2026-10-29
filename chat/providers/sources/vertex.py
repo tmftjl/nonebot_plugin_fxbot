@@ -34,8 +34,8 @@ class VertexAIProvider(ChatProvider):
         self.model_name = str(config["model"])
 
     def _convert_to_vertex_format(self, messages: list[dict[str, Any]]) -> dict[str, Any]:
-        """将 OpenAI 风格消息转换为 Vertex AI 格式。"""
-        system_instruction = None
+        """将 OpenAI 风格消息转换为 Vertex AI 格式；多条系统消息按顺序合并。"""
+        system_chunks: list[str] = []
         contents: list[dict[str, Any]] = []
 
         for msg in messages:
@@ -43,7 +43,7 @@ class VertexAIProvider(ChatProvider):
             content = msg.get("content", "")
 
             if role == "system":
-                system_instruction = {"parts": [{"text": content}]}
+                system_chunks.append(str(content))
             elif role == "user":
                 if isinstance(content, list):
                     parts = []
@@ -66,7 +66,7 @@ class VertexAIProvider(ChatProvider):
                 else:
                     contents.append({"role": "user", "parts": [{"text": content or " "}]})
             elif role == "assistant":
-                vertex_parts = msg.get("_vertex_parts")
+                vertex_parts = (msg.get("provider_data") or {}).get("vertex_parts")
                 if vertex_parts:
                     contents.append({"role": "model", "parts": vertex_parts})
                     continue
@@ -99,8 +99,9 @@ class VertexAIProvider(ChatProvider):
                 )
 
         result: dict[str, Any] = {"contents": contents}
-        if system_instruction:
-            result["systemInstruction"] = system_instruction
+        system = "\n\n".join(chunk for chunk in system_chunks if chunk.strip())
+        if system:
+            result["systemInstruction"] = {"parts": [{"text": system}]}
         return result
 
     def _convert_tools_to_vertex_format(

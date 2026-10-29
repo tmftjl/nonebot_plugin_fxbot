@@ -6,19 +6,17 @@ import json
 import asyncio
 from typing import Any
 from datetime import datetime, timedelta
-from dataclasses import dataclass
+from dataclasses import replace, dataclass
 
 from nonebot import logger
 
 from .state import is_ready
-from .config import memory_config, style_model_name, tenant_learn_enabled, style_learning_enabled
+from .config import jargon_config, expression_config, tenant_learn_enabled
 from .models import ChatMessage, utc_now_naive
-from .extract import SENSITIVE
-from ...config import get_manager as get_config_manager
-from ..bindings import PROVIDER, get_binding
-from .filtering import should_learn, sanitize_line
-from ..providers import provider_manager
+from .learning import tenant_target, learning_flags
+from .filtering import SENSITIVE, should_learn, sanitize_line
 from .repository import TenantJobState, chat_repository
+from ..providers.routing import fallback_provider
 
 _MAX_MESSAGES = 200
 _INTERVAL_DAYS = 7
@@ -175,7 +173,7 @@ async def request_style(
     *,
     model: str = "",
 ) -> StyleResult | None:
-    """调用风格模型，失败重试一次；空结果按失败处理。"""
+    """调用风格模型，失败重试一次；合法空结果原样返回，由调用方推进扫描。"""
     prompt = build_prompt(messages, known_terms)
     for attempt in range(2):
         try:
@@ -189,7 +187,7 @@ async def request_style(
             except json.JSONDecodeError:
                 data = None
         result = parse_style(data, messages, known_terms)
-        if result is not None and (result.rules or result.summary or result.jargon):
+        if result is not None:
             return result
     return None
 
@@ -204,69 +202,63 @@ def _clean_messages(messages: list[ChatMessage], tenant: str) -> list[ChatMessag
     return result
 
 
-def _recent_budget(messages: list[ChatMessage], limit: int) -> list[ChatMessage]:
-    """从最新一条往前取，整体字符数不超过预算。"""
-    kept: list[ChatMessage] = []
-    used = 0
-    for message in reversed(messages):
-        size = len(message.content or "")
-        if kept and used + size > limit:
-            break
-        kept.append(message)
-        used += size
-    return list(reversed(kept))
-
-
 async def _call_style_model(
     tenant: str, messages: list[ChatMessage], known_terms: list[str], provider: Any
 ) -> StyleResult | None:
     """在事务外调用风格模型。"""
-    model = style_model_name()
     if provider is not None:
-        return await request_style(provider, messages, known_terms, model=model)
+        return await request_style(provider, messages, known_terms)
     try:
-        provider_name = get_binding(PROVIDER, tenant)
-        if not provider_name:
-            provider_name = str(get_config_manager().get_system()["chat"].get("provider") or "")
-        async with provider_manager.lease(provider_name) as leased:
-            return await request_style(leased, messages, known_terms, model=model)
+        async with fallback_provider("style", tenant) as leased:
+            return await request_style(leased, messages, known_terms)
     except Exception as exc:
         logger.opt(exception=True).warning(f"[ChatStyle] 风格 Provider 不可用: {type(exc).__name__}")
         return None
 
 
-async def learn_style(
-    tenant: str, *, provider: Any = None, now: datetime | None = None, cfg: dict[str, Any] | None = None
-) -> bool:
+async def learn_style(tenant: str, *, provider: Any = None, now: datetime | None = None) -> bool:
     """每周或新增 200 条人类消息后学习一次；成功提交返回 True。"""
-    if not is_ready() or not style_learning_enabled():
+    if not is_ready():
         return False
-    config = cfg or memory_config()
     state = await chat_repository.get_session_state(tenant)
     if not tenant_learn_enabled(state):
         return False
+    _, expression_learn = learning_flags(expression_config().get("learning_list"), tenant_target(tenant))
+    if not expression_learn:
+        return False
     style = await chat_repository.get_style(tenant)
-    after = int(style.evidence_seq_end) if style else 0
+    # 扫描游标记录已确认无法贡献的消息，避免无效前缀把学习永久卡住
+    scan = await chat_repository.get_cursor(tenant, "style")
+    after = max(int(style.evidence_seq_end) if style else 0, int(scan.cursor_seq) if scan else 0)
     raw = await chat_repository.messages_after(tenant, after, limit=max(_MAX_MESSAGES * 2, 400))
+    if not raw:
+        return False
     clean = _clean_messages(raw, tenant)
     if not clean:
+        await chat_repository.set_cursor(tenant, "style", int(raw[-1].id or 0))
         return False
     moment = now or utc_now_naive()
-    if style is None:
-        if len(clean) < _MAX_MESSAGES:
-            return False
-    elif len(clean) < _MAX_MESSAGES and moment - style.updated_at < timedelta(days=_INTERVAL_DAYS):
+    # 证据被撤回后会标记重建：不再等积满 200 条，直接用剩余证据重学
+    rebuild = bool(style is not None and style.needs_rebuild)
+    enough = len(clean) >= _MAX_MESSAGES or rebuild
+    if not enough and (style is None or moment - style.updated_at < timedelta(days=_INTERVAL_DAYS)):
+        # 只越过本批的无效前缀，已清洗出的消息留给后续批次继续累计
+        await chat_repository.set_cursor(tenant, "style", int(clean[0].id or 0) - 1)
         return False
-    selected = _recent_budget(clean[-_MAX_MESSAGES:], int(config["max_input_chars_per_batch"]))
-    if not selected:
-        return False
+    selected = clean[-_MAX_MESSAGES:]
     known_terms = [row.term for row in await chat_repository.list_jargon(tenant, status="active", limit=200)]
     result = await _call_style_model(tenant, selected, known_terms, provider)
     if result is None:
         return False
+    if not (result.rules or result.summary or result.jargon):
+        await chat_repository.set_cursor(tenant, "style", int(raw[-1].id or 0))
+        return False
+    _, jargon_learn = learning_flags(jargon_config().get("learning_list"), tenant_target(tenant))
+    if not jargon_learn:
+        result = replace(result, jargon=())
     seq_start = int(selected[0].id or 0)
     seq_end = int(selected[-1].id or 0)
-    return await chat_repository.save_style(
+    saved = await chat_repository.save_style(
         tenant,
         result,
         seq_start=seq_start,
@@ -274,7 +266,12 @@ async def learn_style(
         evidence_count=len(selected),
         source_batch_id=style_batch_id(seq_start, seq_end),
         expected_manual_version=int(style.manual_version) if style else 0,
+        evidence_ids=tuple(int(message.id or 0) for message in selected),
+        expected_exists=style is not None,
     )
+    if saved:
+        await chat_repository.set_cursor(tenant, "style", int(raw[-1].id or 0))
+    return saved
 
 
 def _tick_guard() -> asyncio.Lock:
@@ -284,19 +281,16 @@ def _tick_guard() -> asyncio.Lock:
     return _style_lock
 
 
-def _learn_enabled(candidate: TenantJobState, cfg: dict[str, Any]) -> bool:
-    if candidate.learn_enabled is not None:
-        return bool(candidate.learn_enabled)
-    return bool(cfg["learn_enabled"])
+def _learn_enabled(candidate: TenantJobState) -> bool:
+    """本租户显式关闭时跳过；未设置按开启处理。"""
+    return True if candidate.learn_enabled is None else bool(candidate.learn_enabled)
 
 
-async def style_job_tick(
-    *, provider: Any = None, now: datetime | None = None, cfg: dict[str, Any] | None = None
-) -> int:
-    """每小时检查一次到期租户；每轮最多提交 max_tenants_per_tick 个。"""
-    if not is_ready() or not style_learning_enabled():
+async def style_job_tick(*, provider: Any = None, now: datetime | None = None) -> int:
+    """处理所有租户；并发上限只限制同时运行的任务，候选不再被截断。"""
+    if not is_ready():
         return 0
-    config = cfg or memory_config()
+    config = expression_config()
     moment = now or utc_now_naive()
     async with _tick_guard():
         try:
@@ -304,15 +298,19 @@ async def style_job_tick(
         except Exception:
             logger.opt(exception=True).debug("[ChatStyle] 读取风格学习租户失败")
             return 0
-        processed = 0
-        for candidate in sorted(snapshot, key=lambda item: item.last_message_id, reverse=True):
-            if not _learn_enabled(candidate, config):
-                continue
-            try:
-                if await learn_style(candidate.tenant, provider=provider, now=moment, cfg=config):
-                    processed += 1
-            except Exception:
-                logger.opt(exception=True).warning(f"[ChatStyle] 租户风格学习失败: {candidate.tenant}")
-            if processed >= int(config["max_tenants_per_tick"]):
-                break
-        return processed
+        candidates = sorted(
+            (candidate for candidate in snapshot if _learn_enabled(candidate)),
+            key=lambda item: item.last_message_id,
+            reverse=True,
+        )
+        semaphore = asyncio.Semaphore(max(1, int(config["max_expression_learner"])))
+
+        async def run(candidate: TenantJobState) -> bool:
+            async with semaphore:
+                return await learn_style(candidate.tenant, provider=provider, now=moment)
+
+        results = await asyncio.gather(*(run(candidate) for candidate in candidates), return_exceptions=True)
+        for candidate, result in zip(candidates, results):
+            if isinstance(result, BaseException):
+                logger.opt(exception=result).warning(f"[ChatStyle] 租户风格学习失败: {candidate.tenant}")
+        return sum(1 for result in results if result is True)

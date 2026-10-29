@@ -52,6 +52,8 @@ class ConfigProxy:
     validator: Validator | None = None
     clean_extra: bool = True
     _storage: ConfigStorage | None = None
+    _last_valid: dict[str, Any] | None = field(default=None, init=False, repr=False)
+    _last_error: str | None = field(default=None, init=False, repr=False)
 
     @property
     def _cache_key(self) -> tuple[str, str, str]:
@@ -67,35 +69,61 @@ class ConfigProxy:
     def path(self):
         return self.storage.path
 
+    @property
+    def history_storage(self) -> ConfigStorage:
+        """返回与主配置相邻的有效配置快照。"""
+        storage = ConfigStorage(self.namespace, f"{self.filename}.last-valid")
+        storage._path = self.path.with_name(f"{self.path.name}.last-valid")
+        return storage
+
     def ensure(self) -> None:
-        if not self.storage.exists():
-            self.save(deepcopy(self.defaults))
-            return
-        if self.storage.read() == {} and self.defaults:
+        if not self.storage.exists() and not self.history_storage.exists() and self._last_valid is None:
             self.save(deepcopy(self.defaults))
 
     def _validated(self, raw: dict[str, Any]) -> dict[str, Any]:
-        """校验磁盘配置；非法时回退默认值，避免启动崩溃。"""
-        if self.validator is None:
-            return raw
-        try:
+        """同时校验原始值与合并后的配置。"""
+        if self.validator is not None:
             self.validator(raw)
-        except Exception as exc:
-            logger.warning(f"[Config] {self.namespace}/{self.filename} 配置非法，使用默认值: {exc}")
-            return deepcopy(self.defaults)
+            self.validator(deep_merge(self.defaults, raw, clean_extra=self.clean_extra))
         return raw
 
+    def _remember(self, raw: dict[str, Any]) -> None:
+        """独立于可淘汰缓存保留有效值，并原子保存校验快照。"""
+        if self.validator is not None:
+            try:
+                self.history_storage.write(raw)
+            except Exception as exc:
+                logger.warning(f"[Config] {self.namespace}/{self.filename} 有效配置快照保存失败: {exc}")
+                raise
+        self._last_valid = deepcopy(raw)
+        self._last_error = None
+
+    def _fallback(self, exc: Exception) -> dict[str, Any]:
+        """失败时优先使用内存或磁盘有效历史，无历史才用默认值。"""
+        self._last_error = str(exc)
+        if self._last_valid is None and self.history_storage.exists():
+            try:
+                self._last_valid = deepcopy(self._validated(self.history_storage.read(strict=True)))
+            except Exception as history_exc:
+                logger.warning(f"[Config] {self.namespace}/{self.filename} 有效配置快照不可用: {history_exc}")
+                raise RuntimeError("有效配置快照不可用，拒绝回退默认值") from history_exc
+        source = "上一份有效配置" if self._last_valid is not None else "默认值（无有效历史）"
+        logger.warning(f"[Config] {self.namespace}/{self.filename} 配置读取或校验失败，使用{source}: {exc}")
+        return deepcopy(self._last_valid if self._last_valid is not None else self.defaults)
+
     def reload(self) -> dict[str, Any]:
-        self.ensure()
-        raw = self._validated(self.storage.read())
-        merged = deep_merge(self.defaults, raw, clean_extra=self.clean_extra)
-        mtime = self.storage.mtime()
-        cache.set(self._cache_key, (mtime, deepcopy(raw), merged))
-        return deepcopy(raw)
+        return deepcopy(self._read(self.storage.mtime())[1])
 
     def _read(self, mtime: float) -> tuple[float, dict[str, Any], dict[str, Any]]:
         self.ensure()
-        raw = self._validated(self.storage.read())
+        try:
+            if not self.storage.exists():
+                raise FileNotFoundError(f"配置文件不存在: {self.path}")
+            raw = self._validated(self.storage.read(strict=True))
+        except Exception as exc:
+            raw = self._fallback(exc)
+        else:
+            self._remember(raw)
         merged = deep_merge(self.defaults, raw, clean_extra=self.clean_extra)
         entry = (mtime, deepcopy(raw), merged)
         cache.set(self._cache_key, entry)
@@ -109,28 +137,29 @@ class ConfigProxy:
         return deepcopy(entry[2])
 
     def merge_and_save(self) -> dict[str, Any]:
-        """补齐默认值后回写；已损坏的用户配置不覆盖文件，运行时按默认值处理。"""
-        raw = self.storage.read()
-        merged = deep_merge(self.defaults, raw, clean_extra=self.clean_extra)
-        if merged == raw:
-            return merged
+        """补齐并保存有效配置，坏文件保留原样并使用有效历史。"""
+        self.ensure()
         try:
-            self.save(merged)
+            if not self.storage.exists():
+                raise FileNotFoundError(f"配置文件不存在: {self.path}")
+            raw = self._validated(self.storage.read(strict=True))
         except Exception as exc:
-            logger.warning(f"[Config] {self.namespace}/{self.filename} 配置非法，跳过回写: {exc}")
-            return deepcopy(self.defaults)
+            return deep_merge(self.defaults, self._fallback(exc), clean_extra=self.clean_extra)
+        merged = deep_merge(self.defaults, raw, clean_extra=self.clean_extra)
+        if merged != raw:
+            self.save(merged)
+        else:
+            self._remember(raw)
         return merged
 
     def save(self, data: dict[str, Any]) -> None:
-        if self.validator is not None:
-            self.validator(data)
+        self._validated(data)
         self.storage.write(data)
+        self._remember(data)
         mtime = self.storage.mtime()
         merged = deep_merge(self.defaults, data, clean_extra=self.clean_extra)
         cache.set(self._cache_key, (mtime, deepcopy(data), merged))
 
     def reload_and_validate(self) -> tuple[bool, dict[str, Any], str | None]:
-        try:
-            return True, self.reload(), None
-        except Exception as exc:
-            return False, deepcopy(self.defaults), str(exc)
+        raw = self.reload()
+        return self._last_error is None, raw, self._last_error

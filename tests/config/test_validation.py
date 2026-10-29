@@ -24,56 +24,56 @@ class SystemConfigValidationTests(unittest.TestCase):
 
     def test_save_rejects_invalid_values(self) -> None:
         payloads = (
-            {"chat": {"max_history": -1}},
-            {"chat": {"max_history": "10"}},
-            {"chat": {"max_history": True}},
-            {"chat": {"memory": None}},
-            {"chat": {"memory": False}},
-            {"chat": {"memory": {"history_enabled": 1}}},
+            {"chat": {"max_context_size": -1}},
+            {"chat": {"max_context_size": "10"}},
+            {"chat": {"max_context_size": True}},
+            {"chat": {"max_private_context_size": -1}},
             {"chat": {"jargon": None}},
-            {"chat": {"jargon": {"enabled": "yes"}}},
-            {"chat": {"jargon": {"inject_max": -1}}},
-            {"chat": {"jargon": {"inject_max": 21}}},
             {"chat": {"expression": None}},
-            {"chat": {"expression": {"enabled": "yes"}}},
-            {"chat": {"expression": {"sample_size": 0}}},
-            {"chat": {"expression": {"inject_top_k": 21}}},
+            {"chat": {"expression": {"checked_only": "yes"}}},
+            {"chat": {"expression": {"max_expression_learner": 0}}},
+            {"chat": {"expression": {"max_expression_learner": 21}}},
+            {"chat": {"expression": {"max_expression_learner": True}}},
             {"chat": {"planner": None}},
-            {"chat": {"planner": {"enabled": "yes"}}},
             {"chat": {"planner": {"mode": "smart"}}},
-            {"chat": {"planner": {"max_rounds": 2}}},
             {"chat": {"planner": {"wait_seconds": 29}}},
+            {"chat": {"behavior": None}},
+            {"chat": {"behavior": {"enable_reply_at": 1}}},
+            {"chat": {"behavior": {"group_quote_frequency": "sometimes"}}},
+            {"chat": {"behavior": {"persona_aliases": "阿鱼"}}},
+            {"chat": {"behavior": {"private_quote_frequency": "always"}}},
+            {"chat": {"behavior": {"group_chat_prompt": []}}},
+            {"chat": {"behavior": {"private_chat_prompts": 1}}},
         )
         for payload in payloads:
             with self.subTest(payload=payload), self.assertRaises(ValueError):
                 self.proxy.save(payload)
 
     def test_invalid_file_falls_back_to_defaults(self) -> None:
-        self.proxy.storage.write({"chat": {"max_history": -5, "memory": None}})
+        self.proxy.storage.write({"chat": {"max_context_size": -5, "expression": None}})
 
         data = self.proxy.load()
 
-        self.assertEqual(data["chat"]["max_history"], SYSTEM_DEFAULTS["chat"]["max_history"])
-        self.assertEqual(data["chat"]["memory"], SYSTEM_DEFAULTS["chat"]["memory"])
-        self.assertEqual(self.proxy.storage.read()["chat"]["max_history"], -5)
+        self.assertEqual(data["chat"]["max_context_size"], SYSTEM_DEFAULTS["chat"]["max_context_size"])
+        self.assertEqual(data["chat"]["expression"], SYSTEM_DEFAULTS["chat"]["expression"])
+        self.assertEqual(self.proxy.storage.read()["chat"]["max_context_size"], -5)
 
     def test_merge_and_save_does_not_crash_on_invalid_file(self) -> None:
-        self.proxy.storage.write({"chat": {"memory": None}})
+        self.proxy.storage.write({"chat": {"expression": None}})
 
         merged = self.proxy.merge_and_save()
 
-        self.assertEqual(merged["chat"]["memory"], SYSTEM_DEFAULTS["chat"]["memory"])
-        self.assertIsNone(self.proxy.storage.read()["chat"]["memory"])
-        self.assertEqual(self.proxy.load()["chat"]["memory"], SYSTEM_DEFAULTS["chat"]["memory"])
+        self.assertEqual(merged["chat"]["expression"], SYSTEM_DEFAULTS["chat"]["expression"])
+        self.assertIsNone(self.proxy.storage.read()["chat"]["expression"])
+        self.assertEqual(self.proxy.load()["chat"]["expression"], SYSTEM_DEFAULTS["chat"]["expression"])
 
     def test_partial_config_is_merged_and_valid(self) -> None:
         self.proxy.storage.write(
             {
                 "chat": {
-                    "max_history": 0,
-                    "memory": {"learn_enabled": True},
-                    "jargon": {"inject_max": 3},
-                    "expression": {"inject_top_k": 3},
+                    "max_context_size": 0,
+                    "jargon": {"learning_list": []},
+                    "expression": {"checked_only": True},
                     "planner": {"mode": "complex"},
                 }
             }
@@ -81,15 +81,29 @@ class SystemConfigValidationTests(unittest.TestCase):
 
         data = self.proxy.load()
 
-        self.assertEqual(data["chat"]["max_history"], 0)
-        self.assertTrue(data["chat"]["memory"]["learn_enabled"])
-        self.assertTrue(data["chat"]["memory"]["history_enabled"])
-        self.assertEqual(data["chat"]["jargon"], {"enabled": True, "inject_max": 3})
+        self.assertEqual(data["chat"]["max_context_size"], 0)
+        self.assertEqual(data["chat"]["jargon"], {"learning_list": [], "groups": []})
         self.assertEqual(
             data["chat"]["expression"],
-            {"enabled": True, "learn": True, "llm_select": False, "sample_size": 50, "inject_top_k": 3},
+            {
+                "checked_only": True,
+                "self_reflect": True,
+                "max_expression_learner": 3,
+                "learning_list": [],
+                "groups": [],
+                "vector": {
+                    "enabled": False,
+                    "index_path": "data/expression_selection/expression_vector_index.json",
+                    "candidate_pool_size": 50,
+                },
+            },
         )
         self.assertEqual(
             data["chat"]["planner"],
-            {"enabled": False, "mode": "complex", "max_rounds": 1, "wait_seconds": 60},
+            {
+                "mode": "complex",
+                "wait_seconds": 60,
+                "context_summary_max_chars": 6000,
+                "passive_replyer": False,
+            },
         )

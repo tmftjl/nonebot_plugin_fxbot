@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import base64
+import asyncio
 import binascii
 from typing import Any
 from pathlib import Path
@@ -18,15 +19,14 @@ from ...chat import emoji as emoji_module
 from ...config import get_manager as get_config_manager
 from ...utils.tz import SHANGHAI_TZ, as_shanghai
 from ...chat.vision import describe_emoji
-from ...chat.knowledge import import_document
 from ...chat.providers import provider_manager
 from ...chat.memory.state import is_ready, degraded_reason
+from ...chat.focus.manager import FAILURE_THRESHOLD, focus_mode_manager
 from ...chat.message_adapter import load_images
-from ...chat.memory.repository import BEHAVIOR_MIN_SAMPLES, chat_repository
+from ...chat.memory.repository import chat_repository
 from ...chat.behavior.reply_gate import (
     ReplyGate,
     talk_value_for,
-    proactive_config,
     proactive_switch,
     default_reply_gate_registry,
 )
@@ -48,12 +48,37 @@ def _json_list(value: object) -> list[Any]:
     return items if isinstance(items, list) else []
 
 
+def _json_dict(value: object) -> dict[str, Any]:
+    """解析 JSON 对象；坏数据按空处理。"""
+    try:
+        items = json.loads(str(value or "{}"))
+    except (TypeError, ValueError):
+        return {}
+    return items if isinstance(items, dict) else {}
+
+
 def _tenant(value: str) -> str:
     """校验并归一化租户参数。"""
     tenant = str(value or "").strip()
     if not tenant:
         raise HTTPException(status_code=400, detail="tenant 不能为空")
     return tenant
+
+
+def _trace_payload(row: object) -> dict[str, Any]:
+    """把轮次追踪转成控制台结构。"""
+    return {
+        "id": getattr(row, "id", 0),
+        "turn_id": getattr(row, "turn_id", ""),
+        "trigger_kind": getattr(row, "trigger_kind", ""),
+        "request_preview": getattr(row, "request_preview", ""),
+        "injected": _json_dict(getattr(row, "injected", "{}")),
+        "budget": _json_dict(getattr(row, "budget", "{}")),
+        "provider": getattr(row, "provider", ""),
+        "latency_ms": getattr(row, "latency_ms", 0),
+        "error": getattr(row, "error", ""),
+        "created_at": _iso(getattr(row, "created_at", None)),
+    }
 
 
 def _style_payload(style: object) -> dict[str, Any]:
@@ -105,6 +130,7 @@ def _expression_payload(row: object) -> dict[str, Any]:
         "type": getattr(row, "type", ""),
         "count": getattr(row, "count", 0.0),
         "checked": getattr(row, "checked", False),
+        "manual_checked": getattr(row, "manual_checked", False),
         "rejected": getattr(row, "rejected", False),
         "learn_count": getattr(row, "learn_count", 0),
         "use_count": getattr(row, "use_count", 0),
@@ -133,60 +159,6 @@ def _planner_payload(row: object) -> dict[str, Any]:
     }
 
 
-def _behavior_payload(row: object) -> dict[str, Any]:
-    """把行为聚合行转成控制台结构。"""
-    return {
-        "scene_tags": [str(item) for item in _json_list(getattr(row, "scene_tags", "[]"))],
-        "action": getattr(row, "action", ""),
-        "outcome": getattr(row, "outcome", ""),
-        "confidence": getattr(row, "confidence", 0.0),
-        "count": getattr(row, "count", 0),
-        "last_seen": _iso(getattr(row, "last_seen", None)),
-    }
-
-
-def _reminder_payload(row: object) -> dict[str, Any]:
-    """把提醒转成控制台结构。"""
-    return {
-        "id": getattr(row, "id", 0),
-        "user_id": getattr(row, "user_id", ""),
-        "content": getattr(row, "content", ""),
-        "due_at": _iso(getattr(row, "due_at", None)),
-        "status": getattr(row, "status", ""),
-        "attempts": getattr(row, "attempts", 0),
-        "next_attempt_at": _iso(getattr(row, "next_attempt_at", None)),
-        "last_error": getattr(row, "last_error", ""),
-        "sent_at": _iso(getattr(row, "sent_at", None)),
-        "created_at": _iso(getattr(row, "created_at", None)),
-    }
-
-
-def _cursor_payload(row: object) -> dict[str, Any]:
-    """把 job 游标转成控制台结构。"""
-    return {
-        "job": getattr(row, "job", ""),
-        "direction": getattr(row, "direction", ""),
-        "cursor_seq": getattr(row, "cursor_seq", 0),
-        "fail_count": getattr(row, "fail_count", 0),
-        "next_retry_at": _iso(getattr(row, "next_retry_at", None)),
-        "last_error": getattr(row, "last_error", ""),
-        "updated_at": _iso(getattr(row, "updated_at", None)),
-    }
-
-
-def _doc_payload(row: object) -> dict[str, Any]:
-    """把知识文档转成控制台结构。"""
-    return {
-        "id": getattr(row, "id", 0),
-        "title": getattr(row, "title", ""),
-        "source": getattr(row, "source", ""),
-        "status": getattr(row, "status", ""),
-        "hash": getattr(row, "hash", ""),
-        "created_at": _iso(getattr(row, "created_at", None)),
-        "updated_at": _iso(getattr(row, "updated_at", None)),
-    }
-
-
 def _emoji_payload(row: object) -> dict[str, Any]:
     """把表情索引转成控制台结构，不暴露服务器路径。"""
     return {
@@ -196,6 +168,10 @@ def _emoji_payload(row: object) -> dict[str, Any]:
         "count": getattr(row, "count", 0),
         "last_used": _iso(getattr(row, "last_used", None)),
         "enabled": bool(getattr(row, "enabled", False)),
+        "registered": bool(getattr(row, "registered", False)),
+        "vlm_processed": bool(getattr(row, "vlm_processed", False)),
+        "status": emoji_module.emoji_status(row),
+        "register_time": _iso(getattr(row, "register_time", None)),
         "created_at": _iso(getattr(row, "created_at", None)),
     }
 
@@ -249,9 +225,9 @@ def _gate_payload(payload: dict[str, Any]) -> dict[str, Any]:
 async def list_tenants() -> dict[str, Any]:
     """列出仍有消息的租户，供控制台选择。"""
     try:
-        tenants = await chat_repository.list_memory_tenants()
+        tenants = await chat_repository.list_console_tenants()
     except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail="聊天记忆数据库尚未就绪") from exc
+        raise HTTPException(status_code=503, detail="聊天数据库尚未就绪") from exc
     return {"tenants": tenants}
 
 
@@ -263,7 +239,7 @@ async def list_planner_samples(tenant: str, limit: int = 100) -> dict[str, Any]:
     try:
         rows = await chat_repository.list_planner_samples(tenant, limit)
     except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail="聊天记忆数据库尚未就绪") from exc
+        raise HTTPException(status_code=503, detail="聊天数据库尚未就绪") from exc
     return {"items": [_planner_payload(row) for row in rows]}
 
 
@@ -274,46 +250,23 @@ async def get_reply_gate(tenant: str, limit: int = 100) -> dict[str, Any]:
     limit = max(1, min(200, int(limit)))
     gate = default_reply_gate_registry.peek(tenant)
     payload = _gate_payload((gate or ReplyGate(tenant)).snapshot(limit))
-    cfg = proactive_config()
-    allowlist = {
-        str(item).strip() for item in cfg.get("group_allowlist") or [] if item is not None and str(item).strip()
-    }
-    group_id = tenant.rsplit(":group:", 1)[1] if ":group:" in tenant else ""
     payload["proactive"] = {
-        "enabled": bool(cfg.get("enabled")),
-        "gate_mode": str(cfg.get("gate_mode") or "observe"),
         "talk_value": talk_value_for(tenant),
         "switch": await proactive_switch(tenant),
-        "group_allowed": bool(group_id and group_id in allowlist),
     }
     return payload
 
 
-@router.get("/behavior")
-async def get_behavior(tenant: str, limit: int = 100) -> dict[str, Any]:
-    """读取行为聚合与已归因样本数；达到阈值后才会进入 Planner 提示。"""
+@router.get("/trace")
+async def list_traces(tenant: str, limit: int = 100) -> dict[str, Any]:
+    """列出最近的轮次追踪；默认只看 7 天内的留存数据。"""
     tenant = _tenant(tenant)
-    limit = max(1, min(200, int(limit)))
+    limit = max(1, min(500, int(limit)))
     try:
-        rows, attributed = await chat_repository.behavior_hints(tenant, limit=limit, minimum=0)
+        rows = await chat_repository.list_traces(tenant, limit)
     except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail="聊天记忆数据库尚未就绪") from exc
-    return {
-        "items": [_behavior_payload(row) for row in rows],
-        "attributed": attributed,
-        "minimum": BEHAVIOR_MIN_SAMPLES,
-    }
-
-
-@router.delete("/behavior")
-async def delete_behavior(tenant: str) -> dict[str, bool]:
-    """清空指定租户的行为样本与聚合。"""
-    tenant = _tenant(tenant)
-    try:
-        await chat_repository.clear_behavior(tenant)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail="聊天记忆数据库尚未就绪") from exc
-    return {"deleted": True}
+        raise HTTPException(status_code=503, detail="聊天数据库尚未就绪") from exc
+    return {"items": [_trace_payload(row) for row in rows]}
 
 
 @router.get("/style")
@@ -323,8 +276,22 @@ async def get_style(tenant: str) -> dict[str, Any]:
     try:
         style = await chat_repository.get_style(tenant)
     except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail="聊天记忆数据库尚未就绪") from exc
+        raise HTTPException(status_code=503, detail="聊天数据库尚未就绪") from exc
     return {"style": _style_payload(style) if style else None}
+
+
+@router.put("/style")
+async def save_style(payload: dict[str, Any]) -> dict[str, Any]:
+    """保存人工风格覆盖；空文本表示取消覆盖。"""
+    tenant = _tenant(str(payload.get("tenant") or ""))
+    text = str(payload.get("manual_override") or "").strip()
+    if len(text) > 200:
+        raise HTTPException(status_code=400, detail="人工覆盖不能超过 200 字")
+    try:
+        style = await chat_repository.set_style_override(tenant, text)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail="聊天数据库尚未就绪") from exc
+    return {"style": _style_payload(style)}
 
 
 @router.delete("/style")
@@ -334,7 +301,7 @@ async def delete_style(tenant: str) -> dict[str, bool]:
     try:
         deleted = await chat_repository.delete_style(tenant)
     except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail="聊天记忆数据库尚未就绪") from exc
+        raise HTTPException(status_code=503, detail="聊天数据库尚未就绪") from exc
     if not deleted:
         raise HTTPException(status_code=404, detail="该租户没有群风格")
     return {"deleted": True}
@@ -353,7 +320,7 @@ async def list_jargon(tenant: str, status: str = "all") -> dict[str, Any]:
             limit=1000,
         )
     except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail="聊天记忆数据库尚未就绪") from exc
+        raise HTTPException(status_code=503, detail="聊天数据库尚未就绪") from exc
     return {"items": [_jargon_payload(row) for row in rows]}
 
 
@@ -364,7 +331,7 @@ async def delete_jargon(jargon_id: int, tenant: str) -> dict[str, bool]:
     try:
         deleted = await chat_repository.delete_jargon(tenant, jargon_id)
     except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail="聊天记忆数据库尚未就绪") from exc
+        raise HTTPException(status_code=503, detail="聊天数据库尚未就绪") from exc
     if not deleted:
         raise HTTPException(status_code=404, detail="黑话条目不存在")
     return {"deleted": True}
@@ -383,7 +350,7 @@ async def list_expressions(tenant: str, status: str = "all") -> dict[str, Any]:
             limit=1000,
         )
     except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail="聊天记忆数据库尚未就绪") from exc
+        raise HTTPException(status_code=503, detail="聊天数据库尚未就绪") from exc
     return {"items": [_expression_payload(row) for row in rows]}
 
 
@@ -394,7 +361,7 @@ async def review_expression(expression_id: int, tenant: str, rejected: bool) -> 
     try:
         updated = await chat_repository.review_expression(tenant, expression_id, rejected)
     except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail="聊天记忆数据库尚未就绪") from exc
+        raise HTTPException(status_code=503, detail="聊天数据库尚未就绪") from exc
     if not updated:
         raise HTTPException(status_code=404, detail="表达条目不存在")
     return {"rejected": bool(rejected)}
@@ -407,21 +374,41 @@ async def delete_expression(expression_id: int, tenant: str) -> dict[str, bool]:
     try:
         deleted = await chat_repository.delete_expression(tenant, expression_id)
     except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail="聊天记忆数据库尚未就绪") from exc
+        raise HTTPException(status_code=503, detail="聊天数据库尚未就绪") from exc
     if not deleted:
         raise HTTPException(status_code=404, detail="表达条目不存在")
     return {"deleted": True}
 
 
+_EMOJI_STATUSES = {"registered", "pending", "unidentified", "disabled"}
+_EMOJI_FORMATS = {"png", "jpg", "jpeg", "gif", "webp", "bmp"}
+_EMOJI_SORTS = {"created_at", "register_time", "last_used", "count"}
+
+
 @router.get("/emoji")
-async def list_emoji(tenant: str) -> dict[str, Any]:
-    """列出租户的表情包索引。"""
+async def list_emoji(
+    tenant: str,
+    status: str = "",
+    search: str = "",
+    format: str = "",
+    sort: str = "created_at",
+    order: str = "desc",
+) -> dict[str, Any]:
+    """列出租户的表情包索引，可按状态、格式、关键字筛选并统计。"""
     tenant = _tenant(tenant)
     try:
-        rows = await chat_repository.list_emoji(tenant)
+        rows = await chat_repository.list_emoji(
+            tenant,
+            status=status if status in _EMOJI_STATUSES else "",
+            search=search,
+            file_format=format.lower().lstrip(".") if format.lower().lstrip(".") in _EMOJI_FORMATS else "",
+            sort=sort if sort in _EMOJI_SORTS else "created_at",
+            descending=order != "asc",
+        )
+        counts = await chat_repository.count_emoji(tenant)
     except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail="聊天记忆数据库尚未就绪") from exc
-    return {"items": [_emoji_payload(row) for row in rows]}
+        raise HTTPException(status_code=503, detail="聊天数据库尚未就绪") from exc
+    return {"items": [_emoji_payload(row) for row in rows], "counts": counts}
 
 
 @router.post("/emoji")
@@ -442,21 +429,45 @@ async def upload_emoji(payload: dict[str, Any]) -> dict[str, Any]:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail="聊天记忆数据库尚未就绪") from exc
+        raise HTTPException(status_code=503, detail="聊天数据库尚未就绪") from exc
     return {"item": _emoji_payload(row)}
 
 
 @router.patch("/emoji/{emoji_hash}")
-async def set_emoji_enabled(emoji_hash: str, tenant: str, enabled: bool) -> dict[str, bool]:
-    """启停一条表情。"""
+async def update_emoji(emoji_hash: str, tenant: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """启停、注册或修改一条表情。"""
     tenant = _tenant(tenant)
+    for key in ("enabled", "registered"):
+        if key in payload and not isinstance(payload[key], bool):
+            raise HTTPException(status_code=400, detail=f"{key} 必须是布尔值")
+    description = payload.get("description")
+    if description is not None and not isinstance(description, str):
+        raise HTTPException(status_code=400, detail="description 必须是字符串")
+    tags = payload.get("tags")
+    if tags is not None and (not isinstance(tags, list) or any(not isinstance(item, str) for item in tags)):
+        raise HTTPException(status_code=400, detail="tags 必须是字符串数组")
     try:
-        updated = await chat_repository.set_emoji_enabled(tenant, emoji_hash, enabled)
+        row = await chat_repository.get_emoji(tenant, emoji_hash)
+        if row is None:
+            raise HTTPException(status_code=404, detail="表情不存在")
+        if "enabled" in payload:
+            await chat_repository.set_emoji_enabled(tenant, emoji_hash, payload["enabled"])
+        if "registered" in payload:
+            await chat_repository.set_emoji_registered(tenant, emoji_hash, payload["registered"])
+        if description is not None or tags is not None:
+            row = await chat_repository.update_emoji_details(
+                tenant,
+                emoji_hash,
+                description=description.strip() if description is not None else None,
+                tags=[item.strip() for item in tags if item.strip()] if tags is not None else None,
+            )
+        else:
+            row = await chat_repository.get_emoji(tenant, emoji_hash)
     except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail="聊天记忆数据库尚未就绪") from exc
-    if not updated:
+        raise HTTPException(status_code=503, detail="聊天数据库尚未就绪") from exc
+    if row is None:
         raise HTTPException(status_code=404, detail="表情不存在")
-    return {"enabled": bool(enabled)}
+    return {"item": _emoji_payload(row)}
 
 
 @router.delete("/emoji/{emoji_hash}")
@@ -466,65 +477,32 @@ async def delete_emoji(emoji_hash: str, tenant: str) -> dict[str, bool]:
     try:
         row = await chat_repository.delete_emoji(tenant, emoji_hash)
     except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail="聊天记忆数据库尚未就绪") from exc
+        raise HTTPException(status_code=503, detail="聊天数据库尚未就绪") from exc
     if row is None:
         raise HTTPException(status_code=404, detail="表情不存在")
-    emoji_module.remove_file(row.path)
+    emoji_module.remove_emoji_files(row.path, row.hash)
     return {"deleted": True}
 
 
-@router.get("/knowledge")
-async def list_knowledge(tenant: str) -> dict[str, Any]:
-    """列出租户的知识文档。"""
-    tenant = _tenant(tenant)
-    try:
-        rows = await chat_repository.list_knowledge_docs(tenant)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail="聊天记忆数据库尚未就绪") from exc
-    return {"items": [_doc_payload(row) for row in rows]}
-
-
-@router.post("/knowledge")
-async def upload_knowledge(payload: dict[str, Any]) -> dict[str, Any]:
-    """导入纯文本或 Markdown；切块后整份生效。"""
+@router.post("/emoji/batch-delete")
+async def batch_delete_emoji(payload: dict[str, Any]) -> dict[str, int]:
+    """批量删除表情索引与文件；单条失败继续处理其余。"""
     tenant = _tenant(str(payload.get("tenant") or ""))
-    try:
-        doc = await import_document(
-            tenant,
-            str(payload.get("title") or ""),
-            str(payload.get("source") or "控制台"),
-            str(payload.get("content") or ""),
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail="聊天记忆数据库尚未就绪") from exc
-    return {"item": _doc_payload(doc)}
-
-
-@router.delete("/knowledge/{doc_id}")
-async def delete_knowledge(doc_id: int, tenant: str) -> dict[str, bool]:
-    """删除知识文档；切片不再参与检索。"""
-    tenant = _tenant(tenant)
-    try:
-        deleted = await chat_repository.delete_knowledge_doc(tenant, doc_id)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail="聊天记忆数据库尚未就绪") from exc
-    if not deleted:
-        raise HTTPException(status_code=404, detail="知识文档不存在")
-    return {"deleted": True}
-
-
-@router.get("/reminders")
-async def list_reminders(tenant: str, limit: int = 100) -> dict[str, Any]:
-    """列出提醒及重试状态，供控制台排查未送达。"""
-    tenant = _tenant(tenant)
-    limit = max(1, min(500, int(limit)))
-    try:
-        rows = await chat_repository.list_reminders(tenant, limit=limit)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail="聊天记忆数据库尚未就绪") from exc
-    return {"items": [_reminder_payload(row) for row in rows]}
+    hashes = payload.get("hashes")
+    if not isinstance(hashes, list) or not hashes:
+        raise HTTPException(status_code=400, detail="hashes 不能为空")
+    unique = list(dict.fromkeys(str(item).strip() for item in hashes if str(item).strip()))[:200]
+    deleted = 0
+    for emoji_hash in unique:
+        try:
+            row = await chat_repository.delete_emoji(tenant, emoji_hash)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail="聊天数据库尚未就绪") from exc
+        if row is None:
+            continue
+        emoji_module.remove_emoji_files(row.path, row.hash)
+        deleted += 1
+    return {"deleted": deleted}
 
 
 def _scheduler_jobs() -> list[dict[str, Any]]:
@@ -552,31 +530,30 @@ def _scheduler_jobs() -> list[dict[str, Any]]:
 
 @router.get("/health")
 async def chat_health() -> dict[str, Any]:
-    """返回聊天记忆、调度器与在线 Bot 的可用状态。"""
+    """返回聊天存储、调度器与在线 Bot 的可用状态。"""
     try:
         enabled = bool(get_config_manager().get_system()["chat"].get("enabled"))
     except Exception:
         enabled = False
+    focus_groups = []
+    focus_ok = True
+    try:
+        focus_groups = focus_mode_manager.status_snapshot()
+        focus_ok = all(
+            group["worker_alive"] and group["consecutive_failures"] <= FAILURE_THRESHOLD for group in focus_groups
+        )
+    except Exception:
+        focus_groups = []
+        logger.opt(exception=True).debug("[ChatFocus] 健康状态读取失败")
     return {
         "enabled": enabled,
-        "memory_ready": is_ready(),
+        "storage_ready": is_ready(),
         "degraded_reason": degraded_reason(),
         "scheduler_ready": bool(_scheduler_jobs()),
         "online_bots": len(get_bots()),
+        "focus_groups": focus_groups,
+        "focus_ok": focus_ok,
     }
-
-
-@router.get("/jobs")
-async def chat_jobs(tenant: str = "") -> dict[str, Any]:
-    """返回调度任务与租户游标，游标读取失败时仍返回任务列表。"""
-    cursors: list[dict[str, Any]] = []
-    if tenant.strip():
-        try:
-            rows = await chat_repository.list_cursors(_tenant(tenant))
-            cursors = [_cursor_payload(row) for row in rows]
-        except RuntimeError:
-            cursors = []
-    return {"jobs": _scheduler_jobs(), "cursors": cursors}
 
 
 image_router = APIRouter(prefix="/chat", tags=["fxbot-chat"], dependencies=[Depends(sse_auth)])
@@ -589,7 +566,25 @@ async def emoji_image(emoji_hash: str, tenant: str) -> FileResponse:
     try:
         row = await chat_repository.get_emoji(tenant, emoji_hash)
     except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail="聊天记忆数据库尚未就绪") from exc
+        raise HTTPException(status_code=503, detail="聊天数据库尚未就绪") from exc
     if row is None or not row.path or not Path(row.path).is_file():
         raise HTTPException(status_code=404, detail="表情不存在")
     return FileResponse(row.path)
+
+
+@image_router.get("/emoji/{emoji_hash}/thumbnail")
+async def emoji_thumbnail(emoji_hash: str, tenant: str) -> FileResponse:
+    """返回表情缩略图；生成失败时回退原图。"""
+    tenant = _tenant(tenant)
+    try:
+        row = await chat_repository.get_emoji(tenant, emoji_hash)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail="聊天数据库尚未就绪") from exc
+    if row is None or not row.path or not Path(row.path).is_file():
+        raise HTTPException(status_code=404, detail="表情不存在")
+    try:
+        target = await asyncio.to_thread(emoji_module.emoji_thumbnail, emoji_hash, row.path)
+    except Exception:
+        logger.opt(exception=True).debug("[Chat] 表情缩略图生成失败，回退原图")
+        return FileResponse(row.path)
+    return FileResponse(target)

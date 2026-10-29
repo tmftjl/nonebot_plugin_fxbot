@@ -10,7 +10,7 @@ from collections.abc import AsyncIterator
 
 from nonebot import logger
 
-from .base import BaseProvider, ChatProvider, EmbeddingProvider
+from .base import STTProvider, TTSProvider, BaseProvider, ChatProvider, EmbeddingProvider
 from ...config import get_manager as get_config_manager
 from .register import provider_registry, get_provider_class
 
@@ -91,8 +91,13 @@ class ProviderManager:
     async def _get(self, name: str, *, capability: str, acquire: bool = False) -> _ProviderLease:
         async with self._lock:
             provider_name, config = self._resolve_config(name, capability=capability)
-            cache_key = provider_name if capability == "chat" else f"embedding:{provider_name}"
-            expected = ChatProvider if capability == "chat" else EmbeddingProvider
+            cache_key = provider_name if capability == "chat" else f"{capability}:{provider_name}"
+            expected = {
+                "chat": ChatProvider,
+                "embedding": EmbeddingProvider,
+                "stt": STTProvider,
+                "tts": TTSProvider,
+            }[capability]
             cached = self._providers.get(cache_key)
             if isinstance(cached, expected) and cached.config == config:
                 state = self._leases[id(cached)]
@@ -118,9 +123,19 @@ class ProviderManager:
         state = await self._get(name, capability="embedding")
         return state.provider
 
+    async def get_stt_provider(self, name: str = "") -> STTProvider:
+        """获取语音识别 Provider；留空时使用第一个可用的。"""
+        state = await self._get(name, capability="stt")
+        return state.provider
+
+    async def get_tts_provider(self, name: str = "") -> TTSProvider:
+        """获取语音合成 Provider；留空时使用第一个可用的。"""
+        state = await self._get(name, capability="tts")
+        return state.provider
+
     def _resolve_config(self, name: str, *, capability: str) -> tuple[str, dict[str, Any]]:
         configs = _provider_configs()
-        provider_name = name or _default_provider_name()
+        provider_name = name or (_default_provider_name() if capability == "chat" else "")
 
         if provider_name and provider_name in configs:
             return provider_name, configs[provider_name]

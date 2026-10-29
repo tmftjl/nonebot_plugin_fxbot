@@ -46,6 +46,18 @@ class ChatMessage(BaseIDModel, table=True):
     recall_note: str = Field(default="", nullable=False)
 
 
+class ChatRecallTombstone(BaseIDModel, table=True):
+    """保存先于原始消息落库的撤回通知，落库时消费。"""
+
+    __tablename__ = "chat_recall_tombstone"
+    __table_args__ = (UniqueConstraint("tenant", "platform_message_id"),)
+
+    tenant: str = Field(nullable=False)
+    platform_message_id: str = Field(nullable=False)
+    deleted_at: datetime = Field(default_factory=utc_now_naive, nullable=False)
+    delete_operator: str = Field(default="", nullable=False)
+
+
 class ChatTurn(BaseIDModel, table=True):
     """一轮生成的执行与投递状态。"""
 
@@ -104,7 +116,7 @@ class ChatTurnItem(BaseIDModel, table=True):
 
 
 class ChatSessionState(BaseIDModel, table=True):
-    """会话代次与记忆开关的持久状态。"""
+    """会话代次与学习开关的持久状态。"""
 
     __tablename__ = "chat_session_state"
     __table_args__ = (UniqueConstraint("tenant"),)
@@ -113,19 +125,13 @@ class ChatSessionState(BaseIDModel, table=True):
     generation: int = Field(default=0, nullable=False)
     cleared_at: datetime | None = Field(default=None, nullable=True)
     last_active_at: datetime | None = Field(default=None, nullable=True)
-    backfilled_at: datetime | None = Field(default=None, nullable=True)
     learn_enabled: bool | None = Field(default=None, nullable=True)
     proactive_enabled: bool | None = Field(default=None, nullable=True)
-    facts_version: int = Field(default=0, nullable=False)
-    episodes_version: int = Field(default=0, nullable=False)
-    profile_version: int = Field(default=0, nullable=False)
-    knowledge_version: int = Field(default=0, nullable=False)
-    degraded_reason: str = Field(default="", nullable=False)
     updated_at: datetime = Field(default_factory=utc_now_naive, nullable=False)
 
 
 class ChatJobCursor(BaseIDModel, table=True):
-    """每个租户、每种记忆任务的独立游标。"""
+    """每个租户、每种学习任务的独立游标。"""
 
     __tablename__ = "chat_job_cursor"
     __table_args__ = (UniqueConstraint("tenant", "job"),)
@@ -138,191 +144,6 @@ class ChatJobCursor(BaseIDModel, table=True):
     fail_count: int = Field(default=0, nullable=False)
     next_retry_at: datetime | None = Field(default=None, nullable=True)
     last_error: str = Field(default="", nullable=False)
-    updated_at: datetime = Field(default_factory=utc_now_naive, nullable=False)
-
-
-class ChatJobBatch(BaseIDModel, table=True):
-    """批次幂等边界与执行状态。"""
-
-    __tablename__ = "chat_job_batch"
-    __table_args__ = (
-        UniqueConstraint("tenant", "job", "range_start", "range_end", "algorithm_version"),
-        Index("ix_chat_job_batch_tenant_status", "tenant", "status"),
-    )
-
-    tenant: str = Field(nullable=False)
-    job: str = Field(default="memory", nullable=False)
-    range_start: int = Field(nullable=False)
-    range_end: int = Field(nullable=False)
-    algorithm_version: int = Field(default=1, nullable=False)
-    status: str = Field(default="pending", nullable=False)
-    attempt: int = Field(default=0, nullable=False)
-    error: str = Field(default="", nullable=False)
-    completed_at: datetime | None = Field(default=None, nullable=True)
-    created_at: datetime = Field(default_factory=utc_now_naive, nullable=False)
-
-
-class ChatEpisode(BaseIDModel, table=True):
-    """抽取出的主题片段，保留来源消息范围。"""
-
-    __tablename__ = "chat_episode"
-    __table_args__ = (
-        UniqueConstraint("tenant", "episode_key"),
-        Index("ix_chat_episode_tenant_status", "tenant", "status"),
-    )
-
-    tenant: str = Field(nullable=False)
-    episode_key: str = Field(nullable=False)
-    batch_id: str = Field(default="", nullable=False)
-    topic_index: int = Field(default=0, nullable=False)
-    seq_start: int = Field(default=0, nullable=False)
-    seq_end: int = Field(default=0, nullable=False)
-    title: str = Field(default="", nullable=False)
-    keywords: str = Field(default="[]", nullable=False)
-    summary: str = Field(default="", nullable=False)
-    participants: str = Field(default="[]", nullable=False)
-    emotion_valence: float | None = Field(default=None, nullable=True)
-    emotion_arousal: float | None = Field(default=None, nullable=True)
-    status: str = Field(default="active", nullable=False)
-    source_revision: int = Field(default=0, nullable=False)
-    created_at: datetime = Field(default_factory=utc_now_naive, nullable=False)
-    updated_at: datetime = Field(default_factory=utc_now_naive, nullable=False)
-
-
-class ChatMemory(BaseIDModel, table=True):
-    """长期事实；同一主体同一个谓词允许多个值。"""
-
-    __tablename__ = "chat_memory"
-    __table_args__ = (
-        UniqueConstraint("tenant", "subject_id", "key", "value_hash"),
-        Index("ix_chat_memory_tenant_subject", "tenant", "subject_id", "status"),
-    )
-
-    tenant: str = Field(nullable=False)
-    subject_id: str = Field(nullable=False)
-    subject_name: str = Field(default="", nullable=False)
-    asserted_by: str = Field(default="", nullable=False)
-    key: str = Field(nullable=False)
-    value: str = Field(default="", nullable=False)
-    value_hash: str = Field(default="", nullable=False)
-    category: str = Field(default="other", nullable=False)
-    confidence: float = Field(default=0.6, nullable=False)
-    importance: float = Field(default=0.5, nullable=False)
-    status: str = Field(default="active", nullable=False)
-    source: str = Field(default="extract", nullable=False)
-    source_episode_id: int | None = Field(default=None, nullable=True)
-    source_batch_id: str = Field(default="", nullable=False)
-    evidence_count: int = Field(default=0, nullable=False)
-    valid_evidence_count: int = Field(default=0, nullable=False)
-    hits: int = Field(default=0, nullable=False)
-    last_hit_at: datetime | None = Field(default=None, nullable=True)
-    asserted_at: datetime = Field(default_factory=utc_now_naive, nullable=False)
-    expires_at: datetime | None = Field(default=None, nullable=True)
-    sensitive: bool = Field(default=False, nullable=False)
-    version: int = Field(default=0, nullable=False)
-    created_at: datetime = Field(default_factory=utc_now_naive, nullable=False)
-    updated_at: datetime = Field(default_factory=utc_now_naive, nullable=False)
-
-
-class ChatMemoryEvidence(BaseIDModel, table=True):
-    """事实到原始消息的反查证据。"""
-
-    __tablename__ = "chat_memory_evidence"
-    __table_args__ = (
-        UniqueConstraint("tenant", "memory_id", "message_seq"),
-        Index("ix_chat_memory_evidence_tenant_message", "tenant", "message_seq"),
-        Index("ix_chat_memory_evidence_tenant_status", "tenant", "memory_id", "status"),
-    )
-
-    tenant: str = Field(nullable=False)
-    memory_id: int = Field(nullable=False)
-    message_seq: int = Field(nullable=False)
-    platform_message_id: str = Field(default="", nullable=False)
-    snippet: str = Field(default="", nullable=False)
-    status: str = Field(default="valid", nullable=False)
-    created_at: datetime = Field(default_factory=utc_now_naive, nullable=False)
-
-
-class ChatForgetMarker(BaseIDModel, table=True):
-    """禁止重建的主体或事实指纹。"""
-
-    __tablename__ = "chat_forget_marker"
-    __table_args__ = (
-        UniqueConstraint("tenant", "scope", "subject_id", "fact_key", "fact_value_hash"),
-        Index("ix_chat_forget_marker_tenant_subject", "tenant", "subject_id"),
-    )
-
-    tenant: str = Field(nullable=False)
-    scope: str = Field(default="subject", nullable=False)
-    subject_id: str = Field(default="", nullable=False)
-    fact_key: str = Field(default="", nullable=False)
-    fact_value_hash: str = Field(default="", nullable=False)
-    reason: str = Field(default="", nullable=False)
-    created_at: datetime = Field(default_factory=utc_now_naive, nullable=False)
-
-
-class ChatAlias(BaseIDModel, table=True):
-    """租户内的昵称别名，不跨群合并。"""
-
-    __tablename__ = "chat_alias"
-    __table_args__ = (
-        UniqueConstraint("tenant", "user_id", "alias"),
-        Index("ix_chat_alias_tenant_normalized", "tenant", "normalized"),
-    )
-
-    tenant: str = Field(nullable=False)
-    user_id: str = Field(nullable=False)
-    alias: str = Field(nullable=False)
-    normalized: str = Field(default="", nullable=False)
-    source: str = Field(default="nickname", nullable=False)
-    first_seen: datetime = Field(default_factory=utc_now_naive, nullable=False)
-    last_seen: datetime = Field(default_factory=utc_now_naive, nullable=False)
-    confirmed: bool = Field(default=False, nullable=False)
-
-
-class ChatProfile(BaseIDModel, table=True):
-    """主体画像；stale 期间不注入。"""
-
-    __tablename__ = "chat_profile"
-    __table_args__ = (UniqueConstraint("tenant", "subject_id"),)
-
-    tenant: str = Field(nullable=False)
-    subject_id: str = Field(nullable=False)
-    display_name: str = Field(default="", nullable=False)
-    sections: str = Field(default="{}", nullable=False)
-    summary: str = Field(default="", nullable=False)
-    evidence_ids: str = Field(default="[]", nullable=False)
-    source_versions: str = Field(default="{}", nullable=False)
-    manual_override: str = Field(default="", nullable=False)
-    manual_version: int = Field(default=0, nullable=False)
-    version: int = Field(default=0, nullable=False)
-    stale: bool = Field(default=False, nullable=False)
-    stale_reason: str = Field(default="", nullable=False)
-    last_built_at: datetime | None = Field(default=None, nullable=True)
-    created_at: datetime = Field(default_factory=utc_now_naive, nullable=False)
-    updated_at: datetime = Field(default_factory=utc_now_naive, nullable=False)
-
-
-class ChatRelation(BaseIDModel, table=True):
-    """主体到用户/组织/地点/物品的类型化关系。"""
-
-    __tablename__ = "chat_relation"
-    __table_args__ = (
-        UniqueConstraint("tenant", "subject_id", "predicate", "object_kind", "object_key"),
-        Index("ix_chat_relation_tenant_object", "tenant", "object_key"),
-    )
-
-    tenant: str = Field(nullable=False)
-    subject_id: str = Field(nullable=False)
-    predicate: str = Field(nullable=False)
-    object_kind: str = Field(default="user", nullable=False)
-    object_key: str = Field(nullable=False)
-    object_name: str = Field(default="", nullable=False)
-    object_user_id: str = Field(default="", nullable=False)
-    confidence: float = Field(default=0.6, nullable=False)
-    source_memory_id: int | None = Field(default=None, nullable=True)
-    status: str = Field(default="active", nullable=False)
-    created_at: datetime = Field(default_factory=utc_now_naive, nullable=False)
     updated_at: datetime = Field(default_factory=utc_now_naive, nullable=False)
 
 
@@ -345,6 +166,7 @@ class ChatStyle(BaseIDModel, table=True):
     last_used_at: datetime | None = Field(default=None, nullable=True)
     manual_override: str = Field(default="", nullable=False)
     manual_version: int = Field(default=0, nullable=False)
+    needs_rebuild: bool = Field(default=False, nullable=False)
     created_at: datetime = Field(default_factory=utc_now_naive, nullable=False)
     updated_at: datetime = Field(default_factory=utc_now_naive, nullable=False)
 
@@ -389,9 +211,11 @@ class ChatExpression(BaseIDModel, table=True):
     type: str = Field(default="phrase", nullable=False)
     count: float = Field(default=0.0, nullable=False)
     checked: bool = Field(default=False, nullable=False)
+    manual_checked: bool = Field(default=False, nullable=False)
     rejected: bool = Field(default=False, nullable=False)
     source_message_seq: int = Field(default=0, nullable=False)
     source_batch_id: str = Field(default="", nullable=False)
+    contributions: str = Field(default="[]", nullable=False)
     learn_count: int = Field(default=1, nullable=False)
     use_count: int = Field(default=0, nullable=False)
     last_used_at: datetime | None = Field(default=None, nullable=True)
@@ -419,59 +243,6 @@ class ChatPlannerSample(BaseIDModel, table=True):
     created_at: datetime = Field(default_factory=utc_now_naive, nullable=False)
 
 
-class ChatState(BaseIDModel, table=True):
-    """租户情绪与单个用户的熟悉度；subject_id 为空表示租户情绪行。"""
-
-    __tablename__ = "chat_state"
-    __table_args__ = (UniqueConstraint("tenant", "subject_id"),)
-
-    tenant: str = Field(nullable=False)
-    subject_id: str = Field(default="", nullable=False)
-    valence: float = Field(default=0.0, nullable=False)
-    arousal: float = Field(default=0.0, nullable=False)
-    familiarity: float = Field(default=0.0, nullable=False)
-    affinity: float = Field(default=0.0, nullable=False)
-    last_interaction_at: datetime | None = Field(default=None, nullable=True)
-    last_decay_at: datetime | None = Field(default=None, nullable=True)
-    updated_at: datetime = Field(default_factory=utc_now_naive, nullable=False)
-
-
-class ChatBehaviorSample(BaseIDModel, table=True):
-    """一次动作及其十分钟后的归因结果。"""
-
-    __tablename__ = "chat_behavior_sample"
-    __table_args__ = (
-        UniqueConstraint("tenant", "turn_id", "action"),
-        Index("ix_chat_behavior_sample_tenant_outcome", "tenant", "outcome", "observed_until"),
-    )
-
-    tenant: str = Field(nullable=False)
-    turn_id: str = Field(nullable=False)
-    trigger_kind: str = Field(default="", nullable=False)
-    scene_tags: str = Field(default="[]", nullable=False)
-    action: str = Field(default="", nullable=False)
-    acted_at: datetime = Field(default_factory=utc_now_naive, nullable=False)
-    observed_until: datetime = Field(default_factory=utc_now_naive, nullable=False)
-    outcome: str = Field(default="pending", nullable=False)
-    attributed_at: datetime | None = Field(default=None, nullable=True)
-
-
-class ChatBehavior(BaseIDModel, table=True):
-    """场景到动作的周聚合，供 Planner 提示参考。"""
-
-    __tablename__ = "chat_behavior"
-    __table_args__ = (UniqueConstraint("tenant", "scene_hash", "action"),)
-
-    tenant: str = Field(nullable=False)
-    scene_hash: str = Field(nullable=False)
-    scene_tags: str = Field(default="[]", nullable=False)
-    action: str = Field(default="", nullable=False)
-    outcome: str = Field(default="continued", nullable=False)
-    confidence: float = Field(default=0.0, nullable=False)
-    count: int = Field(default=0, nullable=False)
-    last_seen: datetime = Field(default_factory=utc_now_naive, nullable=False)
-
-
 class ChatEmoji(BaseIDModel, table=True):
     """表情包索引；文件保存在 ai_chat/emoji。"""
 
@@ -486,63 +257,26 @@ class ChatEmoji(BaseIDModel, table=True):
     count: int = Field(default=0, nullable=False)
     last_used: datetime | None = Field(default=None, nullable=True)
     enabled: bool = Field(default=True, nullable=False)
+    # 旧数据迁移后默认为已注册；采集入口显式写入 False
+    registered: bool = Field(default=True, nullable=False)
+    vlm_processed: bool = Field(default=True, nullable=False)
+    register_time: datetime | None = Field(default=None, nullable=True)
     created_at: datetime = Field(default_factory=utc_now_naive, nullable=False)
 
 
-class ChatKnowledgeDoc(BaseIDModel, table=True):
-    """租户知识文档；staging → active 在同一事务内完成。"""
+class ChatTrace(BaseIDModel, table=True):
+    """每轮注入与调用的最小追踪；保留 7 天。"""
 
-    __tablename__ = "chat_knowledge_doc"
-    __table_args__ = (UniqueConstraint("tenant", "hash"),)
+    __tablename__ = "chat_trace"
+    __table_args__ = (Index("ix_chat_trace_tenant_created", "tenant", "created_at"),)
 
     tenant: str = Field(nullable=False)
-    title: str = Field(nullable=False)
-    source: str = Field(default="", nullable=False)
-    hash: str = Field(nullable=False)
-    status: str = Field(default="staging", nullable=False)
+    turn_id: str = Field(default="", nullable=False)
+    trigger_kind: str = Field(default="", nullable=False)
+    request_preview: str = Field(default="", nullable=False)
+    injected: str = Field(default="{}", nullable=False)
+    budget: str = Field(default="{}", nullable=False)
+    provider: str = Field(default="", nullable=False)
+    latency_ms: int = Field(default=0, nullable=False)
+    error: str = Field(default="", nullable=False)
     created_at: datetime = Field(default_factory=utc_now_naive, nullable=False)
-    updated_at: datetime = Field(default_factory=utc_now_naive, nullable=False)
-
-
-class ChatKnowledgeChunk(BaseIDModel, table=True):
-    """知识文档切片，参与租户内 BM25 检索。"""
-
-    __tablename__ = "chat_knowledge_chunk"
-    __table_args__ = (
-        UniqueConstraint("tenant", "doc_id", "seq"),
-        Index("ix_chat_knowledge_chunk_tenant_doc", "tenant", "doc_id"),
-    )
-
-    tenant: str = Field(nullable=False)
-    doc_id: int = Field(nullable=False)
-    seq: int = Field(nullable=False)
-    content: str = Field(nullable=False)
-    keywords: str = Field(default="[]", nullable=False)
-    created_at: datetime = Field(default_factory=utc_now_naive, nullable=False)
-
-
-class ChatReminder(BaseIDModel, table=True):
-    """用户提醒；确认后由调度任务领取并发送。"""
-
-    __tablename__ = "chat_reminder"
-    __table_args__ = (
-        UniqueConstraint("tenant", "idempotency_key"),
-        Index("ix_chat_reminder_status_due", "status", "due_at"),
-        Index("ix_chat_reminder_status_next", "status", "next_attempt_at"),
-    )
-
-    tenant: str = Field(nullable=False)
-    user_id: str = Field(nullable=False)
-    content: str = Field(nullable=False)
-    due_at: datetime = Field(nullable=False)
-    status: str = Field(default="pending_confirmation", nullable=False)
-    confirmed_at: datetime | None = Field(default=None, nullable=True)
-    claim_token: str = Field(default="", nullable=False)
-    claimed_at: datetime | None = Field(default=None, nullable=True)
-    attempts: int = Field(default=0, nullable=False)
-    next_attempt_at: datetime | None = Field(default=None, nullable=True)
-    sent_message_id: str = Field(default="", nullable=False)
-    idempotency_key: str = Field(nullable=False)
-    last_error: str = Field(default="", nullable=False)
-    created_at: datetime = Field(default_factory=utc_now_naive, nullable=False)
-    sent_at: datetime | None = Field(default=None, nullable=True)

@@ -81,8 +81,10 @@ class LLMResponse:
         return bool(self.tool_calls)
 
     def to_message_dict(self) -> dict[str, Any]:
-        """转换为 OpenAI 风格消息字典。"""
+        """转换为 OpenAI 风格消息字典，附带可往返的 Provider 原生数据。"""
         msg: dict[str, Any] = {"role": self.role, "content": self.content}
         if self.tool_calls:
             msg["tool_calls"] = self.tool_calls
+        if self.provider_data:
+            msg["provider_data"] = self.provider_data
         return msg

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from nonebot import get_driver
+from nonebot import logger, get_driver
 from nonebot.plugin import PluginMetadata
 
 from . import bootstrap
+
+_shutdown_registered = False
 
 __plugin_meta__ = PluginMetadata(
     name="FxBot",
@@ -19,14 +21,34 @@ __plugin_meta__ = PluginMetadata(
 @get_driver().on_startup
 async def _fxbot_startup() -> None:
     """在 NoneBot 启动阶段初始化框架底座。"""
-    await bootstrap.init()
+    global _shutdown_registered
+
+    try:
+        await bootstrap.init()
+    finally:
+        if not _shutdown_registered:
+            get_driver().on_shutdown(_fxbot_shutdown)
+            _shutdown_registered = True
 
 
-@get_driver().on_shutdown
 async def _fxbot_shutdown() -> None:
     """在 NoneBot 关闭阶段释放共享资源。"""
+    from .chat.focus import focus_mode_manager
     from .utils.http import close_shared_async_client
     from .chat.providers import provider_manager
+    from .chat.tools.subagent import subagent_tasks
+    from .chat.amemorix.runtime import amemorix_runtime
+    from .chat.amemorix.writeback import chat_writeback
 
-    await provider_manager.reset()
-    await close_shared_async_client()
+    for name, cleanup in (
+        ("Focus 共享组", focus_mode_manager.stop_all),
+        ("后台子代理", subagent_tasks.cancel_all),
+        ("聊天记忆回写", chat_writeback.stop),
+        ("长期记忆运行时", amemorix_runtime.stop),
+        ("模型提供方", provider_manager.reset),
+        ("共享 HTTP 客户端", close_shared_async_client),
+    ):
+        try:
+            await cleanup()
+        except Exception:
+            logger.opt(exception=True).warning(f"[FxBot] 关闭清理失败: {name}")

@@ -6,6 +6,9 @@ import type {
   ProviderPayload,
   PermissionConfig,
   StatsToday,
+  StatsHistory,
+  ModelUsage,
+  SystemStatus,
   CacheStats,
   CacheKeys,
   CacheClearPayload,
@@ -16,25 +19,38 @@ import type {
   ChatExpression,
   ChatPlannerSample,
   ChatReplyGate,
-  ChatBehaviorResponse,
   ChatEmoji,
-  ChatKnowledgeDoc,
-  ChatReminder,
+  ChatEmojiCounts,
   ChatHealth,
-  ChatJobs,
+  ChatTrace,
+  AmemorixConfig,
+  AmemorixBundle,
+  AmemorixCorrectionItem,
+  AmemorixCorrectionPreview,
+  AmemorixCorrectionTarget,
+  AmemorixGraph,
+  AmemorixGraphNodeDetail,
+  AmemorixImage,
+  AmemorixImageStatus,
+  AmemorixImportSettings,
+  AmemorixImportTask,
+  AmemorixProfile,
+  AmemorixProfileDetail,
+  AmemorixRecordDetail,
+  AmemorixRecords,
+  AmemorixRecycleItem,
+  AmemorixRuntime,
+  AmemorixSource,
+  AmemorixStatus,
+  AmemorixTimelineItem,
+  ModelRoutingData,
 } from '@/types/api'
 
-export function getToken(): string {
-  try {
-    const params = new URLSearchParams(window.location.search)
-    const token = params.get('token')
-    if (token) {
-      localStorage.setItem('fxbot_console_token', token)
-      return token
-    }
-  } catch {}
-  return localStorage.getItem('fxbot_console_token') || ''
-}
+import { clearToken, getToken } from './auth'
+
+export { getToken }
+
+const tenantQuery = (tenant: string) => `tenant=${encodeURIComponent(tenant)}`
 
 class ApiClient {
   private client: AxiosInstance
@@ -59,6 +75,11 @@ class ApiClient {
     this.client.interceptors.response.use(
       (response) => response,
       (error) => {
+        const status = error?.response?.status
+        if (status === 401 || status === 403) {
+          // 令牌失效：清掉本地凭证，界面回到登录页
+          clearToken('登录已过期，请重新登录')
+        }
         console.error('API Error:', error)
         return Promise.reject(error)
       }
@@ -99,10 +120,20 @@ export const dataApi = {
 }
 
 // 配置 API
+let configRevisions: Record<string, string> | undefined
+
 export const configApi = {
-  getAll: () => api.get<Record<string, any>>('/config'),
+  getAll: async () => {
+    const { revisions, ...configs } = await api.get<Record<string, any>>('/config')
+    configRevisions = revisions
+    return configs
+  },
   getTabs: () => api.get<any[]>('/config/tabs'),
-  save: (configs: Record<string, any>) => api.put<ApiResponse>('/config', configs),
+  getChatTab: () => api.get<any>('/config/chat'),
+  save: (configs: Record<string, any>) => api.put<ApiResponse>('/config', {
+    ...configs,
+    base_revisions: configRevisions,
+  }),
 }
 
 // 权限 API
@@ -114,6 +145,12 @@ export const permissionApi = {
 // 统计 API
 export const statsApi = {
   getToday: () => api.get<StatsToday>('/stats/today'),
+  getHistory: (days = 14) => api.get<StatsHistory>(`/stats/history?days=${days}`),
+  getModelUsage: (hours = 24) => api.get<ModelUsage>(`/stats/model_usage?hours=${hours}`),
+}
+
+export const systemApi = {
+  status: () => api.get<SystemStatus>('/system/status'),
 }
 
 export const cacheApi = {
@@ -128,6 +165,8 @@ export const chatApi = {
   tenants: () => api.get<{ tenants: ChatTenant[] }>('/chat/tenants'),
   getStyle: (tenant: string) =>
     api.get<{ style: ChatStyle | null }>(`/chat/style?tenant=${encodeURIComponent(tenant)}`),
+  saveStyle: (tenant: string, manualOverride: string) =>
+    api.put<{ style: ChatStyle }>('/chat/style', { tenant, manual_override: manualOverride }),
   deleteStyle: (tenant: string) =>
     api.delete<{ deleted: boolean }>(`/chat/style?tenant=${encodeURIComponent(tenant)}`),
   listJargon: (tenant: string, status = 'all') =>
@@ -152,39 +191,171 @@ export const chatApi = {
     ),
   getReplyGate: (tenant: string, limit = 100) =>
     api.get<ChatReplyGate>(`/chat/gate?tenant=${encodeURIComponent(tenant)}&limit=${limit}`),
-  getBehavior: (tenant: string, limit = 100) =>
-    api.get<ChatBehaviorResponse>(
-      `/chat/behavior?tenant=${encodeURIComponent(tenant)}&limit=${limit}`,
-    ),
-  clearBehavior: (tenant: string) =>
-    api.delete<{ deleted: boolean }>(`/chat/behavior?tenant=${encodeURIComponent(tenant)}`),
-  listEmoji: (tenant: string) =>
-    api.get<{ items: ChatEmoji[] }>(`/chat/emoji?tenant=${encodeURIComponent(tenant)}`),
+  listEmoji: (
+    tenant: string,
+    options: { status?: string; search?: string; format?: string; sort?: string; order?: string } = {},
+  ) => {
+    const params = new URLSearchParams({ tenant })
+    if (options.status) params.set('status', options.status)
+    if (options.search) params.set('search', options.search)
+    if (options.format) params.set('format', options.format)
+    if (options.sort) params.set('sort', options.sort)
+    if (options.order) params.set('order', options.order)
+    return api.get<{ items: ChatEmoji[]; counts: ChatEmojiCounts }>(`/chat/emoji?${params.toString()}`)
+  },
   uploadEmoji: (tenant: string, content: string, description = '', tags: string[] = []) =>
     api.post<{ item: ChatEmoji }>('/chat/emoji', { tenant, content, description, tags }),
-  setEmojiEnabled: (tenant: string, hash: string, enabled: boolean) =>
-    api.patch<{ enabled: boolean }>(
-      `/chat/emoji/${encodeURIComponent(hash)}?tenant=${encodeURIComponent(tenant)}&enabled=${enabled}`,
+  updateEmoji: (
+    tenant: string,
+    hash: string,
+    patch: { enabled?: boolean; registered?: boolean; description?: string; tags?: string[] },
+  ) =>
+    api.patch<{ item: ChatEmoji }>(
+      `/chat/emoji/${encodeURIComponent(hash)}?tenant=${encodeURIComponent(tenant)}`,
+      patch,
     ),
   deleteEmoji: (tenant: string, hash: string) =>
     api.delete<{ deleted: boolean }>(
       `/chat/emoji/${encodeURIComponent(hash)}?tenant=${encodeURIComponent(tenant)}`,
     ),
-  emojiImageUrl: (tenant: string, hash: string) =>
-    `/fxbot/chat/emoji/${encodeURIComponent(hash)}/image?tenant=${encodeURIComponent(tenant)}&token=${encodeURIComponent(getToken())}`,
-  listKnowledge: (tenant: string) =>
-    api.get<{ items: ChatKnowledgeDoc[] }>(`/chat/knowledge?tenant=${encodeURIComponent(tenant)}`),
-  uploadKnowledge: (tenant: string, title: string, content: string, source = '控制台') =>
-    api.post<{ item: ChatKnowledgeDoc }>('/chat/knowledge', { tenant, title, content, source }),
-  deleteKnowledge: (tenant: string, id: number) =>
-    api.delete<{ deleted: boolean }>(`/chat/knowledge/${id}?tenant=${encodeURIComponent(tenant)}`),
-  listReminders: (tenant: string, limit = 100) =>
-    api.get<{ items: ChatReminder[] }>(
-      `/chat/reminders?tenant=${encodeURIComponent(tenant)}&limit=${limit}`,
-    ),
+  batchDeleteEmoji: (tenant: string, hashes: string[]) =>
+    api.post<{ deleted: number }>('/chat/emoji/batch-delete', { tenant, hashes }),
+  emojiThumbnailUrl: (tenant: string, hash: string) =>
+    `/fxbot/chat/emoji/${encodeURIComponent(hash)}/thumbnail?tenant=${encodeURIComponent(tenant)}&token=${encodeURIComponent(getToken())}`,
   getHealth: () => api.get<ChatHealth>('/chat/health'),
-  getJobs: (tenant: string) =>
-    api.get<ChatJobs>(`/chat/jobs?tenant=${encodeURIComponent(tenant)}`),
+  listTraces: (tenant: string, limit = 100) =>
+    api.get<{ items: ChatTrace[] }>(
+      `/chat/trace?tenant=${encodeURIComponent(tenant)}&limit=${limit}`,
+    ),
+}
+
+// A_Memorix 长期记忆 API
+export const amemorixApi = {
+  status: (tenant: string) => api.get<AmemorixStatus>(`/amemorix/status?${tenantQuery(tenant)}`),
+  records: (
+    tenant: string,
+    options: { query?: string; types?: string; limit?: number; includeInactive?: boolean } = {},
+  ) => {
+    const params = new URLSearchParams({ tenant })
+    if (options.query) params.set('query', options.query)
+    if (options.types) params.set('types', options.types)
+    if (options.limit) params.set('limit', String(options.limit))
+    if (options.includeInactive) params.set('include_inactive', 'true')
+    return api.get<AmemorixRecords>(`/amemorix/records?${params.toString()}`)
+  },
+  record: (tenant: string, type: string, id: string) =>
+    api.get<AmemorixRecordDetail>(
+      `/amemorix/records/${encodeURIComponent(type)}/${encodeURIComponent(id)}?${tenantQuery(tenant)}`,
+    ),
+  deleteRecord: (tenant: string, type: string, id: string) =>
+    api.delete<{ deleted: boolean }>(
+      `/amemorix/records/${encodeURIComponent(type)}/${encodeURIComponent(id)}?${tenantQuery(tenant)}`,
+    ),
+  sources: (tenant: string) => api.get<{ items: AmemorixSource[] }>(`/amemorix/sources?${tenantQuery(tenant)}`),
+  episodes: (tenant: string, query = '') =>
+    api.get<{ items: AmemorixRecords['items'] }>(
+      `/amemorix/episodes?${tenantQuery(tenant)}&query=${encodeURIComponent(query)}`,
+    ),
+  profiles: (tenant: string, query = '') =>
+    api.get<{ items: AmemorixProfile[] }>(
+      `/amemorix/profiles?${tenantQuery(tenant)}&query=${encodeURIComponent(query)}`,
+    ),
+  profile: (tenant: string, personId: string) =>
+    api.get<AmemorixProfileDetail>(
+      `/amemorix/profiles/${encodeURIComponent(personId)}?${tenantQuery(tenant)}`,
+    ),
+  graph: (tenant: string, limit = 200) =>
+    api.get<AmemorixGraph>(`/amemorix/graph?${tenantQuery(tenant)}&limit=${limit}`),
+  graphNode: (tenant: string, node: string) =>
+    api.get<AmemorixGraphNodeDetail>(
+      `/amemorix/graph/node?${tenantQuery(tenant)}&node=${encodeURIComponent(node)}`,
+    ),
+  runtime: () => api.get<AmemorixRuntime>('/amemorix/runtime'),
+  selfCheck: () => api.post<{ success: boolean; report: Record<string, any> }>('/amemorix/runtime/self-check'),
+  getConfig: () => api.get<AmemorixConfig>('/amemorix/config'),
+  saveConfig: (config: Record<string, any>) => api.put<AmemorixConfig>('/amemorix/config', { config }),
+  timeline: (tenant: string, limit = 100) =>
+    api.get<{ items: AmemorixTimelineItem[] }>(
+      `/amemorix/timeline?${tenantQuery(tenant)}&limit=${limit}`,
+    ),
+  recycle: (tenant: string, limit = 50) =>
+    api.get<{ items: AmemorixRecycleItem[] }>(`/amemorix/recycle?${tenantQuery(tenant)}&limit=${limit}`),
+  restoreRecycle: (payload: { tenant: string; kind: string; id: string }) =>
+    api.post<{ success: boolean }>('/amemorix/recycle/restore', payload),
+  purgeRecycle: (tenant: string, graceHours = 24) =>
+    api.post<{ success: boolean; result: Record<string, any> }>('/amemorix/recycle/purge', {
+      tenant,
+      grace_hours: graceHours,
+    }),
+  corrections: (tenant: string, kind = '', limit = 50) =>
+    api.get<{ items: AmemorixCorrectionItem[] }>(
+      `/amemorix/corrections?${tenantQuery(tenant)}&kind=${encodeURIComponent(kind)}&limit=${limit}`,
+    ),
+  rollbackCorrection: (payload: { tenant: string; kind: string; id: string }) =>
+    api.post<{ success: boolean }>('/amemorix/corrections/rollback', payload),
+  previewCorrection: (payload: {
+    tenant: string
+    request_text: string
+    targets: AmemorixCorrectionTarget[]
+  }) => api.post<AmemorixCorrectionPreview>('/amemorix/corrections/preview', payload),
+  executeCorrection: (payload: { tenant: string; plan_id: string }) =>
+    api.post<{ success: boolean; plan_id?: string }>('/amemorix/corrections/execute', payload),
+  bundles: (limit = 50) => api.get<{ items: AmemorixBundle[] }>(`/amemorix/bundles?limit=${limit}`),
+  inspectBundle: (path: string) =>
+    api.get<Record<string, any>>(`/amemorix/bundles/inspect?path=${encodeURIComponent(path)}`),
+  exportBundle: (tenant = '', contentLevel = 'knowledge') =>
+    api.post<Record<string, any>>('/amemorix/bundles/export', { tenant, content_level: contentLevel }),
+  importBundle: (payload: {
+    file_name: string
+    content_base64: string
+    tenant?: string
+    mode?: string
+  }) => api.post<Record<string, any>>('/amemorix/bundles/import', payload),
+  uninstallBundle: (installationId: string) =>
+    api.post<Record<string, any>>('/amemorix/bundles/uninstall', { installation_id: installationId }),
+  bundleFileUrl: (fileName: string) =>
+    `/fxbot/amemorix/bundles/file?file_name=${encodeURIComponent(fileName)}&token=${encodeURIComponent(getToken())}`,
+  imports: (limit = 50) =>
+    api.get<{ items: AmemorixImportTask[]; settings: AmemorixImportSettings }>(
+      `/amemorix/imports?limit=${limit}`,
+    ),
+  importSettings: () => api.get<{ success: boolean; settings: AmemorixImportSettings }>('/amemorix/imports/settings'),
+  importTask: (taskId: string) =>
+    api.get<{ success: boolean; task: AmemorixImportTask }>(
+      `/amemorix/imports/${encodeURIComponent(taskId)}?chunks=true`,
+    ),
+  pasteImport: (payload: {
+    tenant: string
+    name?: string
+    content: string
+    input_mode?: string
+    llm_enabled?: boolean
+  }) => api.post<Record<string, any>>('/amemorix/imports/paste', payload),
+  uploadImport: (payload: {
+    tenant: string
+    file_name: string
+    content_base64: string
+    input_mode?: string
+    llm_enabled?: boolean
+  }) => api.post<Record<string, any>>('/amemorix/imports/upload', payload),
+  cancelImport: (taskId: string) =>
+    api.post<Record<string, any>>(`/amemorix/imports/${encodeURIComponent(taskId)}/cancel`),
+  retryImport: (taskId: string) =>
+    api.post<Record<string, any>>(`/amemorix/imports/${encodeURIComponent(taskId)}/retry`),
+  images: (tenant: string, limit = 50, offset = 0) =>
+    api.get<{ success: boolean; items: AmemorixImage[]; status?: string; error?: string }>(
+      `/amemorix/images?${tenantQuery(tenant)}&limit=${limit}&offset=${offset}`,
+    ),
+  imageStatus: () => api.get<AmemorixImageStatus>('/amemorix/images/status'),
+  retryImages: () => api.post<Record<string, any>>('/amemorix/images/retry'),
+  uploadImage: (payload: { tenant: string; content_base64: string; description?: string }) =>
+    api.post<Record<string, any>>('/amemorix/images', payload),
+  deleteImage: (tenant: string, occurrenceId: string) =>
+    api.delete<Record<string, any>>(
+      `/amemorix/images/${encodeURIComponent(occurrenceId)}?${tenantQuery(tenant)}`,
+    ),
+  imageUrl: (tenant: string, occurrenceId: string) =>
+    `/fxbot/amemorix/images/${encodeURIComponent(occurrenceId)}/file?${tenantQuery(tenant)}&token=${encodeURIComponent(getToken())}`,
 }
 
 // 会员续费 API
@@ -221,6 +392,9 @@ export const providerApi = {
     api.put<ApiResponse>(`/ai_chat/provider/${encodeURIComponent(name)}`, payload),
   remove: (name: string) => api.delete<ApiResponse>(`/ai_chat/provider/${encodeURIComponent(name)}`),
   setDefault: (name: string) => api.post<ApiResponse>(`/ai_chat/provider/${encodeURIComponent(name)}/default`),
+  routing: () => api.get<ApiResponse<ModelRoutingData>>('/ai_chat/routing'),
+  setRouting: (task: string, provider: string) =>
+    api.put<ApiResponse>(`/ai_chat/routing/${encodeURIComponent(task)}`, { provider }),
 }
 
 // 插件/命令显示名 API
@@ -233,12 +407,14 @@ export const metaApi = {
       bots: (data.bots || []).map((item) => typeof item === 'string' ? item : item.self_id)
     }
   },
-  getPersonas: () => api.get<Record<string, string>>('/ai_chat/personas'),
+  getPersonas: () =>
+    api.get<{ items: Record<string, string>; default: string }>('/ai_chat/personas'),
   createPersona: (key: string, desc: string) =>
     api.post<{ success: boolean; message?: string }>('/ai_chat/persona', { key, desc }),
   updatePersona: (key: string, desc: string) =>
     api.put<{ success: boolean; message?: string }>(`/ai_chat/persona/${encodeURIComponent(key)}`, { desc }),
-  deletePersona: (key: string) => api.delete<{ success: boolean }>(`/ai_chat/persona/${encodeURIComponent(key)}`),
+  deletePersona: (key: string) =>
+    api.delete<{ success: boolean; message?: string }>(`/ai_chat/persona/${encodeURIComponent(key)}`),
   getKnowledgeStats: (personaName: string) => api.get<{ persona_name: string; count: number }>(`/ai_chat/knowledge/${encodeURIComponent(personaName)}/stats`),
   importKnowledgeText: (personaName: string, text: string, source: string = 'webui_import') =>
     api.post<{ success: boolean; message: string; count: number }>(`/ai_chat/knowledge/${encodeURIComponent(personaName)}/text`, { text, source }),

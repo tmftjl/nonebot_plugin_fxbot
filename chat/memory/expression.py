@@ -13,20 +13,13 @@ from nonebot import logger
 from rapidfuzz import fuzz
 
 from .state import is_ready
-from .config import (
-    memory_config,
-    expression_config,
-    tenant_learn_enabled,
-    expression_model_name,
-    expression_learning_enabled,
-)
+from .config import expression_config, tenant_learn_enabled, expression_vector_config
 from .models import ChatMessage, ChatExpression
-from .extract import SENSITIVE
-from ...config import get_manager as get_config_manager
-from ..bindings import PROVIDER, get_binding
-from .filtering import should_learn, sanitize_line
-from ..providers import provider_manager
+from .learning import tenant_target, learning_flags
+from .filtering import SENSITIVE, should_learn, sanitize_line
 from .repository import TenantJobState, chat_repository
+from .expression_vector import select_by_vectors
+from ..providers.routing import routed_task, fallback_provider
 
 _BATCH_SIZE = 40
 _MAX_ITEMS = 12
@@ -34,6 +27,8 @@ _COUNT_STEP = 0.006
 _COUNT_CAP = 5.0
 _MERGE_THRESHOLD = 75
 _SELECT_THRESHOLD = 0.75
+# MaiBot `src/chat/replyer/maisaka_expression_selector.py` MAX_SELECTED_EXPRESSIONS
+_MAX_INJECTED = 5
 _EXPRESSION_TYPES = frozenset({"phrase", "tone", "structure", "emoji"})
 
 _LEARN_SCHEMA: dict[str, Any] = {
@@ -43,10 +38,6 @@ _LEARN_SCHEMA: dict[str, Any] = {
 _REVIEW_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {"results": {"type": "array"}},
-}
-_SELECT_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {"selected_ids": {"type": "array"}},
 }
 _tick_lock: asyncio.Lock | None = None
 
@@ -207,14 +198,15 @@ async def request_review(provider: Any, items: list[dict[str, Any]], *, model: s
 
 def merge_candidates(
     items: list[ExpressionItem], rows: list[ChatExpression]
-) -> tuple[list[dict[str, Any]], dict[int, tuple[float, int]]]:
-    """把新条目并入相似表达；返回待插入条目与已有条目的计数更新。"""
+) -> tuple[list[dict[str, Any]], dict[int, tuple[float, int, float]]]:
+    """把新条目并入相似表达；返回待插入条目与已有条目的计数更新（含本批增量）。"""
     pool: list[dict[str, Any]] = [
         {
             "id": int(row.id or 0),
             "situation": row.situation,
             "style": row.style,
             "count": float(row.count),
+            "base": float(row.count),
             "learn": 0,
             "merged": False,
             "new": False,
@@ -230,6 +222,7 @@ def merge_candidates(
                 "style": item.style,
                 "type": item.type,
                 "count": 0.0,
+                "base": 0.0,
                 "learn": 0,
                 "source_message_seq": item.source_seq,
                 "merged": False,
@@ -241,7 +234,9 @@ def merge_candidates(
         target["learn"] = int(target["learn"]) + 1
         target["merged"] = True
     updates = {
-        int(row["id"]): (float(row["count"]), int(row["learn"])) for row in pool if not row["new"] and row["merged"]
+        int(row["id"]): (float(row["count"]), int(row["learn"]), float(row["count"]) - float(row["base"]))
+        for row in pool
+        if not row["new"] and row["merged"]
     }
     return new_items, updates
 
@@ -279,38 +274,23 @@ def _clean_messages(messages: list[ChatMessage], tenant: str) -> list[ChatMessag
     return result
 
 
-def _recent_budget(messages: list[ChatMessage], limit: int) -> list[ChatMessage]:
-    """从最新一条往前取，整体字符数不超过预算。"""
-    kept: list[ChatMessage] = []
-    used = 0
-    for message in reversed(messages):
-        size = len(message.content or "")
-        if kept and used + size > limit:
-            break
-        kept.append(message)
-        used += size
-    return list(reversed(kept))
-
-
 @asynccontextmanager
 async def _lease(tenant: str, provider: Any):
-    """复用调用方 Provider，否则按会话绑定或全局默认租用。"""
+    """复用调用方 Provider，否则按表达学习任务路由租用并允许回退。"""
     if provider is not None:
         yield provider
         return
-    name = get_binding(PROVIDER, tenant)
-    if not name:
-        name = str(get_config_manager().get_system()["chat"].get("provider") or "")
-    async with provider_manager.lease(name) as leased:
+    async with fallback_provider(routed_task("learner", "extract"), tenant) as leased:
         yield leased
 
 
 async def learn_expressions(tenant: str, *, provider: Any = None, cfg: dict[str, Any] | None = None) -> bool:
     """每 40 条人类消息学习一批；成功提交返回 True。"""
-    if not is_ready() or not expression_learning_enabled():
+    if not is_ready():
         return False
     config = cfg or expression_config()
-    if not config.get("enabled", True) or not config.get("learn", True):
+    _, learn = learning_flags(config.get("learning_list"), tenant_target(tenant))
+    if not learn:
         return False
     state = await chat_repository.get_session_state(tenant)
     if not tenant_learn_enabled(state):
@@ -331,18 +311,20 @@ async def learn_expressions(tenant: str, *, provider: Any = None, cfg: dict[str,
             expected_cursor=after,
             source_batch_id=expression_batch_id(int(raw[0].id or 0), seq_end),
         )
-    selected = _recent_budget(clean, int(memory_config()["max_input_chars_per_batch"]))
+    selected = clean
     seq_start = int(selected[0].id or 0)
     batch_id = expression_batch_id(seq_start, seq_end)
-    model = expression_model_name()
     try:
         async with _lease(tenant, provider) as leased:
-            items = await request_expressions(leased, selected, model=model)
+            items = await request_expressions(leased, selected)
             if items is None:
                 return False
             existing = await chat_repository.list_expressions(tenant, limit=1000)
             new_items, updates = merge_candidates(items, existing)
-            decisions = await request_review(leased, new_items, model=model) if new_items else []
+            if new_items and config.get("self_reflect", True):
+                decisions = await request_review(leased, new_items)
+            else:
+                decisions = [True] * len(new_items)
     except Exception as exc:
         logger.opt(exception=True).warning(f"[ChatExpression] 租户表达学习失败: {type(exc).__name__}")
         return False
@@ -371,6 +353,7 @@ async def learn_expressions(tenant: str, *, provider: Any = None, cfg: dict[str,
         cursor_seq=seq_end,
         expected_cursor=after,
         source_batch_id=batch_id,
+        evidence_ids=tuple(int(message.id or 0) for message in clean),
     )
 
 
@@ -398,84 +381,27 @@ class FuzzySelector:
         return [row for _, _, row in scored[:limit]]
 
 
-def build_select_prompt(query: str, candidates: list[ChatExpression]) -> list[dict[str, Any]]:
-    """构造可选表达列表，交给 LLM 按当前语境挑选。"""
-    lines = [f"{int(row.id or 0)}: 情境={row.situation} | 说法={row.style}" for row in candidates]
-    system = (
-        "你是表达选择器。根据当前聊天内容，从候选里挑选最自然、最贴合语境的表达。\n"
-        "最多选 5 条；没有合适的就返回空数组。不要照抄无关或冒犯的说法。\n"
-        '只输出 JSON：{"selected_ids":[1,2]}'
-    )
-    return [
-        {"role": "system", "content": system},
-        {"role": "user", "content": "\n".join([*lines, f"\n当前内容：{query}"])},
-    ]
-
-
-def parse_selected_ids(data: object, candidates: list[ChatExpression], limit: int) -> list[int] | None:
-    """校验 LLM 返回的 ID；重复与越界项丢弃。"""
-    if not isinstance(data, dict) or not isinstance(data.get("selected_ids"), list):
-        return None
-    allowed = {int(row.id or 0) for row in candidates}
-    selected: list[int] = []
-    for raw in data["selected_ids"]:
-        try:
-            expression_id = int(raw)
-        except (TypeError, ValueError):
-            continue
-        if expression_id in allowed and expression_id not in selected:
-            selected.append(expression_id)
-        if len(selected) >= limit:
-            break
-    return selected
-
-
-class LlmSelector:
-    """把候选交给 LLM 精排；默认关闭，失败时由调用方回退模糊匹配。"""
-
-    def __init__(self, sample_size: int = 50) -> None:
-        self.sample_size = max(1, int(sample_size))
-
-    async def select(
-        self, tenant: str, query: str, rows: list[ChatExpression], limit: int, *, provider: Any = None
-    ) -> list[ChatExpression]:
-        candidates = [row for row in rows if row.checked and not row.rejected][: self.sample_size]
-        if not candidates or limit <= 0:
-            return []
-        prompt = build_select_prompt(query, candidates)
-        async with _lease(tenant, provider) as leased:
-            data = await leased.chat_json(prompt, _SELECT_SCHEMA, model=expression_model_name() or None)
-        if isinstance(data, str):
-            data = json.loads(data)
-        selected = parse_selected_ids(data, candidates, limit)
-        if selected is None:
-            raise ValueError("表达选择结果格式错误")
-        by_id = {int(row.id or 0): row for row in candidates}
-        return [by_id[expression_id] for expression_id in selected]
-
-
-async def select_expressions(
-    tenant: str,
-    query: str,
-    rows: list[ChatExpression],
-    cfg: dict[str, Any] | None = None,
-    *,
-    provider: Any = None,
-) -> list[ChatExpression]:
-    """按配置选择表达；LLM 失败时回退本地模糊匹配。"""
-    config = cfg or expression_config()
-    limit = max(1, int(config.get("inject_top_k", 5)))
+async def select_expressions(tenant: str, query: str, rows: list[ChatExpression]) -> list[ChatExpression]:
+    """表达选择：开启向量时先召回再由模型筛选，否则按模糊相似度取 top-k。"""
     active = [row for row in rows if row.checked and not row.rejected]
     if not active:
         return []
-    if config.get("llm_select"):
+    vector_cfg = expression_vector_config()
+    if vector_cfg.get("enabled"):
         try:
-            return await LlmSelector(int(config.get("sample_size", 50))).select(
-                tenant, query, active, limit, provider=provider
-            )
-        except Exception:
-            logger.opt(exception=True).debug("[ChatExpression] LLM 选择失败，回退模糊匹配")
-    return await FuzzySelector().select(tenant, query, active, limit)
+            pool = int(vector_cfg.get("candidate_pool_size", 50))
+        except (TypeError, ValueError):
+            pool = 50
+        selected = await select_by_vectors(
+            tenant,
+            query,
+            active,
+            index_path=str(vector_cfg.get("index_path") or ""),
+            pool_size=pool,
+        )
+        if selected is not None:
+            return selected
+    return await FuzzySelector().select(tenant, query, active, _MAX_INJECTED)
 
 
 def expression_line(rows: list[ChatExpression]) -> str:
@@ -497,33 +423,35 @@ def _tick_guard() -> asyncio.Lock:
     return _tick_lock
 
 
-def _learn_enabled(candidate: TenantJobState, cfg: dict[str, Any]) -> bool:
-    if candidate.learn_enabled is not None:
-        return bool(candidate.learn_enabled)
-    return bool(cfg["learn_enabled"])
+def _learn_enabled(candidate: TenantJobState) -> bool:
+    """本租户显式关闭时跳过；未设置按开启处理。"""
+    return True if candidate.learn_enabled is None else bool(candidate.learn_enabled)
 
 
 async def expression_job_tick(*, provider: Any = None, cfg: dict[str, Any] | None = None) -> int:
-    """按抽取间隔检查可学习租户；每轮最多提交 max_tenants_per_tick 个。"""
-    if not is_ready() or not expression_learning_enabled():
+    """处理所有租户；并发上限只限制同时运行的任务，候选不再被截断。"""
+    if not is_ready():
         return 0
     config = cfg or expression_config()
-    memory_cfg = memory_config()
     async with _tick_guard():
         try:
             snapshot = await chat_repository.scheduling_snapshot()
         except Exception:
             logger.opt(exception=True).debug("[ChatExpression] 读取表达学习租户失败")
             return 0
-        processed = 0
-        for candidate in sorted(snapshot, key=lambda item: item.last_message_id, reverse=True):
-            if not _learn_enabled(candidate, memory_cfg):
-                continue
-            try:
-                if await learn_expressions(candidate.tenant, provider=provider, cfg=config):
-                    processed += 1
-            except Exception:
-                logger.opt(exception=True).warning(f"[ChatExpression] 租户表达学习失败: {candidate.tenant}")
-            if processed >= int(memory_cfg["max_tenants_per_tick"]):
-                break
-        return processed
+        candidates = sorted(
+            (candidate for candidate in snapshot if _learn_enabled(candidate)),
+            key=lambda item: item.last_message_id,
+            reverse=True,
+        )
+        semaphore = asyncio.Semaphore(max(1, int(config["max_expression_learner"])))
+
+        async def run(candidate: TenantJobState) -> bool:
+            async with semaphore:
+                return await learn_expressions(candidate.tenant, provider=provider, cfg=config)
+
+        results = await asyncio.gather(*(run(candidate) for candidate in candidates), return_exceptions=True)
+        for candidate, result in zip(candidates, results):
+            if isinstance(result, BaseException):
+                logger.opt(exception=result).warning(f"[ChatExpression] 租户表达学习失败: {candidate.tenant}")
+        return sum(1 for result in results if result is True)

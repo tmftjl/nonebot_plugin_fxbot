@@ -9,7 +9,7 @@ from collections.abc import AsyncGenerator
 from openai import AsyncOpenAI
 from nonebot import logger
 
-from ..base import ChatProvider, EmbeddingProvider
+from ..base import STTProvider, TTSProvider, ChatProvider, EmbeddingProvider
 from ..entities import LLMResponse, ProviderType
 from ..register import register_provider
 
@@ -194,4 +194,83 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
             return [data.embedding for data in resp.data]
         except Exception as exc:
             logger.error(f"[{self.provider_id}] Embed 请求失败: {exc}")
+            raise
+
+
+@register_provider(
+    "openai_stt",
+    "OpenAI 语音识别",
+    provider_type=ProviderType.STT,
+    default_config={"base_url": "https://api.openai.com/v1", "timeout": 60},
+)
+class OpenAISTTProvider(STTProvider):
+    """OpenAI 语音转写 Provider。"""
+
+    def __init__(self, provider_id: str, config: dict[str, Any]) -> None:
+        super().__init__(provider_id, config)
+        self.client = AsyncOpenAI(
+            api_key=config["api_key"],
+            base_url=config["base_url"],
+            timeout=float(config["timeout"]),
+        )
+        self.model_name = str(config["model"])
+
+    async def close(self) -> None:
+        """关闭 OpenAI 异步客户端。"""
+        try:
+            await self.client.close()
+        except Exception:
+            logger.opt(exception=True).warning(f"[{self.provider_id}] 关闭客户端失败")
+
+    async def transcribe(self, audio: bytes, filename: str = "voice.mp3") -> str:
+        """把音频转成文字；接口不支持的语言或格式会抛错并由调用方降级。"""
+        try:
+            resp = await self.client.audio.transcriptions.create(
+                model=self.model_name,
+                file=(filename, audio),
+            )
+            return str(resp.text or "").strip()
+        except Exception as exc:
+            logger.error(f"[{self.provider_id}] 语音转写失败: {exc}")
+            raise
+
+
+@register_provider(
+    "openai_tts",
+    "OpenAI 语音合成",
+    provider_type=ProviderType.TTS,
+    default_config={"base_url": "https://api.openai.com/v1", "timeout": 60, "voice": "alloy"},
+)
+class OpenAITTSProvider(TTSProvider):
+    """OpenAI 语音合成 Provider。"""
+
+    def __init__(self, provider_id: str, config: dict[str, Any]) -> None:
+        super().__init__(provider_id, config)
+        self.client = AsyncOpenAI(
+            api_key=config["api_key"],
+            base_url=config["base_url"],
+            timeout=float(config["timeout"]),
+        )
+        self.model_name = str(config["model"])
+
+    async def close(self) -> None:
+        """关闭 OpenAI 异步客户端。"""
+        try:
+            await self.client.close()
+        except Exception:
+            logger.opt(exception=True).warning(f"[{self.provider_id}] 关闭客户端失败")
+
+    async def synthesize(self, text: str, voice: str = "default") -> bytes:
+        """把文本合成为 mp3 音频；失败时抛错由调用方降级。"""
+        voice_name = str(self.config.get("voice") or "") or ("alloy" if voice == "default" else voice)
+        try:
+            resp = await self.client.audio.speech.create(
+                model=self.model_name,
+                voice=voice_name,
+                input=text,
+                response_format="mp3",
+            )
+            return resp.content
+        except Exception as exc:
+            logger.error(f"[{self.provider_id}] 语音合成失败: {exc}")
             raise

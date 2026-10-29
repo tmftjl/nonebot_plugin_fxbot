@@ -24,6 +24,9 @@ export type SpecialComponent =
   | 'GTags'           // 标签输入（数组）
   | 'GArrayInput'     // 数组输入（列表编辑）
   | 'GSubForm'        // 子表单（动态对象/数组）
+  | 'GListForm'       // 对象数组编辑（规则列表）
+  | 'GChatTenant'     // 聊天流选择器（平台 / 机器人 / 类型 / 会话）
+  | 'GTimeRange'      // 时间段选择（HH:mm-HH:mm，留空按全天）
   | 'GSelectGroup'    // 群组选择器
   | 'GSelectFriend'   // 好友选择器
   | 'EasyCron'        // Cron表达式编辑器
@@ -67,6 +70,7 @@ export interface ConfigCard {
   key: string                         // 卡片唯一标识
   title: string                       // 卡片标题
   desc?: string                       // 卡片描述
+  category?: string                   // 所属配置分类
   schemas: SchemaItem[]               // 表单项列表
 }
 

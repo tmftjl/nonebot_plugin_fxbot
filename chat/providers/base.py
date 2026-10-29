@@ -124,8 +124,8 @@ class TTSProvider(BaseProvider):
     """语音合成能力 Provider。"""
 
     @abc.abstractmethod
-    async def synthesize(self, text: str, voice: str = "default") -> str:
-        """合成语音，返回音频文件路径。"""
+    async def synthesize(self, text: str, voice: str = "default") -> bytes:
+        """合成语音，返回音频字节。"""
 
     def meta(self) -> ProviderMeta:
         """返回语音合成 Provider 元数据。"""
@@ -141,7 +141,7 @@ class STTProvider(BaseProvider):
     """语音识别能力 Provider。"""
 
     @abc.abstractmethod
-    async def transcribe(self, audio_path: str) -> str:
+    async def transcribe(self, audio: bytes, filename: str = "voice.mp3") -> str:
         """识别音频并返回文本。"""
 
     def meta(self) -> ProviderMeta:

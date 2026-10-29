@@ -9,6 +9,12 @@ import unicodedata
 
 from ...config import get_manager as get_config_manager
 
+# 敏感信息统一在过滤层判定，学习模块共用。
+SENSITIVE = re.compile(
+    r"(密码|口令|token|secret|api[_ ]?key|身份证|银行卡|信用卡|手机号|\b1[3-9]\d{9}\b|住址)",
+    re.I,
+)
+
 _URL_ONLY = re.compile(r"^(?:https?://\S+\s*)+$", re.I)
 _AD = re.compile(r"(加群|代练|刷单|返利|优惠券|免费领取|vx[:：]?\s*\w+|微信[:：]?\s*\w+|qq群[:：]?\s*\d+)", re.I)
 _RECENT_TTL = 600.0

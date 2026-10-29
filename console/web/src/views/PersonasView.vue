@@ -2,6 +2,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import PageHeader from '@/components/PageHeader.vue'
 import { metaApi } from '@/api'
 
 interface PersonaItem {
@@ -10,9 +11,67 @@ interface PersonaItem {
   knowledgeCount?: number
 }
 
+interface PersonaForm {
+  key: string
+  intro: string
+  personality: string
+  behavior_style: string
+  reply_style: string
+}
+
+const SECTION_KEYS: Record<string, 'personality' | 'behavior_style' | 'reply_style'> = {
+  人格特征: 'personality',
+  行为风格: 'behavior_style',
+  回复风格: 'reply_style',
+}
+
+const emptyForm = (): PersonaForm => ({
+  key: '',
+  intro: '',
+  personality: '',
+  behavior_style: '',
+  reply_style: '',
+})
+
+const parsePersona = (text: string): Omit<PersonaForm, 'key'> => {
+  const matches = [...text.matchAll(/^#{1,6}[ \t]+(.+?)[ \t]*$/gm)]
+  if (!matches.length) {
+    return { ...emptyForm(), personality: text.trim() }
+  }
+  const result = { ...emptyForm(), intro: text.slice(0, matches[0].index ?? 0).trim() }
+  const seen = new Set<string>()
+  for (let index = 0; index < matches.length; index += 1) {
+    const key = SECTION_KEYS[matches[index][1].trim()]
+    if (!key || seen.has(key)) {
+      return { ...emptyForm(), personality: text.trim() }
+    }
+    seen.add(key)
+    const end = matches[index + 1]?.index ?? text.length
+    result[key] = text.slice((matches[index].index ?? 0) + matches[index][0].length, end).trim()
+  }
+  return result
+}
+
+const buildPersonaText = (form: PersonaForm): string => {
+  const parts: string[] = []
+  if (form.intro.trim()) parts.push(form.intro.trim())
+  if (form.personality.trim()) parts.push(`## 人格特征\n${form.personality.trim()}`)
+  if (form.behavior_style.trim()) parts.push(`## 行为风格\n${form.behavior_style.trim()}`)
+  if (form.reply_style.trim()) parts.push(`## 回复风格\n${form.reply_style.trim()}`)
+  return parts.join('\n\n')
+}
+
+const personaPreview = (text: string): string =>
+  text
+    .replace(/^#{1,6}[ \t]+.*$/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+
 const loading = ref(false)
 const saving = ref(false)
 const personas = ref<PersonaItem[]>([])
+const defaultPersona = ref('')
+const activeSection = ref('personality')
 const dialogVisible = ref(false)
 const editingKey = ref<string | null>(null)
 const knowledgeSupported = ref(true)
@@ -22,7 +81,7 @@ const knowledgeStats = ref({ count: 0 })
 const loadingKnowledge = ref(false)
 const importText = ref('')
 
-const form = ref({ key: '', desc: '' })
+const form = ref<PersonaForm>(emptyForm())
 
 const initial = (key: string): string => (key ? key.slice(0, 1).toUpperCase() : '?')
 
@@ -30,7 +89,8 @@ const loadPersonas = async () => {
   loading.value = true
   try {
     const res = await metaApi.getPersonas()
-    personas.value = Object.entries(res || {}).map(([key, desc]) => ({
+    defaultPersona.value = res?.default || ''
+    personas.value = Object.entries(res?.items || {}).map(([key, desc]) => ({
       key,
       desc: String(desc || ''),
       knowledgeCount: 0,
@@ -58,13 +118,15 @@ const loadPersonas = async () => {
 
 const openCreateDialog = () => {
   editingKey.value = null
-  form.value = { key: '', desc: '' }
+  form.value = emptyForm()
+  activeSection.value = 'personality'
   dialogVisible.value = true
 }
 
 const openEditDialog = (item: PersonaItem) => {
   editingKey.value = item.key
-  form.value = { key: item.key, desc: item.desc }
+  form.value = { key: item.key, ...parsePersona(item.desc) }
+  activeSection.value = 'personality'
   dialogVisible.value = true
 }
 
@@ -73,15 +135,17 @@ const savePersona = async () => {
     ElMessage.warning('请输入人格名称')
     return
   }
-  if (!form.value.desc.trim()) {
-    ElMessage.warning('请输入人格描述')
+  if (!form.value.personality.trim()) {
+    activeSection.value = 'personality'
+    ElMessage.warning('请填写人格特征')
     return
   }
   saving.value = true
   try {
+    const desc = buildPersonaText(form.value)
     const res = editingKey.value
-      ? await metaApi.updatePersona(editingKey.value, form.value.desc)
-      : await metaApi.createPersona(form.value.key, form.value.desc)
+      ? await metaApi.updatePersona(editingKey.value, desc)
+      : await metaApi.createPersona(form.value.key, desc)
     if (!res.success) {
       ElMessage.error(res.message || '保存失败')
       return
@@ -109,7 +173,7 @@ const deletePersona = async (key: string) => {
   try {
     const res = await metaApi.deletePersona(key)
     if (!res.success) {
-      ElMessage.error('删除失败，默认人格不可删除')
+      ElMessage.error(res.message || '删除失败，请稍后再试')
       return
     }
     ElMessage.success(`已删除「${key}」`)
@@ -184,37 +248,34 @@ onMounted(() => {
 </script>
 
 <template>
-  <div v-loading="loading" class="personas-view">
-    <div class="page-head">
-      <div class="page-heading">
-        <h2 class="page-title">人格管理</h2>
-        <p class="page-subtitle">
-          共 {{ personas.length }} 个人格 · 群聊可用 <code>/人格 名称</code> 覆盖，私聊按用户生效
-        </p>
-      </div>
-      <div class="toolbar-right">
+  <div class="personas-view">
+    <PageHeader
+      title="人格管理"
+      :subtitle="`共 ${personas.length} 个人格 · 群聊可用 /人格 名称 覆盖，私聊按用户生效`"
+    >
+      <template #actions>
         <button class="btn btn-secondary" @click="loadPersonas">刷新</button>
         <button class="btn btn-primary" @click="openCreateDialog">+ 新增人格</button>
-      </div>
-    </div>
+      </template>
+    </PageHeader>
 
     <div v-if="!loading && personas.length === 0" class="empty-state">
       <div class="empty-icon">🎭</div>
       <div class="empty-title">还没有人格</div>
-      <p class="empty-desc">人格就是发给模型的 system 提示词，先创建一个吧。</p>
+      <p class="empty-desc">人格按 MaiBot 的人格特征、行为风格、回复风格三段填写，先创建一个吧。</p>
       <button class="btn btn-primary" @click="openCreateDialog">创建第一个人格</button>
     </div>
 
     <div v-else class="persona-grid">
       <article v-for="item in personas" :key="item.key" class="persona-card">
         <div class="persona-top">
-          <div class="persona-avatar" :class="{ primary: item.key === 'default' }">
+          <div class="persona-avatar" :class="{ primary: item.key === defaultPersona }">
             {{ initial(item.key) }}
           </div>
           <div class="persona-heading">
             <div class="persona-name-row">
               <span class="persona-name" :title="item.key">{{ item.key }}</span>
-              <span v-if="item.key === 'default'" class="badge">默认</span>
+              <span v-if="item.key === defaultPersona" class="badge">默认</span>
             </div>
             <span v-if="knowledgeSupported" class="persona-meta">
               知识库 {{ item.knowledgeCount || 0 }} 条
@@ -223,12 +284,14 @@ onMounted(() => {
           </div>
         </div>
 
-        <p class="persona-desc" :title="item.desc">{{ item.desc || '（空人格）' }}</p>
+        <p class="persona-desc" :title="personaPreview(item.desc)">
+          {{ personaPreview(item.desc) || '（空人格）' }}
+        </p>
 
         <div class="persona-actions">
           <button v-if="knowledgeSupported" class="link-btn" @click="openKnowledgeDialog(item.key)">知识库</button>
           <button class="link-btn" @click="openEditDialog(item)">编辑</button>
-          <button v-if="item.key !== 'default'" class="link-btn danger" @click="deletePersona(item.key)">删除</button>
+          <button v-if="item.key !== defaultPersona" class="link-btn danger" @click="deletePersona(item.key)">删除</button>
         </div>
       </article>
     </div>
@@ -236,7 +299,7 @@ onMounted(() => {
     <el-dialog
       v-model="dialogVisible"
       :title="editingKey ? '编辑人格' : '新建人格'"
-      width="620"
+      width="680"
       align-center
     >
       <el-form :model="form" label-position="top">
@@ -246,16 +309,36 @@ onMounted(() => {
             {{ editingKey ? '名称创建后不可修改。' : '名称同时作为文件名，不能包含 / \\ : * ? " < > |' }}
           </div>
         </el-form-item>
-        <el-form-item label="人格描述">
-          <el-input
-            v-model="form.desc"
-            type="textarea"
-            :rows="9"
-            placeholder="描述它的身份、语气、说话习惯和边界..."
-          />
-          <div class="form-hint">{{ form.desc.length }} 字 · 这段内容会作为 system 消息发给模型</div>
-        </el-form-item>
       </el-form>
+      <el-tabs v-model="activeSection" class="persona-tabs">
+        <el-tab-pane label="人格特征" name="personality">
+          <el-input
+            v-model="form.personality"
+            type="textarea"
+            :rows="10"
+            placeholder="她是谁、性格、背景和喜好..."
+          />
+          <div class="form-hint">{{ form.personality.length }} 字 · 对应 MaiBot 的 personality</div>
+        </el-tab-pane>
+        <el-tab-pane label="行为风格" name="behavior_style">
+          <el-input
+            v-model="form.behavior_style"
+            type="textarea"
+            :rows="10"
+            placeholder="如何观察局面、何时参与、如何保持人设..."
+          />
+          <div class="form-hint">{{ form.behavior_style.length }} 字 · 对应 MaiBot 的 behavior_style</div>
+        </el-tab-pane>
+        <el-tab-pane label="回复风格" name="reply_style">
+          <el-input
+            v-model="form.reply_style"
+            type="textarea"
+            :rows="10"
+            placeholder="句子长短、语气、口头习惯和禁忌..."
+          />
+          <div class="form-hint">{{ form.reply_style.length }} 字 · 对应 MaiBot 的 reply_style</div>
+        </el-tab-pane>
+      </el-tabs>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="saving" @click="savePersona">保存</el-button>
@@ -287,80 +370,7 @@ onMounted(() => {
 
 <style scoped lang="scss">
 .personas-view {
-  padding: 24px;
-
-  * {
-    box-sizing: border-box;
-  }
-}
-
-.page-head {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 24px;
-  flex-wrap: wrap;
-}
-
-.page-heading {
-  min-width: 0;
-}
-
-.page-title {
-  margin: 0 0 6px;
-}
-
-.page-subtitle {
-  margin: 0;
-  font-size: 13px;
-  color: var(--color-text-secondary);
-
-  code {
-    padding: 2px 6px;
-    border-radius: var(--radius-sm);
-    background: var(--color-bg-tertiary);
-    color: var(--color-primary);
-    font-family: inherit;
-  }
-}
-
-.toolbar-right {
-  display: flex;
-  gap: 10px;
-}
-
-.btn {
-  padding: 9px 18px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-md);
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: var(--transition);
-
-  &:hover {
-    transform: translateY(-1px);
-    box-shadow: var(--shadow-md);
-  }
-}
-
-.btn-primary {
-  background: linear-gradient(135deg, var(--color-primary), var(--color-primary-light));
-  color: #fff;
-  box-shadow: var(--shadow-sm);
-}
-
-.btn-secondary {
-  background: var(--color-bg-tertiary);
-  border-color: var(--color-border);
-  color: var(--color-text-secondary);
-
-  &:hover {
-    color: var(--color-primary);
-    border-color: var(--color-primary);
-    box-shadow: none;
-  }
+  padding: 24px 28px 32px;
 }
 
 .persona-grid {
@@ -370,36 +380,17 @@ onMounted(() => {
 }
 
 .persona-card {
-  position: relative;
   display: flex;
   flex-direction: column;
   gap: 14px;
-  padding: 20px;
+  padding: 18px 20px;
   background: var(--color-bg-card);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-sm);
-  overflow: hidden;
-  transition: var(--transition);
-
-  &::before {
-    content: '';
-    position: absolute;
-    inset: 0 0 auto;
-    height: 3px;
-    background: linear-gradient(90deg, var(--color-primary), var(--color-info));
-    opacity: 0;
-    transition: var(--transition);
-  }
+  border-radius: var(--radius-lg);
+  transition: border-color 0.15s ease;
 
   &:hover {
-    transform: translateY(-3px);
-    border-color: var(--color-primary);
-    box-shadow: var(--shadow-lg);
-
-    &::before {
-      opacity: 1;
-    }
+    border-color: var(--color-text-tertiary);
   }
 }
 
@@ -410,21 +401,23 @@ onMounted(() => {
 }
 
 .persona-avatar {
-  flex: none;
   display: flex;
+  flex: none;
   align-items: center;
   justify-content: center;
-  width: 42px;
-  height: 42px;
-  border-radius: 12px;
-  background: linear-gradient(135deg, var(--color-info), var(--color-primary));
-  box-shadow: var(--shadow-sm);
-  color: #fff;
-  font-size: 18px;
-  font-weight: 800;
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+  font-size: 16px;
+  font-weight: 600;
 
   &.primary {
-    background: linear-gradient(135deg, var(--color-primary), #8b5cf6);
+    border-color: var(--color-primary);
+    background: var(--color-primary);
+    color: #fff;
   }
 }
 
@@ -452,12 +445,12 @@ onMounted(() => {
 .badge {
   flex: none;
   padding: 2px 8px;
-  border: 1px solid rgba(59, 130, 246, 0.25);
+  border: 1px solid rgba(224, 111, 6, 0.25);
   border-radius: 999px;
-  background: rgba(59, 130, 246, 0.12);
+  background: var(--color-primary-soft);
   color: var(--color-primary);
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .persona-meta {
@@ -505,14 +498,14 @@ onMounted(() => {
   transition: var(--transition-fast);
 
   &:hover {
-    background: rgba(59, 130, 246, 0.1);
+    background: var(--color-primary-soft);
   }
 
   &.danger {
     color: var(--color-danger);
 
     &:hover {
-      background: rgba(239, 68, 68, 0.1);
+      background: rgba(217, 74, 74, 0.1);
     }
   }
 }
@@ -549,21 +542,25 @@ onMounted(() => {
   line-height: 1.6;
 }
 
+.persona-tabs {
+  margin-top: -4px;
+}
+
 .knowledge-stats {
   display: flex;
   align-items: baseline;
   gap: 8px;
   margin-bottom: 16px;
-  padding: 16px 20px;
-  border: 1px solid rgba(59, 130, 246, 0.2);
+  padding: 14px 18px;
+  border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(6, 182, 212, 0.08));
+  background: var(--color-bg-tertiary);
 }
 
 .knowledge-stats-value {
   color: var(--color-primary);
-  font-size: 26px;
-  font-weight: 800;
+  font-size: 24px;
+  font-weight: 700;
 }
 
 .knowledge-stats-label {
@@ -587,7 +584,7 @@ onMounted(() => {
     grid-template-columns: 1fr;
   }
 
-  .toolbar-right {
+  .page-actions {
     width: 100%;
     justify-content: flex-end;
   }

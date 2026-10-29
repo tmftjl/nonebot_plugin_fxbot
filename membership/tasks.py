@@ -127,6 +127,9 @@ async def check_and_process_memberships() -> MembershipTaskResult:
 
 async def membership_task_job() -> MembershipTaskResult:
     """会员定时任务入口。"""
+    if not bool(_membership_cfg()["enable_scheduler"]):
+        logger.info("[MembershipTask] 会员定时任务已关闭，跳过检查")
+        return MembershipTaskResult()
     result = await check_and_process_memberships()
     logger.info(f"[MembershipTask] 检查完成，过期={result.expired}，退群={result.left}")
     return result
@@ -135,6 +138,7 @@ async def membership_task_job() -> MembershipTaskResult:
 def setup_membership_tasks() -> None:
     """注册会员定时任务；缺少 scheduler 时跳过。"""
     try:
+        from apscheduler.jobstores.base import JobLookupError
         from nonebot_plugin_apscheduler import scheduler
     except Exception:
         logger.warning("[MembershipTask] nonebot-plugin-apscheduler 未安装或未加载，跳过定时任务")
@@ -142,6 +146,10 @@ def setup_membership_tasks() -> None:
 
     cfg = _membership_cfg()
     if not bool(cfg["enable_scheduler"]):
+        try:
+            scheduler.remove_job("fxbot_membership_check")
+        except JobLookupError:
+            pass
         return
     schedule_time = str(cfg["schedule_time"])
     try:

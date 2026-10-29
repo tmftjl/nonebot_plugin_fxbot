@@ -8,9 +8,10 @@ from fastapi import Depends, APIRouter
 from nonebot import logger
 
 from ..auth import bearer_auth
-from ...chat.personas import list_personas, delete_persona, save_persona_text
+from ...chat.personas import DEFAULT_PERSONA, list_personas, delete_persona, save_persona_text
 from ...plugin.builder import get_plugin_display_names, get_command_display_names
-from ...system_control.bot_status import get_today_stats
+from ...chat.providers.usage import get_model_task_usage
+from ...system_control.bot_status import get_today_stats, get_stats_history
 
 router = APIRouter(tags=["fxbot-meta"], dependencies=[Depends(bearer_auth)])
 
@@ -33,10 +34,22 @@ async def get_stats_today() -> dict[str, Any]:
     return await get_today_stats()
 
 
+@router.get("/stats/history")
+async def get_stats_history_route(days: int = 14) -> dict[str, Any]:
+    """获取最近若干天的消息发送汇总（本地 JSON，滚动保留 30 天）。"""
+    return await get_stats_history(days)
+
+
+@router.get("/stats/model_usage")
+async def get_model_usage(hours: int = 24) -> dict[str, Any]:
+    """获取近 N 小时的模型调用次数、失败率与平均耗时（汇总保留 7 天）。"""
+    return await get_model_task_usage(hours)
+
+
 @router.get("/ai_chat/personas")
-async def get_ai_personas() -> dict[str, str]:
-    """获取 AI 人格列表。"""
-    return list_personas()
+async def get_ai_personas() -> dict[str, Any]:
+    """获取 AI 人格列表与不可删除的默认人格名。"""
+    return {"items": list_personas(), "default": DEFAULT_PERSONA}
 
 
 @router.post("/ai_chat/persona")

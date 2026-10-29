@@ -36,6 +36,11 @@ class MentionRef:
         return f"{self.name}({self.user_id})" if self.name else self.user_id
 
 
+def is_proactive(request: ChatRequest) -> bool:
+    """本轮是否为主动触发。"""
+    return request.proactive or request.trigger_kind == "proactive"
+
+
 def speaker_label(user_id: str, user_name: str) -> str:
     """生成发言人标识，用于区分同一会话里的不同成员。"""
     user_id = str(user_id or "").strip()
@@ -73,6 +78,8 @@ class ChatRequest:
     source_message_ids: list[str] = field(default_factory=list)
     source_author_ids: list[str] = field(default_factory=list)
     trigger_seq: int = 0
+    # 序号归属者：主动轮与用户消息各记一本，判断「是否还有更新的触发」时按归属者查
+    trigger_owner: str = ""
     accepted_epoch: int | None = None
     activity_seq: int = 0
 

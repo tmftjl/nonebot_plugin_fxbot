@@ -14,10 +14,11 @@ from ...chat.providers import list_providers
 
 router = APIRouter(prefix="/ai_chat", tags=["fxbot-ai-providers"], dependencies=[Depends(bearer_auth)])
 
-_CAPABILITIES = {"chat", "embedding"}
+_CAPABILITIES = {"chat", "embedding", "stt", "tts"}
 _NAME_PATTERN = re.compile(r"[\w.-]{1,64}")
 _DEFAULT_TIMEOUT = 60
 _DEFAULT_EMBEDDING_DIM = 1536
+_DEFAULT_TTS_VOICE = "alloy"
 
 
 def _ok(data: Any = None) -> dict[str, Any]:
@@ -61,6 +62,7 @@ def _type_options() -> list[dict[str, Any]]:
                 "default_base_url": str(defaults.get("base_url") or ""),
                 "default_timeout": defaults.get("timeout", _DEFAULT_TIMEOUT),
                 "default_embedding_dim": defaults.get("embedding_dim"),
+                "default_voice": defaults.get("voice"),
             }
         )
     return options
@@ -174,6 +176,14 @@ def _parse_provider(payload: dict[str, Any], *, existing: dict[str, Any] | None)
     else:
         config.pop("embedding_dim", None)
 
+    if capability == "tts":
+        voice = str(payload.get("voice") or option["default_voice"] or _DEFAULT_TTS_VOICE).strip()
+        if len(voice) > 64:
+            raise ValueError("音色名称过长")
+        config["voice"] = voice
+    else:
+        config.pop("voice", None)
+
     api_key = str(payload.get("api_key") or "").strip()
     if api_key:
         config["api_key"] = api_key
@@ -187,6 +197,8 @@ def _parse_provider(payload: dict[str, Any], *, existing: dict[str, Any] | None)
     merged = {**existing, **config}
     if capability != "embedding":
         merged.pop("embedding_dim", None)
+    if capability != "tts":
+        merged.pop("voice", None)
     return merged
 
 
@@ -212,6 +224,7 @@ async def get_ai_providers() -> dict[str, Any]:
                 "model": str(config.get("model") or ""),
                 "timeout": config.get("timeout", _DEFAULT_TIMEOUT),
                 "embedding_dim": config.get("embedding_dim"),
+                "voice": config.get("voice"),
                 "has_api_key": bool(str(config.get("api_key") or "").strip()),
                 "is_default": name == default_name,
             }
@@ -248,6 +261,8 @@ async def create_ai_provider(payload: dict[str, Any]) -> dict[str, Any]:
         chat["provider"] = name
     try:
         _save_chat(chat)
+    except ValueError as exc:
+        return _fail(str(exc))
     except Exception:
         logger.opt(exception=True).error(f"[Console] 新增 Provider 失败: name={name}")
         return _fail("保存失败，请稍后再试")
@@ -273,6 +288,8 @@ async def update_ai_provider(name: str, payload: dict[str, Any]) -> dict[str, An
         chat["provider"] = _first_chat_provider(configs)
     try:
         _save_chat(chat)
+    except ValueError as exc:
+        return _fail(str(exc))
     except Exception:
         logger.opt(exception=True).error(f"[Console] 更新 Provider 失败: name={name}")
         return _fail("保存失败，请稍后再试")
@@ -293,6 +310,8 @@ async def delete_ai_provider(name: str) -> dict[str, Any]:
         chat["provider"] = _first_chat_provider(configs)
     try:
         _save_chat(chat)
+    except ValueError as exc:
+        return _fail(str(exc))
     except Exception:
         logger.opt(exception=True).error(f"[Console] 删除 Provider 失败: name={name}")
         return _fail("删除失败，请稍后再试")
@@ -313,7 +332,135 @@ async def set_default_ai_provider(name: str) -> dict[str, Any]:
     chat["provider"] = name
     try:
         _save_chat(chat)
+    except ValueError as exc:
+        return _fail(str(exc))
     except Exception:
         logger.opt(exception=True).error(f"[Console] 设置默认 Provider 失败: name={name}")
+        return _fail("保存失败，请稍后再试")
+    return _ok()
+
+
+_ROUTING_TASKS: tuple[tuple[str, str, str], ...] = (
+    ("reply", "回复模型", "生成最终回复与工具调用"),
+    ("planner", "规划模型", "决定动作、是否接话与主动发言"),
+    ("extract", "抽取模型", "长期记忆、黑话与表达学习"),
+    ("style", "群风格模型", "归纳群聊表达风格"),
+    ("vision", "视觉模型", "图片描述、表情识别与内容评审"),
+    ("memory", "长期记忆模型", "A_Memorix 记忆抽取与画像整理"),
+    ("utils", "通用工具模型", "工具结果压缩与辅助判断"),
+    ("learner", "表达学习模型", "学习群友表达与黑话"),
+    ("fast_model", "快速模型", "模型断句；留空沿用回复模型"),
+    ("emoji", "表情管理模型", "表情包名额已满时决定替换哪一个"),
+    ("voice", "语音识别模型", "把语音消息转成文字"),
+    ("tts", "语音合成模型", "把回复合成为语音"),
+    ("embedding", "文本嵌入模型", "长期记忆向量检索"),
+    ("image_embedding", "图片嵌入模型", "图片记忆向量化"),
+)
+
+_TASK_CAPABILITIES = {
+    "voice": "stt",
+    "tts": "tts",
+    "embedding": "embedding",
+    "image_embedding": "embedding",
+}
+
+_CAPABILITY_MESSAGES = {
+    "stt": "语音任务只能分配语音识别 Provider",
+    "tts": "语音合成任务只能分配语音合成 Provider",
+    "embedding": "嵌入任务只能分配嵌入 Provider",
+}
+
+
+def _task_capability(task: str) -> str:
+    """任务需要的 Provider 能力；未单列的对话任务都走 chat。"""
+    return _TASK_CAPABILITIES.get(task, "chat")
+
+
+def _routing_map(chat: dict[str, Any]) -> dict[str, str]:
+    """读取任务到 Provider 名称的映射。"""
+    raw = chat.get("model_routing")
+    if not isinstance(raw, dict):
+        return {}
+    return {key: str(value or "").strip() for key, value in raw.items()}
+
+
+@router.get("/routing")
+async def get_model_routing() -> dict[str, Any]:
+    """返回任务模型分配与可选对话 Provider。"""
+    chat = _chat_config()
+    configs = _provider_configs(chat)
+    routing = _routing_map(chat)
+    labels = _type_labels()
+    providers = [
+        {
+            "name": name,
+            "model": str(config.get("model") or ""),
+            "type_label": labels.get(
+                (str(config.get("type") or ""), str(config.get("provider_type") or "")),
+                str(config.get("type") or ""),
+            ),
+            "provider_type": str(config.get("provider_type") or ""),
+        }
+        for name, config in sorted(configs.items())
+        if str(config.get("provider_type") or "") in _CAPABILITIES
+    ]
+    default = str(chat.get("provider") or "") or _first_chat_provider(configs)
+    fallback = [
+        str(name)
+        for name in chat.get("provider_fallback") or []
+        if str(name) in configs and str(configs[str(name)].get("provider_type") or "") == "chat"
+    ]
+    tasks = []
+    for task, label, description in _ROUTING_TASKS:
+        provider = routing.get(task, "")
+        config = configs.get(provider, {}) if provider else {}
+        tasks.append(
+            {
+                "task": task,
+                "label": label,
+                "description": description,
+                "provider": provider,
+                "provider_type": _task_capability(task),
+                "model": str(config.get("model") or ""),
+                "configured": bool(provider and provider in configs),
+            }
+        )
+    return _ok(
+        {
+            "tasks": tasks,
+            "providers": providers,
+            "default_provider": default,
+            "fallback_providers": fallback,
+        }
+    )
+
+
+@router.put("/routing/{task}")
+async def update_model_routing(task: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """把单个任务绑定到对话 Provider；留空表示跟随默认。"""
+    known = {item[0] for item in _ROUTING_TASKS}
+    if task not in known:
+        return _fail("未知的模型任务")
+    provider = str(payload.get("provider") or "").strip()
+    chat = _chat_config()
+    configs = _provider_configs(chat)
+    if provider:
+        config = configs.get(provider)
+        if config is None:
+            return _fail("Provider 不存在")
+        capability = _task_capability(task)
+        if str(config.get("provider_type") or "") != capability:
+            return _fail(_CAPABILITY_MESSAGES.get(capability, "只有对话 Provider 可以分配给任务"))
+    routing = chat.get("model_routing")
+    if not isinstance(routing, dict):
+        routing = {}
+    routing[task] = provider
+    chat["model_routing"] = routing
+    try:
+        _save_chat(chat)
+    except ValueError as exc:
+        return _fail(str(exc))
+    except Exception:
+        logger.opt(exception=True).error(f"[Console] 保存任务模型分配失败: task={task}")
         return _fail("保存失败，请稍后再试")
     return _ok()

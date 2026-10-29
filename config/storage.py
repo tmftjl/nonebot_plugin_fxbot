@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import os
 import json
 from typing import Any
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 from nonebot import logger
 
@@ -28,22 +30,32 @@ class ConfigStorage:
     def exists(self) -> bool:
         return self.path.exists()
 
-    def read(self) -> dict[str, Any]:
+    def read(self, *, strict: bool = False) -> dict[str, Any]:
         if not self.exists():
             return {}
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
+            if strict:
+                raise
             logger.warning(f"[Config] Invalid JSON in {self.path}: {exc}")
             return {}
+        if strict and not isinstance(data, dict):
+            raise ValueError("配置必须是对象")
         return data if isinstance(data, dict) else {}
 
     def write(self, data: dict[str, Any]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        content = json.dumps(data, ensure_ascii=False, indent=2)
+        temporary_path = None
+        try:
+            with NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.path.parent, delete=False) as temporary:
+                temporary_path = Path(temporary.name)
+                temporary.write(content)
+            os.replace(temporary_path, self.path)
+        finally:
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
 
     def mtime(self) -> float:
         try:

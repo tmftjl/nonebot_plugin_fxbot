@@ -13,6 +13,7 @@ from src.plugins.nonebot_plugin_fxbot.chat.types import ChatRequest, ChatRespons
 from src.plugins.nonebot_plugin_fxbot.chat.service import ChatService
 from src.plugins.nonebot_plugin_fxbot.chat.session import ChatSessionStore
 from src.plugins.nonebot_plugin_fxbot.console.routes import chat as chat_routes
+from src.plugins.nonebot_plugin_fxbot.chat.message_receive import sender as sender_module
 from src.plugins.nonebot_plugin_fxbot.chat.behavior.debounce import PendingBatch, DebounceRegistry
 from src.plugins.nonebot_plugin_fxbot.chat.behavior.reply_gate import (
     ReplyGate,
@@ -87,11 +88,13 @@ class LikelihoodTests(unittest.TestCase):
     """概率函数与文本摘要。"""
 
     def test_text_summary(self) -> None:
-        self.assertEqual(summarize_pending_texts(["[图片]"], has_at_bot=False), (False, False, True))
-        self.assertEqual(summarize_pending_texts(["[图片]", "在吗？"], has_at_bot=False), (False, True, False))
-        self.assertEqual(summarize_pending_texts(["@bob 你好"], has_at_bot=False)[0], True)
-        self.assertEqual(summarize_pending_texts(["@bob 你好"], has_at_bot=True)[0], False)
-        self.assertEqual(summarize_pending_texts([], has_at_bot=False), (False, False, False))
+        self.assertEqual(summarize_pending_texts(["[图片]"]), (False, False, True))
+        self.assertEqual(summarize_pending_texts(["[图片]", "在吗？"]), (False, True, False))
+        for text in ("@bob 你好", "bob@example.com", "普通@文本"):
+            with self.subTest(text=text):
+                self.assertFalse(summarize_pending_texts([text])[0])
+        self.assertEqual(summarize_pending_texts(["你好"], at_other=True), (True, False, False))
+        self.assertEqual(summarize_pending_texts([]), (False, False, False))
 
     def test_probability_matches_published_formula(self) -> None:
         snapshot = ReplyLikelihoodInput(
@@ -111,6 +114,51 @@ class LikelihoodTests(unittest.TestCase):
         base = ReplyLikelihoodInput(False, False, False, False, 0.0, 1, 3600.0, 1)
         placeholder = ReplyLikelihoodInput(False, False, False, True, 0.0, 1, 3600.0, 1)
         self.assertLess(estimate_reply_probability(placeholder), estimate_reply_probability(base))
+
+
+class MentionFlagTests(unittest.TestCase):
+    """结构化提及标记与门控特征。"""
+
+    def test_structured_mentions(self) -> None:
+        bot = make_bot()
+        bot.self_info = SimpleNamespace(id="openid")
+        for targets, text, group_id, to_me, expected in (
+            ([], "bob@example.com", "group", False, (False, False)),
+            ([], "普通@文本", "group", False, (False, False)),
+            (["other"], "你好", "group", False, (False, True)),
+            (["bot"], "你好", "group", False, (True, False)),
+            (["openid"], "你好", "group", False, (True, False)),
+            (["all"], "你好", "group", False, (False, False)),
+            (["bot", "other", "all"], "你好", "group", False, (True, True)),
+            ([], "你好", "group", True, (True, False)),
+            (["other"], "你好", None, False, (False, False)),
+        ):
+            with self.subTest(targets=targets, text=text, group_id=group_id, to_me=to_me):
+                event = make_event(
+                    message=[SimpleNamespace(type="mention", data={"user_id": target}) for target in targets],
+                    text=text,
+                    group_id=group_id,
+                    to_me=to_me,
+                )
+                with patch.object(message_adapter, "get_platform_adapter", return_value=OneBotV12MessageAdapter()):
+                    has_at_bot, at_other = message_adapter.mention_flags(bot, event)
+                self.assertEqual((has_at_bot, at_other), expected)
+                gate = ReplyGate()
+                observation = gate.observe_message(["m1"], [text], has_at_bot=has_at_bot, at_other=at_other)
+                self.assertEqual(observation.features["mention_bot"], expected[0])
+                self.assertEqual(observation.features["at_other"], expected[1])
+                duplicate = gate.observe_message(["m1"], [text], has_at_bot=has_at_bot, at_other=at_other)
+                self.assertEqual(duplicate.features["at_other"], expected[1])
+
+    def test_adapter_failure_has_no_mentions(self) -> None:
+        with patch.object(message_adapter, "get_platform_adapter", side_effect=RuntimeError):
+            self.assertEqual(message_adapter.mention_flags(make_bot(), make_event(to_me=True)), (False, False))
+        adapter = OneBotV12MessageAdapter()
+        with (
+            patch.object(message_adapter, "get_platform_adapter", return_value=adapter),
+            patch.object(adapter, "mention_targets", side_effect=RuntimeError),
+        ):
+            self.assertEqual(message_adapter.mention_flags(make_bot(), make_event(to_me=True)), (False, False))
 
 
 class DynamicGateTests(unittest.TestCase):
@@ -215,6 +263,17 @@ class ReplyGateTests(unittest.TestCase):
         self.assertEqual(window["scored_rounds"], 1)
         self.assertAlmostEqual(window["expected_proactive"], first.probability)
 
+    def test_round_preserves_and_resets_other_mentions(self) -> None:
+        """轮次累计保留他人提及，新轮次不继承该标记。"""
+        self.gate.observe_message(["m1"], ["你好"], at_other=True, now=1000)
+        with patch.object(self.gate, "_likelihood", wraps=self.gate._likelihood) as likelihood:
+            self.gate.observe_message(["m2"], ["在吗"], now=1001)
+            self.assertTrue(likelihood.call_args_list[0].args[2])
+            self.assertFalse(likelihood.call_args_list[1].args[2])
+            self.gate.mark_triggered()
+            self.gate.observe_message(["m3"], ["你好"], now=1002)
+            self.assertFalse(likelihood.call_args_list[2].args[2])
+
     def test_forced_turn_is_counted_once(self) -> None:
         self.gate.record_forced_turn(["m1"], now=1000)
         self.gate.record_forced_turn(["m1"], now=1001)
@@ -245,12 +304,29 @@ class RegistryTests(unittest.TestCase):
 class RouterWiringTests(unittest.IsolatedAsyncioTestCase):
     """路由在普通消息和强制触发上的观察点。"""
 
+    async def test_proactive_gate_passes_mention_flags(self) -> None:
+        """路由向门控传递结构化提及，私聊不标记他人提及。"""
+        for group_id, expected in (("group", True), (None, False)):
+            with self.subTest(group_id=group_id):
+                gate = _Gate()
+                event = make_event(
+                    group_id=group_id,
+                    message=[SimpleNamespace(type="mention", data={"user_id": "other"})],
+                )
+                with (
+                    patch.object(router, "default_reply_gate_registry", _Registry(gate)),
+                    patch.object(router, "proactive_switch", new=AsyncMock(return_value=False)),
+                    patch.object(message_adapter, "get_platform_adapter", return_value=OneBotV12MessageAdapter()),
+                ):
+                    self.assertFalse(await router._proactive_gate(make_bot(), event, text="你好", has_image=False))
+                self.assertEqual(gate.observed[0][1], {"has_at_bot": False, "at_other": expected})
+
     async def test_context_message_is_observed_without_reply(self) -> None:
         gate = _Gate()
         service = SimpleNamespace(session_store=ChatSessionStore(), record_group_message=AsyncMock())
         cfg = {
             "enabled": True,
-            "max_history": 10,
+            "max_context_size": 10,
             "group_allowlist": [],
             "private_enabled": False,
             "command_prefixes": ["/", "#"],
@@ -301,7 +377,12 @@ class _Config:
     """只提供发送路径需要的配置。"""
 
     def get_system(self) -> dict[str, object]:
-        return {"chat": {"max_history": 10, "behavior": {"quote_mode": "never"}}}
+        return {
+            "chat": {
+                "max_context_size": 10,
+                "behavior": {"group_quote_frequency": "never", "private_quote_frequency": "never"},
+            }
+        }
 
 
 class _Matcher:
@@ -318,9 +399,9 @@ class ServiceReplyTests(unittest.IsolatedAsyncioTestCase):
         response = ChatResponse(text="回复", epoch=0, metadata={"reply_parts": ["回复"]})
         with (
             patch.object(service_module, "get_config_manager", return_value=_Config()),
-            patch.object(service_module, "default_reply_gate_registry", _Registry(gate)),
-            patch.object(service_module, "part_delay", return_value=0.0),
-            patch.object(service_module, "remember_reply", return_value=None),
+            patch.object(sender_module, "decide_quote", return_value=(False, 0.0)),
+            patch.object(sender_module, "default_reply_gate_registry", _Registry(gate)),
+            patch.object(sender_module, "typing_time", return_value=0.0),
             patch.object(service_module.memory_state, "is_ready", return_value=False),
         ):
             sent = await ChatService(ChatSessionStore())._send_parts(

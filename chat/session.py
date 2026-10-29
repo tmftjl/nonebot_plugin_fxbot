@@ -7,9 +7,22 @@ import asyncio
 from typing import Any
 from collections import OrderedDict, deque, defaultdict
 
+from ..config import SYSTEM_DEFAULTS, get_manager as get_config_manager
+
 _IDLE_TTL = 24 * 60 * 60
 _MAX_SESSIONS = 2000
 _CLEANUP_INTERVAL = 32
+
+
+def history_limit(chat_cfg: dict[str, Any], is_group: bool) -> int:
+    """群聊与私聊各自保留给模型的消息条数。"""
+    key = "max_context_size" if is_group else "max_private_context_size"
+    value = chat_cfg.get(key, SYSTEM_DEFAULTS["chat"][key])
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def history_enabled(is_group: bool) -> bool:
+    return history_limit(get_config_manager().get_system()["chat"], is_group) > 0
 
 
 class ChatSessionStore:
@@ -18,6 +31,7 @@ class ChatSessionStore:
     def __init__(self, max_messages: int = 20) -> None:
         self.max_messages = max_messages
         self._store: dict[str, deque[dict[str, Any]]] = {}
+        self._limits: dict[str, int] = {}
         self._locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._turn_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._send_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
@@ -26,6 +40,7 @@ class ChatSessionStore:
         self._seq_counters: dict[str, int] = {}
         self._user_seqs: dict[tuple[str, str], int] = {}
         self._activities: dict[str, int] = {}
+        self._dropped: dict[str, list[dict[str, Any]]] = {}
         self._hydrated: set[str] = set()
         self._accessed: OrderedDict[str, float] = OrderedDict()
         self._access_count = 0
@@ -54,11 +69,13 @@ class ChatSessionStore:
                 continue
             for mapping in (
                 self._store,
+                self._limits,
                 self._locks,
                 self._turn_locks,
                 self._send_locks,
                 self._epochs,
                 self._seen,
+                self._dropped,
                 self._accessed,
             ):
                 mapping.pop(candidate, None)
@@ -135,19 +152,27 @@ class ChatSessionStore:
 
     def _deque(self, session_id: str, limit: int | None) -> deque[dict[str, Any]]:
         """按当前上限获取队列，上限变化时重建以立即生效。"""
-        size = max(int(self.max_messages if limit is None else limit), 0)
+        size = max(int(self._limits.get(session_id, self.max_messages) if limit is None else limit), 0)
         self._touch(session_id)
+        if limit is not None:
+            self._limits[session_id] = size
+        if size == 0:
+            self._dropped.pop(session_id, None)
+            self._store[session_id] = deque(maxlen=0)
+            return self._store[session_id]
         current = self._store.get(session_id)
         if current is None or current.maxlen != size:
-            current = deque(current or (), maxlen=size)
+            previous = list(current or ())
+            overflow = max(len(previous) - size, 0)
+            self._dropped.setdefault(session_id, []).extend(previous[:overflow])
+            current = deque(previous[overflow:], maxlen=size)
             self._store[session_id] = current
-        self._trim_head(current)
+        self._trim_head(session_id, current)
         return current
 
-    @staticmethod
-    def _trim_head(history: deque[dict[str, Any]]) -> None:
+    def _trim_head(self, session_id: str, history: deque[dict[str, Any]]) -> None:
         while history and history[0].get("role") != "user":
-            history.popleft()
+            self._dropped.setdefault(session_id, []).append(history.popleft())
 
     def get(self, session_id: str) -> list[dict[str, Any]]:
         """获取会话历史。"""
@@ -158,6 +183,11 @@ class ChatSessionStore:
         """按当前上限裁剪会话历史。"""
         self._deque(session_id, limit)
 
+    def take_dropped(self, session_id: str) -> list[dict[str, Any]]:
+        """取走因窗口或孤立工具结果被挤掉的消息，供上下文压缩使用。"""
+        self._touch(session_id)
+        return self._dropped.pop(session_id, [])
+
     def append(self, session_id: str, message: dict[str, Any], *, limit: int | None = None) -> None:
         """追加一条消息。"""
         self.append_many(session_id, [message], limit=limit)
@@ -165,13 +195,46 @@ class ChatSessionStore:
     def append_many(self, session_id: str, messages: list[dict[str, Any]], *, limit: int | None = None) -> None:
         """在调用方的状态锁内成批追加，裁剪后不保留孤立工具结果。"""
         history = self._deque(session_id, limit)
+        if history.maxlen == 0:
+            return
+        if history.maxlen is not None:
+            combined = [*history, *messages]
+            overflow = max(len(combined) - history.maxlen, 0)
+            self._dropped.setdefault(session_id, []).extend(combined[:overflow])
         history.extend(messages)
-        self._trim_head(history)
+        self._trim_head(session_id, history)
+
+    def discard_message(self, session_id: str, message_id: str) -> bool:
+        """按平台消息 ID 丢弃内存里已经带入的历史，包括等待压缩的旧消息。"""
+        key = str(message_id)
+        dropped = False
+        history = self._store.get(session_id)
+        if history:
+            kept = [item for item in history if key not in (item.get("_source_ids") or ())]
+            if len(kept) != len(history):
+                self._store[session_id] = deque(kept, maxlen=history.maxlen)
+                dropped = True
+        waiting = self._dropped.get(session_id)
+        if waiting:
+            kept = [item for item in waiting if key not in (item.get("_source_ids") or ())]
+            if len(kept) != len(waiting):
+                self._dropped[session_id] = kept
+                dropped = True
+        return dropped
+
+    def invalidate(self, session_id: str) -> int:
+        """让在途轮次作废但保留历史；返回新的代次。"""
+        self._touch(session_id)
+        epoch = self._epochs.get(session_id, 0) + 1
+        self._epochs[session_id] = epoch
+        return epoch
 
     def clear(self, session_id: str) -> None:
         """清空会话历史与触发序号。"""
         self._store.pop(session_id, None)
+        self._limits.pop(session_id, None)
         self._seen.pop(session_id, None)
+        self._dropped.pop(session_id, None)
         self._seq_counters.pop(session_id, None)
         self._activities.pop(session_id, None)
         for key in [key for key in self._user_seqs if key[0] == session_id]:

@@ -2,6 +2,7 @@
 import { computed, ref, type ComponentPublicInstance } from 'vue'
 import { QuestionFilled } from '@element-plus/icons-vue'
 import type { SchemaItem, ConfigCard } from '@/types/schema'
+import GListForm from './GListForm.vue'
 import GSubForm from './GSubForm.vue'
 
 interface Props {
@@ -69,8 +70,8 @@ const setValue = (field: string | undefined, value: any) => {
 
 const getColProps = (schema: SchemaItem) => {
   const type = schema.component
-  // 全宽组件 (仅 GSubForm)
-  if (type === 'GSubForm') {
+  // 全宽组件
+  if (type === 'GSubForm' || type === 'GListForm' || type === 'Textarea') {
     return { xs: 24, sm: 24, md: 24, lg: 24, xl: 24 }
   }
   
@@ -216,7 +217,7 @@ const handleArrayInputBackspace = (field: string | undefined, currentTags: unkno
                   </div>
 
                   <!-- Textarea -->
-                  <div v-else-if="schema.component === 'Textarea'" class="control-wrapper narrow-input">
+                  <div v-else-if="schema.component === 'Textarea'" class="control-wrapper">
                     <el-input
                       :model-value="getValue(schema.field)"
                       :placeholder="schema.componentProps?.placeholder"
@@ -289,6 +290,17 @@ const handleArrayInputBackspace = (field: string | undefined, currentTags: unkno
                     />
                   </div>
 
+                  <!-- GListForm -->
+                  <div v-else-if="schema.component === 'GListForm'" class="control-wrapper">
+                    <GListForm
+                      :model-value="getValue(schema.field) || []"
+                      :schemas="schema.componentProps?.schemas || []"
+                      :title-field="schema.componentProps?.titleField || ''"
+                      :add-label="schema.componentProps?.addLabel || '添加'"
+                      @update:model-value="(v) => setValue(schema.field, v)"
+                    />
+                  </div>
+
                   <!-- GArrayInput -->
                   <div v-else-if="schema.component === 'GArrayInput' && schema.field" class="control-wrapper narrow-input">
                     <div class="g-array-input-wrapper" @click="focusArrayInput(schema.field)">
@@ -338,59 +350,64 @@ const handleArrayInputBackspace = (field: string | undefined, currentTags: unkno
 
 <style scoped lang="scss">
 .config-card {
-  margin-bottom: 24px;
-  border: 1px solid var(--color-border-light) !important;
-  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05) !important;
-  transition: none; // 移除所有过渡动画
-  border-radius: 12px !important;
+  margin-bottom: 20px;
+  border: 1px solid var(--color-border) !important;
+  border-radius: var(--radius-lg) !important;
+  box-shadow: none !important;
 
-  // 移除 hover 效果
   &:hover {
-    box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05) !important;
-    transform: none;
-    border-color: var(--color-border-light) !important;
+    border-color: var(--color-border) !important;
+    box-shadow: none !important;
   }
 
   :deep(.el-card__header) {
-    padding: 16px 24px;
+    padding: 14px 20px;
     border-bottom: 1px solid var(--color-border-light);
-    background-color: var(--color-bg-secondary);
+    background-color: transparent;
   }
 
   :deep(.el-card__body) {
-    padding: 24px;
+    padding: 20px;
   }
 
   .card-header {
     display: flex;
-    justify-content: space-between;
     align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+  }
+
+  .card-header-left {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    min-width: 0;
+    flex-wrap: wrap;
   }
 
   .card-title {
-    font-size: 16px;
-    font-weight: 700;
     color: var(--color-text);
+    font-size: 15px;
+    font-weight: 600;
   }
 
   .card-desc {
-    margin-left: 12px;
-    font-size: 13px;
-    color: var(--color-text-secondary);
+    color: var(--color-text-tertiary);
+    font-size: 12px;
   }
 
   .card-content {
     .group-title {
       margin: 24px 0 16px;
-      
+
       &:first-child {
         margin-top: 0;
       }
 
       :deep(.el-divider__text) {
-        font-weight: 600;
         color: var(--color-text-secondary);
-        font-size: 13px;
+        font-size: 12px;
+        font-weight: 600;
       }
     }
 
@@ -398,111 +415,94 @@ const handleArrayInputBackspace = (field: string | undefined, currentTags: unkno
       :deep(.el-form-item) {
         margin-bottom: 20px;
         padding: 0;
-        
+
         .el-form-item__label {
           padding-bottom: 6px !important;
-          line-height: 1.4;
-          font-weight: 600;
-          font-size: 14px;
           color: var(--color-text);
+          font-size: 13px;
+          font-weight: 600;
+          line-height: 1.4;
         }
       }
 
       .custom-label {
-          display: flex;
-          align-items: center;
-          gap: 6px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
 
-          .help-icon {
-              color: var(--color-text-tertiary);
-              cursor: pointer;
-              font-size: 14px;
-              transition: color 0.2s;
+        .help-icon {
+          color: var(--color-text-tertiary);
+          cursor: pointer;
+          font-size: 14px;
+          transition: color 0.15s ease;
 
-              &:hover {
-                  color: var(--color-primary); // 悬停变色
-              }
+          &:hover {
+            color: var(--color-primary);
           }
+        }
       }
 
       .control-wrapper {
         width: 100%;
-        
+
         &.narrow-input {
-           max-width: 320px;
-        }
-
-        // 统一输入框组件样式微调
-        :deep(.el-input__wrapper), :deep(.el-textarea__inner) {
-          box-shadow: 0 0 0 1px var(--color-border) inset;
-          
-          &:hover {
-             box-shadow: 0 0 0 1px var(--color-primary-light) inset;
-          }
-          
-          &.is-focus {
-             box-shadow: 0 0 0 1px var(--color-primary) inset !important;
-          }
+          max-width: 360px;
         }
       }
-      
 
-      // Input Number 左对齐修正
       .input-number-left {
-          :deep(.el-input__inner) {
-              text-align: left !important;
-          }
+        :deep(.el-input__inner) {
+          text-align: left !important;
+        }
       }
 
-      // 数组输入样式
       .g-array-input-wrapper {
+        display: inline-flex;
+        align-items: center;
         width: 100%;
         min-height: 32px;
         padding: 1px 11px;
-        background-color: var(--el-input-bg-color, var(--el-fill-color-blank));
-        border: 1px solid var(--el-border-color);
-        border-radius: var(--el-border-radius-base);
-        transition: var(--el-transition-border);
-        box-sizing: border-box;
-        display: inline-flex;
-        align-items: center;
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-md);
+        background-color: var(--color-bg-card);
         cursor: text;
+        box-sizing: border-box;
 
         &:hover {
-            border-color: var(--el-border-color-hover);
+          border-color: var(--color-text-tertiary);
         }
 
         &:focus-within {
-            border-color: var(--el-color-primary);
-            box-shadow: 0 0 0 1px var(--el-color-primary) inset;
+          border-color: var(--color-primary);
+          box-shadow: 0 0 0 1px var(--color-primary) inset;
         }
 
         .tags-container {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 6px;
-            width: 100%;
-            align-items: center;
-            padding: 3px 0;
+          display: flex;
+          flex-wrap: wrap;
+          gap: 6px;
+          align-items: center;
+          width: 100%;
+          padding: 3px 0;
         }
 
         .input-inner {
-            flex-grow: 1;
-            width: 50px;
-            border: none;
-            outline: none;
-            padding: 0;
-            margin: 0;
-            background: transparent;
-            color: var(--el-text-color-regular);
-            font-size: var(--el-font-size-base);
-            min-width: 60px;
-            height: 24px;
-            line-height: 24px;
+          flex-grow: 1;
+          width: 50px;
+          min-width: 60px;
+          height: 24px;
+          margin: 0;
+          padding: 0;
+          border: none;
+          outline: none;
+          background: transparent;
+          color: var(--el-text-color-regular);
+          font-size: var(--el-font-size-base);
+          line-height: 24px;
 
-            &::placeholder {
+          &::placeholder {
             color: var(--el-text-color-placeholder);
-            }
+          }
         }
       }
     }

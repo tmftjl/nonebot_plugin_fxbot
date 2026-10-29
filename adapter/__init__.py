@@ -105,6 +105,58 @@ def extract_raw_image_sources(message):
     return result
 
 
+def extract_forward_ids(message) -> list[str]:
+    """提取消息里的合并转发 ID。"""
+    result = []
+    for segment in list(message or []):
+        if getattr(segment, "type", "") != "forward":
+            continue
+        data = getattr(segment, "data", {}) or {}
+        forward_id = data.get("id") or data.get("forward_id") or data.get("res_id")
+        if isinstance(forward_id, str) and forward_id:
+            result.append(forward_id)
+    return result
+
+
+async def get_forward_messages(bot, forward_id: str):
+    """读取合并转发节点；平台不支持时抛 UnsupportedCapability。"""
+    return await get_platform_adapter(bot).get_forward_messages(bot, forward_id)
+
+
+def extract_raw_audio_sources(message):
+    """提取语音段的声音源；平台字段不统一，按 url/file/file_id/path 依次取。"""
+    result = []
+    for segment in list(message or []):
+        if getattr(segment, "type", "") not in {"record", "voice", "audio"}:
+            continue
+        data = getattr(segment, "data", {}) or {}
+        source = data.get("url") or data.get("file") or data.get("file_id") or data.get("path")
+        if isinstance(source, (str, bytes)) and source:
+            result.append(source)
+    return result
+
+
+def extract_raw_emoji_sources(message):
+    """提取表情包图片源；平台没有表情标记时返回空列表。"""
+    result = []
+    for segment in list(message or []):
+        segment_type = getattr(segment, "type", "")
+        data = getattr(segment, "data", {}) or {}
+        if segment_type == "mface":
+            source = data.get("url") or data.get("emoji_url")
+        elif segment_type == "image":
+            sub_type = str(data.get("sub_type", "") or "").lower()
+            summary = str(data.get("summary", "") or "")
+            if sub_type not in {"1", "sticker", "emoji"} and summary != "[动画表情]":
+                continue
+            source = data.get("url") or data.get("file") or data.get("file_id")
+        else:
+            continue
+        if isinstance(source, (str, bytes)) and source:
+            result.append(source)
+    return result
+
+
 def extract_reply_message_id(message):
     for segment in list(message or []):
         if getattr(segment, "type", "") == "reply":
@@ -227,6 +279,7 @@ __all__ = [
     "event_user_name",
     "extract_first_text_match",
     "extract_image_sources",
+    "extract_raw_audio_sources",
     "extract_raw_image_sources",
     "extract_message_target",
     "extract_recall",

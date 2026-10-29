@@ -19,7 +19,6 @@ from .providers import provider_manager
 from .message_adapter import session_id_for_event
 from .behavior.reply_gate import (
     talk_value_for,
-    proactive_config,
     proactive_switch,
     set_proactive_switch,
     default_reply_gate_registry,
@@ -246,7 +245,7 @@ async def _handle_clear(bot: Bot, event: Event, matcher: Matcher) -> None:
 
 
 def _switch_state(override: bool | None) -> str:
-    return "跟随全局" if override is None else "开启" if override else "关闭"
+    return "未设置" if override is None else "开启" if override else "关闭"
 
 
 @proactive_cmd.handle()
@@ -255,10 +254,6 @@ async def _handle_proactive(bot: Bot, event: Event, matcher: Matcher) -> None:
     group_id = normalize_id(event_group_id(event)) or ""
     tenant = session_id_for_event(bot, event)
     argument = _proactive_argument(event_plain_text(event)) or ""
-    cfg = proactive_config()
-    allowlist = {
-        str(item).strip() for item in cfg.get("group_allowlist") or [] if item is not None and str(item).strip()
-    }
     if argument in {"开", "开启", "打开", "关", "关闭"}:
         if not group_id:
             await matcher.finish("主动接话只用于群聊")
@@ -270,26 +265,15 @@ async def _handle_proactive(bot: Bot, event: Event, matcher: Matcher) -> None:
         except Exception:
             logger.opt(exception=True).warning("[Chat] 写入主动接话开关失败")
             await matcher.finish("设置失败，请稍后再试")
-        if not enabled:
-            await matcher.finish("本群主动接话已关闭")
-        if not bool(cfg.get("enabled")):
-            await matcher.finish("本群已开启，但全局 chat.proactive.enabled 仍关闭")
-        if group_id not in allowlist:
-            await matcher.finish("本群已开启，但不在 chat.proactive.group_allowlist 白名单内")
-        await matcher.finish("本群主动接话已开启")
+        await matcher.finish("本群主动接话已关闭" if not enabled else "本群主动接话已开启")
     if argument:
         await matcher.finish("用法：#主动 / #主动 开 / #主动 关")
 
     override = await proactive_switch(tenant) if group_id else None
-    allowed = bool(group_id and group_id in allowlist)
-    effective = bool(cfg.get("enabled")) and allowed and override is not False and bool(group_id)
-    mode = "拦截" if cfg.get("gate_mode") == "enforce" else "观察"
     snapshot = default_reply_gate_registry.peek(tenant)
     window = snapshot.snapshot(5)["window"] if snapshot is not None else {}
     lines = [
-        f"全局主动接话：{'开启' if cfg.get('enabled') else '关闭'}（{mode}）",
-        f"本群：{'开启' if effective else '关闭'}，群级开关{_switch_state(override)}，"
-        f"白名单{'命中' if allowed else '未命中'}",
+        f"本群主动接话：{'开启' if override is True else '关闭'}（{_switch_state(override)}）",
         f"talk_value：{talk_value_for(tenant):.2f}",
     ]
     if group_id:

@@ -9,7 +9,21 @@ from nonebot import logger, get_app
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from .routes import bots, chat, logs, meta, cache as cache_routes, config, membership, permissions, ai_providers
+from . import account
+from .routes import (
+    auth as account_routes,
+    bots,
+    chat,
+    logs,
+    meta,
+    cache as cache_routes,
+    config,
+    system as system_routes,
+    amemorix,
+    membership,
+    permissions,
+    ai_providers,
+)
 
 _mounted = False
 
@@ -23,16 +37,26 @@ def mount_console() -> None:
     app = get_app()
     prefix = "/fxbot"
     router = APIRouter(prefix=prefix)
+    try:
+        # 首次启动创建 root 账户，随机初始密码只在这个时刻打到日志
+        account.ensure_account()
+    except Exception:
+        logger.opt(exception=True).error("[FxBot] 初始化控制台账户失败")
+    router.include_router(account_routes.public_router)
+    router.include_router(account_routes.router)
     router.include_router(membership.router)
     router.include_router(permissions.router)
     router.include_router(config.router)
     router.include_router(bots.router)
     router.include_router(meta.router)
+    router.include_router(system_routes.router)
     router.include_router(ai_providers.router)
     router.include_router(logs.router)
     router.include_router(cache_routes.router)
     router.include_router(chat.router)
     router.include_router(chat.image_router)
+    router.include_router(amemorix.router)
+    router.include_router(amemorix.file_router)
 
     @router.get("/health")
     async def health() -> dict[str, bool]:

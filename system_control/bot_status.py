@@ -13,6 +13,7 @@ import asyncio
 import platform
 from typing import Any, Dict, List, Tuple, Optional
 from pathlib import Path
+from datetime import date, timedelta
 from collections import defaultdict
 
 import psutil
@@ -86,6 +87,25 @@ _MESSAGE_CACHE_DATE = today_str()
 _MESSAGE_CACHE_DIRTY = False
 _FLUSH_INTERVAL_SECONDS = 60
 _flush_task: Optional[asyncio.Task] = None
+
+# 每日汇总，只保留发送方向。随消息缓存写进同一个文件，不落 DB。
+_MESSAGE_HISTORY_DAYS = 30
+_MESSAGE_HISTORY: Dict[str, Dict[str, int]] = {}
+
+
+def _archive_totals(target: Dict[str, Dict[str, int]], date_str: str, bots: Dict[str, Dict[str, Any]]) -> None:
+    """把某天的 Bot 明细汇总进历史。调用方需持有缓存锁（或独占启动期状态）。"""
+    sent = group = private = 0
+    for entry in bots.values():
+        sent += int(entry.get("sent") or 0)
+        group += int((entry.get("group") or {}).get("count") or 0)
+        private += int((entry.get("private") or {}).get("count") or 0)
+    if sent <= 0:
+        return
+    target[date_str] = {"sent": sent, "group": group, "private": private}
+    for old in sorted(target)[:-_MESSAGE_HISTORY_DAYS]:
+        target.pop(old, None)
+
 
 status_cmd = P.on_regex(
     r"^[#＃]状态$",
@@ -1201,6 +1221,8 @@ async def _ensure_today_cache() -> None:
         return
     async with _MESSAGE_CACHE_LOCK:
         if _MESSAGE_CACHE_DATE != today:
+            # 跨天前先把旧日期汇总进历史，否则 clear() 后这一天的数据就没了。
+            _archive_totals(_MESSAGE_HISTORY, _MESSAGE_CACHE_DATE, _MESSAGE_CACHE)
             _MESSAGE_CACHE.clear()
             _MESSAGE_CACHE_DATE = today
             _MESSAGE_CACHE_DIRTY = True
@@ -1218,17 +1240,35 @@ async def _setup_driver():
             with open(_MESSAGE_CACHE_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
             cache_date = str(data.get("date") or "")
-            cache_bots = data.get("bots") if cache_date == _today() else {}
+            raw_bots = data.get("bots")
+            raw_history = data.get("history")
+            normalized_bots = (
+                {key: _normalize_entry(value) for key, value in raw_bots.items()} if isinstance(raw_bots, dict) else {}
+            )
             async with _MESSAGE_CACHE_LOCK:
-                _MESSAGE_CACHE.clear()
-                if isinstance(cache_bots, dict):
-                    _MESSAGE_CACHE.update(
-                        {key: _normalize_entry(value) for key, value in cache_bots.items()}
+                _MESSAGE_HISTORY.clear()
+                if isinstance(raw_history, dict):
+                    _MESSAGE_HISTORY.update(
+                        {
+                            str(day): {
+                                "sent": int(totals.get("sent") or 0),
+                                "group": int(totals.get("group") or 0),
+                                "private": int(totals.get("private") or 0),
+                            }
+                            for day, totals in raw_history.items()
+                            if isinstance(totals, dict)
+                        }
                     )
+                # 进程停在前一天时，盘上那份明细要先补进历史，再按单日缓存丢掉。
+                if cache_date and cache_date != _today() and normalized_bots:
+                    _archive_totals(_MESSAGE_HISTORY, cache_date, normalized_bots)
+                _MESSAGE_CACHE.clear()
+                if cache_date == _today() and normalized_bots:
+                    _MESSAGE_CACHE.update(normalized_bots)
                 _MESSAGE_CACHE_DATE = _today()
                 # 盘上可能是旧结构，置脏让第一个刷新周期把规范结构写回去。
                 _MESSAGE_CACHE_DIRTY = True
-            logger.info(f"[bot_status] 已加载消息统计缓存: {len(_MESSAGE_CACHE)} 个Bot")
+            logger.info(f"[bot_status] 已加载消息统计缓存: {len(_MESSAGE_CACHE)} 个Bot, {len(_MESSAGE_HISTORY)} 天历史")
         except Exception as e:
             logger.error(f"[bot_status] 读取消息统计缓存失败: {e}")
 
@@ -1260,7 +1300,12 @@ async def _flush_message_cache() -> None:
     async with _MESSAGE_CACHE_LOCK:
         if not _MESSAGE_CACHE_DIRTY:
             return
-        cache_data = {"date": _MESSAGE_CACHE_DATE, "bots": dict(_MESSAGE_CACHE)}
+        _archive_totals(_MESSAGE_HISTORY, _MESSAGE_CACHE_DATE, _MESSAGE_CACHE)
+        cache_data = {
+            "date": _MESSAGE_CACHE_DATE,
+            "bots": dict(_MESSAGE_CACHE),
+            "history": {day: dict(totals) for day, totals in _MESSAGE_HISTORY.items()},
+        }
         _MESSAGE_CACHE_DIRTY = False
 
     # 先写临时文件再 rename：直接 open(..., "w") 会先截断原文件，写到一半被杀就只剩
@@ -1298,6 +1343,35 @@ async def get_today_stats() -> Dict[str, Any]:
             bots[cache_key.removeprefix("bot_")] = stats
 
     return {"bots": bots}
+
+
+async def get_stats_history(days: int = 14) -> Dict[str, Any]:
+    """返回最近若干天的发送汇总，缺失的日期补 0。
+
+    历史与单日明细同文件保存，滚动保留 _MESSAGE_HISTORY_DAYS 天；今天直接从
+    内存缓存汇总，不必等下一次落盘。
+    """
+    await _ensure_today_cache()
+    limit = max(1, min(int(days), _MESSAGE_HISTORY_DAYS))
+
+    async with _MESSAGE_CACHE_LOCK:
+        _archive_totals(_MESSAGE_HISTORY, _MESSAGE_CACHE_DATE, _MESSAGE_CACHE)
+        history = {day: dict(totals) for day, totals in _MESSAGE_HISTORY.items()}
+
+    end = date.fromisoformat(today_str())
+    items = []
+    for offset in range(limit - 1, -1, -1):
+        day = (end - timedelta(days=offset)).isoformat()
+        totals = history.get(day) or {}
+        items.append(
+            {
+                "date": day,
+                "sent": int(totals.get("sent") or 0),
+                "group": int(totals.get("group") or 0),
+                "private": int(totals.get("private") or 0),
+            }
+        )
+    return {"days": limit, "items": items}
 
 
 # ========== 重启收尾 ==========

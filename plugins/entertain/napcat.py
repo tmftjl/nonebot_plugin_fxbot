@@ -135,6 +135,7 @@ async def _handle_like(matcher: Matcher, bot: Bot, session: Uninfo) -> None:
     name="like",
     title="QQ 点赞",
     description="为 QQ 用户点赞；不传 user_id 时给当前用户点赞。仅 OneBot/NapCat 支持。",
+    deferred=True,
     parameters={
         "type": "object",
         "properties": {

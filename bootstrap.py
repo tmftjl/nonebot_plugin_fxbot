@@ -70,6 +70,7 @@ async def init() -> None:
     _import_startup_module("permission.message_policy")
     _import_startup_module("membership.models")
     _import_startup_module("chat.memory.models")
+    _import_startup_module("chat.amemorix.models")
     _import_startup_module("adapter.uninfo")
     _import_startup_module("adapter")
     _import_startup_module("adapter.core.context")
@@ -86,14 +87,21 @@ async def init() -> None:
 
     await prepare_memory()
 
+    try:
+        from .chat.amemorix.runtime import amemorix_runtime
+        from .chat.amemorix.writeback import chat_writeback
+
+        await amemorix_runtime.start()
+        await chat_writeback.start()
+    except Exception:
+        logger.opt(exception=True).warning("[A_Memorix] 启动失败，长期记忆降级")
+
     _import_startup_module("membership.gate")
     _import_startup_module("membership.commands")
     _import_startup_module("system_control")
     _import_startup_module("chat.router")
     _import_startup_module("chat.commands")
     _import_startup_module("chat.recall")
-    _import_startup_module("chat.memory.commands")
-    _import_startup_module("chat.reminder_commands")
 
     try:
         from .membership.tasks import setup_membership_tasks

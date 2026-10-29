@@ -2,16 +2,24 @@
 
 from __future__ import annotations
 
+import json
+import asyncio
 import unittest
 from uuid import uuid4
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException
+from sqlalchemy import update
 from src.plugins.nonebot_plugin_fxbot.db import base_models
-from src.plugins.nonebot_plugin_fxbot.chat.memory import state as memory_state, config as config_module, migrate
+from src.plugins.nonebot_plugin_fxbot.chat.memory import (
+    state as memory_state,
+    config as config_module,
+    migrate,
+    expression as expression_module,
+)
 from src.plugins.nonebot_plugin_fxbot.console.routes import chat as chat_routes
-from src.plugins.nonebot_plugin_fxbot.chat.memory.inject import memory_context
+from src.plugins.nonebot_plugin_fxbot.chat.memory.inject import learning_context
 from src.plugins.nonebot_plugin_fxbot.chat.memory.models import ChatMessage, utc_now_naive
 from src.plugins.nonebot_plugin_fxbot.chat.memory.expression import (
     ExpressionItem,
@@ -21,10 +29,9 @@ from src.plugins.nonebot_plugin_fxbot.chat.memory.expression import (
     learn_expressions,
     parse_expressions,
     build_learn_prompt,
-    select_expressions,
     expression_job_tick,
 )
-from src.plugins.nonebot_plugin_fxbot.chat.memory.repository import chat_repository
+from src.plugins.nonebot_plugin_fxbot.chat.memory.repository import TenantJobState, chat_repository
 
 U1 = "50001"
 U2 = "50002"
@@ -58,47 +65,27 @@ class _FakeConfig:
     def __init__(
         self,
         *,
-        expression_learn: bool = True,
-        enabled: bool = True,
-        learn: bool = True,
-        llm_select: bool = False,
-        sample_size: int = 50,
-        inject_top_k: int = 5,
-        memory: dict[str, Any] | None = None,
+        checked_only: bool = False,
+        self_reflect: bool = True,
+        learning_list: list[dict[str, Any]] | None = None,
+        groups: list[dict[str, Any]] | None = None,
     ) -> None:
-        self.expression_learn = expression_learn
-        self.enabled = enabled
-        self.learn = learn
-        self.llm_select = llm_select
-        self.sample_size = sample_size
-        self.inject_top_k = inject_top_k
-        self.memory: dict[str, Any] = {
-            "learn_enabled": True,
-            "max_input_chars_per_batch": 6000,
-            "inject_profile_chars": 300,
-            "inject_facts_chars": 400,
-            "inject_episodes_chars": 300,
-            "inject_style_chars": 150,
-            "inject_jargon_chars": 100,
-            "inject_expressions_chars": 200,
-            "inject_total_chars": 1500,
-        }
-        self.memory.update(memory or {})
+        self.checked_only = checked_only
+        self.self_reflect = self_reflect
+        self.learning_list = learning_list or []
+        self.groups = groups or []
 
     def get_system(self) -> dict[str, Any]:
         return {
             "chat": {
                 "provider": "",
-                "privacy": {"expression_learn": self.expression_learn, "style_learn": False},
                 "expression": {
-                    "enabled": self.enabled,
-                    "learn": self.learn,
-                    "llm_select": self.llm_select,
-                    "sample_size": self.sample_size,
-                    "inject_top_k": self.inject_top_k,
+                    "checked_only": self.checked_only,
+                    "self_reflect": self.self_reflect,
+                    "learning_list": self.learning_list,
+                    "groups": self.groups,
                 },
-                "jargon": {"enabled": False, "inject_max": 5},
-                "memory": self.memory,
+                "jargon": {"learning_list": [], "groups": []},
                 "model_routing": {"extract": ""},
             }
         }
@@ -337,16 +324,6 @@ class ExpressionLearningTests(_ExpressionTestCase):
         cursor = await chat_repository.get_cursor(self.tenant, "expression")
         self.assertEqual(cursor.cursor_seq, int(messages[-1].id or 0))
 
-    async def test_privacy_off_skips_learning(self) -> None:
-        await self._seed_many(40)
-        provider = _QueueProvider(_learn_payload({"situation": "炫耀时", "style": "笑死"}))
-
-        with _config(expression_learn=False):
-            self.assertFalse(await learn_expressions(self.tenant, provider=provider))
-
-        self.assertEqual(provider.calls, 0)
-        self.assertIsNone(await chat_repository.get_cursor(self.tenant, "expression"))
-
     async def test_tenant_switch_off_skips_learning(self) -> None:
         await self._seed_many(40)
         await chat_repository.set_learn_enabled(self.tenant, False)
@@ -391,6 +368,35 @@ class ExpressionLearningTests(_ExpressionTestCase):
         [row] = await chat_repository.list_expressions(self.tenant)
         self.assertFalse(row.checked)
         self.assertFalse(row.rejected)
+
+    async def test_self_reflect_off_skips_review(self) -> None:
+        await self._seed_many(40)
+        provider = _QueueProvider(_learn_payload({"situation": "炫耀时", "style": "笑死"}))
+
+        with _config(self_reflect=False):
+            self.assertTrue(await learn_expressions(self.tenant, provider=provider))
+
+        self.assertEqual(provider.calls, 1)
+        [row] = await chat_repository.list_expressions(self.tenant)
+        self.assertTrue(row.checked)
+        self.assertFalse(row.rejected)
+
+    async def test_learning_list_learn_off_skips_tenant(self) -> None:
+        self.tenant = f"onebot11:{uuid4().hex}:group:{uuid4().hex}"
+        await chat_repository.set_learn_enabled(self.tenant, True)
+        await self._seed_many(40)
+        item = {
+            "platform": "onebot11",
+            "item_id": self.tenant.rsplit(":", 1)[-1],
+            "type": "group",
+            "learn": False,
+        }
+        provider = _QueueProvider(_learn_payload({"situation": "炫耀时", "style": "笑死"}))
+
+        with _config(learning_list=[item]):
+            self.assertFalse(await learn_expressions(self.tenant, provider=provider))
+
+        self.assertEqual(provider.calls, 0)
 
     async def test_empty_result_still_advances_cursor(self) -> None:
         await self._seed_many(40)
@@ -442,18 +448,59 @@ class ExpressionLearningTests(_ExpressionTestCase):
 
         self.assertEqual(provider.calls, 2)
 
-    async def test_expression_job_tick_respects_privacy(self) -> None:
-        await self._seed_many(40)
-        provider = _QueueProvider(_learn_payload({"situation": "炫耀时", "style": "笑死"}))
-        snapshot = [row for row in await chat_repository.scheduling_snapshot() if row.tenant == self.tenant]
+    async def test_expression_job_tick_limits_concurrency_not_tenants(self) -> None:
+        """并发上限只限制同时运行的任务；所有到期租户都会被尝试。"""
+        states = [
+            TenantJobState(tenant="test:new", last_message_id=30, message_count=300, learn_enabled=True),
+            TenantJobState(tenant="test:mid", last_message_id=20, message_count=300, learn_enabled=True),
+            TenantJobState(tenant="test:old", last_message_id=10, message_count=300, learn_enabled=None),
+            TenantJobState(tenant="test:off", last_message_id=40, message_count=300, learn_enabled=False),
+        ]
+        seen: list[str] = []
+        running = 0
+        peak = 0
+
+        async def fake_learn(tenant: str, **_: Any) -> bool:
+            nonlocal running, peak
+            seen.append(tenant)
+            running += 1
+            peak = max(peak, running)
+            await asyncio.sleep(0)
+            running -= 1
+            return True
 
         with (
-            _config(expression_learn=False),
-            patch.object(chat_repository, "scheduling_snapshot", new=AsyncMock(return_value=snapshot)),
+            patch.object(expression_module, "expression_config", return_value={"max_expression_learner": 1}),
+            patch.object(chat_repository, "scheduling_snapshot", new=AsyncMock(return_value=states)),
+            patch.object(expression_module, "learn_expressions", new=fake_learn),
         ):
-            self.assertEqual(await expression_job_tick(provider=provider), 0)
+            self.assertEqual(await expression_job_tick(), 3)
 
-        self.assertEqual(provider.calls, 0)
+        self.assertEqual(seen, ["test:new", "test:mid", "test:old"])
+        self.assertEqual(peak, 1)
+
+    async def test_expression_result_is_dropped_when_evidence_retracted_during_call(self) -> None:
+        """模型调用期间证据被撤回时，结果与游标都不落库。"""
+        messages = await self._seed_many(40)
+        target = int(messages[0].id or 0)
+        payloads = [
+            _learn_payload({"situation": "炫耀时", "style": "笑死"}),
+            _approve_all(1),
+        ]
+
+        class _Provider:
+            async def chat_json(self, *_args: Any, **_kwargs: Any) -> Any:
+                async with base_models.async_maker() as session:  # type: ignore[misc]
+                    await session.execute(update(ChatMessage).where(ChatMessage.id == target).values(deleted=True))
+                    await session.commit()
+                return payloads.pop(0)
+
+        with _config():
+            self.assertFalse(await learn_expressions(self.tenant, provider=_Provider()))
+
+        self.assertEqual(await chat_repository.list_expressions(self.tenant), [])
+        cursor = await chat_repository.get_cursor(self.tenant, "expression")
+        self.assertEqual(cursor.cursor_seq if cursor else 0, 0)
 
 
 class ExpressionInjectionTests(_ExpressionTestCase):
@@ -463,7 +510,7 @@ class ExpressionInjectionTests(_ExpressionTestCase):
         await self._save_expressions([{"situation": "别人在群里炫耀成绩时", "style": "笑死，又来", "count": 1.0}])
 
         with _config():
-            block = await memory_context(self.tenant, U1, query="别人在群里炫耀成绩，你怎么看")
+            block = await learning_context(self.tenant, query="别人在群里炫耀成绩，你怎么看")
 
         self.assertIn("【表达参考】", block)
         self.assertIn("笑死，又来", block)
@@ -479,7 +526,7 @@ class ExpressionInjectionTests(_ExpressionTestCase):
         )
 
         with _config():
-            block = await memory_context(self.tenant, U1, query="别人在群里炫耀成绩，你怎么看")
+            block = await learning_context(self.tenant, query="别人在群里炫耀成绩，你怎么看")
 
         self.assertNotIn("【表达参考】", block)
 
@@ -487,35 +534,19 @@ class ExpressionInjectionTests(_ExpressionTestCase):
         await self._save_expressions([{"situation": "别人在群里炫耀成绩时", "style": "笑死，又来"}])
 
         with _config():
-            block = await memory_context(self.tenant, U1, query="今天晚饭吃什么")
+            block = await learning_context(self.tenant, query="今天晚饭吃什么")
 
         self.assertNotIn("【表达参考】", block)
 
-    async def test_top_k_limits_injection(self) -> None:
+    async def test_injection_cap_is_five(self) -> None:
         await self._save_expressions(
-            [
-                {"situation": "别人在群里炫耀成绩时", "style": "笑死，又来"},
-                {"situation": "别人在群里炫耀成绩的时候", "style": "就这"},
-            ]
+            [{"situation": "别人在群里炫耀成绩时", "style": f"笑死，又来{index}"} for index in range(6)]
         )
 
-        with _config(inject_top_k=1):
-            block = await memory_context(self.tenant, U1, query="别人在群里炫耀成绩，你怎么看")
+        with _config():
+            block = await learning_context(self.tenant, query="别人在群里炫耀成绩，你怎么看")
 
-        self.assertEqual(block.count("当「"), 1)
-
-    async def test_expression_budget_truncates_and_usage_requires_fit(self) -> None:
-        await self._save_expressions([{"situation": "别人在群里炫耀成绩时", "style": "笑死，又来"}])
-
-        with _config(memory={"inject_expressions_chars": 10}):
-            block = await memory_context(self.tenant, U1, query="别人在群里炫耀成绩，你怎么看")
-        self.assertNotIn("【表达参考】可以参考这些说法", block)
-
-        with _config(memory={"inject_total_chars": 10}):
-            block = await memory_context(self.tenant, U1, query="别人在群里炫耀成绩，你怎么看")
-        self.assertNotIn("【表达参考】", block)
-        [row] = await chat_repository.list_expressions(self.tenant)
-        self.assertEqual(row.use_count, 1)
+        self.assertEqual(block.count("当「"), 5)
 
     async def test_other_tenant_sees_nothing(self) -> None:
         await self._save_expressions([{"situation": "别人在群里炫耀成绩时", "style": "笑死，又来"}])
@@ -523,37 +554,81 @@ class ExpressionInjectionTests(_ExpressionTestCase):
         await chat_repository.set_learn_enabled(other, True)
 
         with _config():
-            self.assertEqual(await memory_context(other, U1, query="别人在群里炫耀成绩，你怎么看"), "")
+            self.assertEqual(await learning_context(other, query="别人在群里炫耀成绩，你怎么看"), "")
 
-    async def test_llm_selector_and_fuzzy_fallback(self) -> None:
+    async def test_learning_list_use_off_skips_injection(self) -> None:
+        self.tenant = f"onebot11:{uuid4().hex}:group:{uuid4().hex}"
+        await chat_repository.set_learn_enabled(self.tenant, True)
+        await self._save_expressions([{"situation": "别人在群里炫耀成绩时", "style": "笑死，又来", "count": 1.0}])
+        item = {
+            "platform": "onebot11",
+            "item_id": self.tenant.rsplit(":", 1)[-1],
+            "type": "group",
+            "use": False,
+        }
+
+        with _config(learning_list=[item]):
+            block = await learning_context(self.tenant, query="别人在群里炫耀成绩，你怎么看")
+
+        self.assertEqual(block, "")
+
+    async def test_checked_only_requires_manual_review(self) -> None:
+        await self._save_expressions([{"situation": "别人在群里炫耀成绩时", "style": "笑死，又来", "count": 1.0}])
+        [row] = await chat_repository.list_expressions(self.tenant)
+        self.assertTrue(await chat_repository.review_expression(self.tenant, int(row.id or 0), False))
         await self._save_expressions(
+            [{"situation": "别人在群里炫耀成绩的时候", "style": "就这", "count": 1.0}],
+            batch_id="expression:101:200",
+        )
+
+        with _config(checked_only=True):
+            block = await learning_context(self.tenant, query="别人在群里炫耀成绩，你怎么看")
+        self.assertIn("笑死，又来", block)
+        self.assertNotIn("就这", block)
+
+        with _config():
+            block = await learning_context(self.tenant, query="别人在群里炫耀成绩，你怎么看")
+        self.assertIn("就这", block)
+
+    async def test_shared_expression_group_merges_tenants(self) -> None:
+        sibling = f"onebot11:{uuid4().hex}:group:{uuid4().hex}"
+        await chat_repository.set_learn_enabled(sibling, True)
+        self.tenant = sibling
+        await self._seed("群里有人说 yyds")
+        await chat_repository.save_expressions(
+            sibling,
             [
-                {"situation": "别人在群里炫耀成绩时", "style": "笑死，又来"},
-                {"situation": "别人在群里炫耀成绩的时候", "style": "就这"},
-            ]
+                {
+                    "situation": "别人在群里炫耀成绩时",
+                    "situation_hash": text_hash("别人在群里炫耀成绩时"),
+                    "style": "笑死，又来",
+                    "style_hash": text_hash("笑死，又来"),
+                    "type": "phrase",
+                    "count": 1.0,
+                    "checked": True,
+                    "rejected": False,
+                }
+            ],
+            {},
+            cursor_seq=1,
+            expected_cursor=0,
+            source_batch_id="expression:1:1",
         )
-        rows = await chat_repository.list_expressions(self.tenant, status="active")
-        by_style = {row.style: row for row in rows}
+        self.tenant = f"onebot11:{uuid4().hex}:group:{uuid4().hex}"
+        await chat_repository.set_learn_enabled(self.tenant, True)
+        groups = [
+            {
+                "targets": [
+                    {"platform": "onebot11", "item_id": self.tenant.rsplit(":", 1)[-1], "type": "group"},
+                    {"platform": "onebot11", "item_id": sibling.rsplit(":", 1)[-1], "type": "group"},
+                ]
+            }
+        ]
 
-        provider = _QueueProvider({"selected_ids": [int(by_style["就这"].id or 0)]})
-        selected = await select_expressions(
-            self.tenant,
-            "今天晚饭吃什么",
-            rows,
-            {"llm_select": True, "sample_size": 50, "inject_top_k": 5, "enabled": True},
-            provider=provider,
-        )
-        self.assertEqual([row.style for row in selected], ["就这"])
+        with _config(groups=groups):
+            block = await learning_context(self.tenant, query="别人在群里炫耀成绩，你怎么看")
 
-        failing = _QueueProvider(ValueError("down"), ValueError("down"))
-        selected = await select_expressions(
-            self.tenant,
-            "别人在群里炫耀成绩，你怎么看",
-            rows,
-            {"llm_select": True, "sample_size": 50, "inject_top_k": 5, "enabled": True},
-            provider=failing,
-        )
-        self.assertEqual(len(selected), 2)
+        self.assertIn("笑死，又来", block)
 
 
 class ConsoleExpressionTests(_ExpressionTestCase):
@@ -648,9 +723,55 @@ class ExpressionInvalidationTests(_ExpressionTestCase):
 
         result = await chat_repository.invalidate_message(self.tenant, "platform-1")
 
-        self.assertEqual(result["memories"], 0)
+        self.assertEqual(result["jargon_batches"], 0)
+        self.assertEqual(result["expressions"], 1)
         self.assertEqual(await chat_repository.list_expressions(self.tenant), [])
         self.assertEqual(len(await chat_repository.list_expressions(other)), 1)
+
+    async def test_recalled_batch_rolls_back_merged_contribution(self) -> None:
+        """撤回批次消息时，合并到既有表达上的计数按贡献回滚。"""
+        messages = await self._seed_many(40)
+        await chat_repository.save_expressions(
+            self.tenant,
+            [
+                {
+                    "situation": "别人在群里炫耀成绩时",
+                    "situation_hash": text_hash("别人在群里炫耀成绩时"),
+                    "style": "笑死，又来",
+                    "style_hash": text_hash("笑死，又来"),
+                    "type": "phrase",
+                    "count": 1.0,
+                    "checked": True,
+                    "rejected": False,
+                    "source_message_seq": 0,
+                    "learn_count": 1,
+                }
+            ],
+            {},
+            cursor_seq=0,
+            expected_cursor=0,
+            source_batch_id="expression:0:0",
+        )
+        provider = _QueueProvider(_learn_payload({"situation": "别人在群里炫耀成绩时", "style": "笑死，又来"}))
+        with _config():
+            self.assertTrue(await learn_expressions(self.tenant, provider=provider))
+
+        [row] = await chat_repository.list_expressions(self.tenant)
+        self.assertAlmostEqual(row.count, 1.006)
+        self.assertEqual(row.learn_count, 2)
+
+        async with base_models.async_maker() as session:  # type: ignore[misc]
+            await session.execute(
+                update(ChatMessage).where(ChatMessage.id == messages[5].id).values(platform_message_id="pm-expr")
+            )
+            await session.commit()
+        result = await chat_repository.invalidate_message(self.tenant, "pm-expr")
+
+        [row] = await chat_repository.list_expressions(self.tenant)
+        self.assertEqual(result["rolled_back"], 1)
+        self.assertAlmostEqual(row.count, 1.0)
+        self.assertEqual(row.learn_count, 1)
+        self.assertEqual(json.loads(row.contributions), [])
 
 
 class ReviewParseTests(unittest.TestCase):

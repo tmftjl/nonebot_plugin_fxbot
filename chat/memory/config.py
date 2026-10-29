@@ -1,4 +1,4 @@
-"""长期记忆的配置读取；每次使用都重新读取，保持热更新。"""
+"""聊天存储与学习的配置读取；每次使用都重新读取，保持热更新。"""
 
 from __future__ import annotations
 
@@ -7,74 +7,27 @@ from typing import Any
 from .models import ChatSessionState
 from ...config import get_manager as get_config_manager
 
-DEFAULTS: dict[str, Any] = {
-    "learn_enabled": False,
-    "extract_interval_seconds": 300,
-    "max_tenants_per_tick": 3,
-    "algorithm_version": 1,
-    "episode_idle_minutes": 20,
-    "episode_max_messages": 80,
-    "episode_max_hours": 2,
-    "episode_min_messages": 10,
-    "profile_fact_threshold": 20,
-    "max_history_chars": 12000,
-    "max_input_chars_per_batch": 6000,
-    "backfill_messages": 500,
-    "backfill_batch": 40,
-    "inject_profile_chars": 300,
-    "inject_facts_chars": 400,
-    "inject_episodes_chars": 300,
-    "inject_style_chars": 150,
-    "inject_jargon_chars": 100,
-    "inject_expressions_chars": 200,
-    "inject_total_chars": 1500,
+JARGON_DEFAULTS: dict[str, Any] = {
+    "learning_list": [],
+    "groups": [],
 }
-
-JARGON_DEFAULTS: dict[str, Any] = {"enabled": True, "inject_max": 5}
 EXPRESSION_DEFAULTS: dict[str, Any] = {
-    "enabled": True,
-    "learn": True,
-    "llm_select": False,
-    "sample_size": 50,
-    "inject_top_k": 5,
+    "checked_only": False,
+    "self_reflect": True,
+    "max_expression_learner": 3,
+    "learning_list": [],
+    "groups": [],
 }
-
-
-def memory_config() -> dict[str, Any]:
-    """返回带默认值的记忆配置。"""
-    try:
-        value = get_config_manager().get_system()["chat"].get("memory")
-    except Exception:
-        value = None
-    merged = dict(DEFAULTS)
-    if isinstance(value, dict):
-        merged.update(value)
-    return merged
+VECTOR_DEFAULTS: dict[str, Any] = {
+    "enabled": False,
+    "index_path": "data/expression_selection/expression_vector_index.json",
+    "candidate_pool_size": 50,
+}
 
 
 def tenant_learn_enabled(state: ChatSessionState | None) -> bool:
-    """本租户显式开关优先，否则跟随全局。"""
-    if state is not None and state.learn_enabled is not None:
-        return bool(state.learn_enabled)
-    return bool(memory_config()["learn_enabled"])
-
-
-def style_learning_enabled() -> bool:
-    """是否允许学习群风格与黑话；隐私开关独立于长期记忆。"""
-    try:
-        privacy = get_config_manager().get_system()["chat"].get("privacy") or {}
-    except Exception:
-        return False
-    return bool(privacy.get("style_learn", False))
-
-
-def style_model_name() -> str:
-    """读取风格任务专用模型名；未配置时用 Provider 默认模型。"""
-    try:
-        routing = get_config_manager().get_system()["chat"].get("model_routing") or {}
-        return str(routing.get("style") or "")
-    except Exception:
-        return ""
+    """本租户显式开关优先；未设置时按开启处理，对齐 MaiBot 的默认学习范围。"""
+    return True if state is None or state.learn_enabled is None else bool(state.learn_enabled)
 
 
 def jargon_config() -> dict[str, Any]:
@@ -101,23 +54,10 @@ def expression_config() -> dict[str, Any]:
     return merged
 
 
-def expression_learning_enabled() -> bool:
-    """是否允许学习表达；隐私开关与表达开关都必须打开。"""
-    try:
-        chat = get_config_manager().get_system()["chat"]
-    except Exception:
-        return False
-    privacy = chat.get("privacy") or {}
-    cfg = chat.get("expression") or {}
-    return (
-        bool(privacy.get("expression_learn", False)) and bool(cfg.get("enabled", True)) and bool(cfg.get("learn", True))
-    )
-
-
-def expression_model_name() -> str:
-    """表达学习复用抽取模型；未配置时用 Provider 默认模型。"""
-    try:
-        routing = get_config_manager().get_system()["chat"].get("model_routing") or {}
-        return str(routing.get("extract") or "")
-    except Exception:
-        return ""
+def expression_vector_config() -> dict[str, Any]:
+    """返回带默认值的表达向量配置；嵌套对象单独合并。"""
+    merged = dict(VECTOR_DEFAULTS)
+    value = expression_config().get("vector")
+    if isinstance(value, dict):
+        merged.update(value)
+    return merged

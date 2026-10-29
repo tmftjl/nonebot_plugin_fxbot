@@ -3,6 +3,7 @@
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Coin, Cpu, Collection, Refresh } from '@element-plus/icons-vue'
+import PageHeader from '@/components/PageHeader.vue'
 import { cacheApi } from '@/api'
 import type { CacheStats, CacheKeys, CacheClearPayload } from '@/types/api'
 
@@ -111,37 +112,30 @@ onMounted(() => {
 
 <template>
   <div class="cache-view">
-    <div class="page-header">
-      <h2>缓存</h2>
-      <div class="page-actions">
+    <PageHeader title="缓存" subtitle="进程内存与缓存域用量">
+      <template #actions>
         <el-button :icon="Refresh" :loading="loading" :disabled="clearing" @click="refresh">刷新</el-button>
         <el-button type="danger" :loading="clearing" :disabled="loading" @click="clearCache({ scope: 'all' })">
           清空全部
         </el-button>
-      </div>
-    </div>
+      </template>
+    </PageHeader>
 
-    <div class="stats-overview-compact">
-      <div class="stat-box-compact">
-        <el-icon class="stat-box-icon"><Cpu /></el-icon>
-        <div>
-          <div class="stat-box-label">进程 RSS</div>
-          <div class="stat-box-value">{{ formatBytes(stats?.process.rss) }}</div>
-        </div>
+    <div class="stat-grid">
+      <div class="stat-card">
+        <div class="stat-card-label">进程 RSS</div>
+        <div class="stat-card-value">{{ formatBytes(stats?.process.rss) }}</div>
+        <el-icon class="stat-card-icon"><Cpu /></el-icon>
       </div>
-      <div class="stat-box-compact">
-        <el-icon class="stat-box-icon"><Coin /></el-icon>
-        <div>
-          <div class="stat-box-label">缓存总字节</div>
-          <div class="stat-box-value">{{ formatBytes(stats?.process.cache_bytes) }}</div>
-        </div>
+      <div class="stat-card">
+        <div class="stat-card-label">缓存总字节</div>
+        <div class="stat-card-value">{{ formatBytes(stats?.process.cache_bytes) }}</div>
+        <el-icon class="stat-card-icon"><Coin /></el-icon>
       </div>
-      <div class="stat-box-compact">
-        <el-icon class="stat-box-icon"><Collection /></el-icon>
-        <div>
-          <div class="stat-box-label">条目数</div>
-          <div class="stat-box-value">{{ stats?.process.entries ?? '暂无数据' }}</div>
-        </div>
+      <div class="stat-card">
+        <div class="stat-card-label">条目数</div>
+        <div class="stat-card-value">{{ stats?.process.entries ?? '暂无数据' }}</div>
+        <el-icon class="stat-card-icon"><Collection /></el-icon>
       </div>
     </div>
 
@@ -208,85 +202,16 @@ onMounted(() => {
 
 <style scoped lang="scss">
 .cache-view {
-  padding: 24px;
+  padding: 24px 28px 32px;
 }
 
-.page-header,
 .keys-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 12px;
-  margin-bottom: 20px;
-}
-
-.page-header h2 {
-  margin: 0;
-  color: var(--color-text);
-}
-
-.stats-overview-compact {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 16px;
-  margin-bottom: 20px;
-}
-
-.stat-box-compact {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  background: var(--color-bg-card);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  padding: 16px;
-  transition: var(--transition);
-
-  &:hover {
-    transform: translateY(-2px);
-    box-shadow: var(--shadow-md);
-  }
-}
-
-.stat-box-icon {
-  font-size: 28px;
-  color: var(--color-primary);
-  flex-shrink: 0;
-}
-
-.stat-box-label {
-  font-size: 12px;
-  color: var(--color-text-secondary);
-  margin-bottom: 4px;
-  font-weight: 500;
-}
-
-.stat-box-value {
-  font-size: 24px;
-  font-weight: 800;
-  background: linear-gradient(135deg, var(--color-primary), var(--color-info));
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-
-.panel {
-  background: var(--color-bg-card);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  padding: 24px;
-  box-shadow: var(--shadow-sm);
-}
-
-.panel-title {
-  margin: 0 0 20px;
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--color-text);
-}
-
-.keys-header {
+  margin-bottom: 12px;
   color: var(--color-text-secondary);
 }
 </style>
