@@ -260,7 +260,7 @@ async def get_reply_gate(tenant: str, limit: int = 100) -> dict[str, Any]:
 
 @router.get("/trace")
 async def list_traces(tenant: str, limit: int = 100) -> dict[str, Any]:
-    """列出最近的轮次追踪；默认只看 7 天内的留存数据。"""
+    """列出保留策略内最近的轮次追踪。"""
     tenant = _tenant(tenant)
     limit = max(1, min(500, int(limit)))
     try:

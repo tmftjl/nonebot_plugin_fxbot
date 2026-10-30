@@ -30,6 +30,9 @@ from .models import (
     utc_now_naive,
 )
 
+DIAGNOSTIC_RETENTION_HOURS = 72
+DIAGNOSTIC_MAX_RECORDS = 10000
+
 
 def _json_strings(value: object) -> set[str]:
     """解析 JSON 字符串数组；坏数据按空处理。"""
@@ -898,6 +901,13 @@ class ChatRepository:
         return list((await session.execute(statement)).scalars().all())
 
     @with_session
+    async def clear_planner_samples(
+        self, session: AsyncSession, before: datetime, *, max_records: int = DIAGNOSTIC_MAX_RECORDS
+    ) -> int:
+        """全局清理过期或超过数量上限的规划样本。"""
+        return await self._prune_diagnostics(session, ChatPlannerSample, before, max_records)
+
+    @with_session
     async def list_emoji(
         self,
         session: AsyncSession,
@@ -1220,10 +1230,25 @@ class ChatRepository:
         return list((await session.execute(statement)).scalars().all())
 
     @with_session
-    async def clear_traces(self, session: AsyncSession, before: datetime) -> int:
-        """删除指定时间之前的追踪。"""
-        result = await session.execute(delete(ChatTrace).where(ChatTrace.created_at < before))
-        return int(result.rowcount or 0)
+    async def clear_traces(
+        self, session: AsyncSession, before: datetime, *, max_records: int = DIAGNOSTIC_MAX_RECORDS
+    ) -> int:
+        """全局清理过期或超过数量上限的轮次追踪。"""
+        return await self._prune_diagnostics(session, ChatTrace, before, max_records)
+
+    async def _prune_diagnostics(
+        self,
+        session: AsyncSession,
+        model: type[ChatTrace] | type[ChatPlannerSample],
+        before: datetime,
+        max_records: int,
+    ) -> int:
+        """同一事务内按时间及全局记录数量裁切诊断数据。"""
+        await session.flush()
+        aged = await session.execute(delete(model).where(model.created_at < before))
+        cutoff = select(model.id).order_by(model.id.desc()).offset(max(1, int(max_records))).limit(1).scalar_subquery()
+        overflow = await session.execute(delete(model).where(model.id <= cutoff))
+        return int(aged.rowcount or 0) + int(overflow.rowcount or 0)
 
     @with_session
     async def decay_expressions(

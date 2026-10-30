@@ -1,4 +1,4 @@
-"""每日生命周期清理与表达衰减；单项失败不阻断其余步骤。"""
+"""诊断数据保留与表达维护；单项失败不阻断其余步骤。"""
 
 from __future__ import annotations
 
@@ -10,9 +10,8 @@ from nonebot import logger
 
 from .state import is_ready
 from .models import utc_now_naive
-from .repository import chat_repository
+from .repository import DIAGNOSTIC_RETENTION_HOURS, chat_repository
 
-_TRACE_RETENTION_DAYS = 7
 _EXPRESSION_IDLE_DAYS = 30
 
 
@@ -24,17 +23,22 @@ async def _run(name: str, step: Callable[[], Awaitable[Any]], result: dict[str, 
 
 
 async def lifecycle_tick(*, now: datetime | None = None) -> dict[str, Any]:
-    """每日清理过期 trace；原始对话历史与 MaiBot 一样不按天删除。"""
+    """清理规划样本与追踪，聊天历史、学习和长期记忆不参与清理。"""
     if not is_ready():
         return {}
     moment = now or utc_now_naive()
     result: dict[str, Any] = {}
     steps = {
-        "traces": lambda: chat_repository.clear_traces(moment - timedelta(days=_TRACE_RETENTION_DAYS)),
+        "traces": lambda: chat_repository.clear_traces(moment - timedelta(hours=DIAGNOSTIC_RETENTION_HOURS)),
+        "planner_samples": lambda: chat_repository.clear_planner_samples(
+            moment - timedelta(hours=DIAGNOSTIC_RETENTION_HOURS)
+        ),
     }
     for name, step in steps.items():
         await _run(name, step, result)
-    logger.info(f"[ChatStorage] 生命周期清理完成: {result}")
+    removed = sum(value for value in result.values() if isinstance(value, int))
+    if removed:
+        logger.info(f"[ChatStorage] 生命周期清理删除 {removed} 条: {result}")
     return result
 
 

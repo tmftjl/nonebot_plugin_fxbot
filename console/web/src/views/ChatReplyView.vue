@@ -312,6 +312,7 @@ onMounted(() => {
           <div class="tenant-help">
             Planner 每次调用记录首轮动作；label 为 1 表示决定回复，0 表示保持安静或等待。当前样本：回复
             {{ plannerLabelCounts.replies }} 条，不回复 {{ plannerLabelCounts.silent }} 条。
+            规划样本保留 72 小时，全局最多 10,000 条。
           </div>
           <el-table :data="plannerRows" row-key="id" empty-text="暂无规划样本">
             <el-table-column label="时间" min-width="170">
@@ -438,7 +439,8 @@ onMounted(() => {
             <el-button :icon="Refresh" :loading="traceLoading" @click="loadTraces">刷新</el-button>
           </div>
           <div class="tenant-help">
-            每轮对话一条记录，展开查看 Planner、回复生成与发送阶段；总耗时包含各阶段，不重复相加。记录保留 7 天。
+            每轮对话一条记录，展开查看 Planner、回复生成与发送阶段；总耗时包含各阶段，不重复相加。
+            轮次追踪保留 72 小时，全局最多 10,000 条。
           </div>
           <el-table :data="traceRows" row-key="id" empty-text="暂无轮次追踪">
             <el-table-column type="expand">

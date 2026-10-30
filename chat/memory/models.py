@@ -267,7 +267,7 @@ class ChatEmoji(BaseIDModel, table=True):
 
 
 class ChatTrace(BaseIDModel, table=True):
-    """每轮注入与调用的最小追踪；保留 7 天。"""
+    """每轮注入与调用的最小追踪；保留 72 小时、全局最多 10000 条。"""
 
     __tablename__ = "chat_trace"
     __table_args__ = (Index("ix_chat_trace_tenant_created", "tenant", "created_at"),)

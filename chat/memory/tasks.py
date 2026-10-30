@@ -6,6 +6,7 @@ from nonebot import logger
 
 from ..emoji import emoji_config, emoji_cleanup_tick, emoji_reconcile_tick
 from .cleanup import lifecycle_tick
+from ...utils.tz import now
 
 
 def setup_memory_tasks() -> None:
@@ -17,9 +18,9 @@ def setup_memory_tasks() -> None:
         return
     scheduler.add_job(
         lifecycle_tick,
-        trigger="cron",
-        hour=4,
-        minute=30,
+        trigger="interval",
+        minutes=1,
+        next_run_time=now(),
         id="fxbot_chat_lifecycle",
         replace_existing=True,
         max_instances=1,
@@ -56,6 +57,6 @@ def setup_memory_tasks() -> None:
     )
     logger.info(
         "[ChatStorage] 聊天任务已注册: 表达和黑话从裁切素材学习；"
-        "生命周期每日 04:30；"
+        "诊断数据启动时及每分钟清理，保留 72 小时、每类全局最多 10000 条；"
         f"表情补识别每 {check_minutes} 分钟、缓存每 {cleanup_hours:g} 小时"
     )

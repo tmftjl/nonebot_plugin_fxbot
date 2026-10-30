@@ -52,6 +52,14 @@ class SchedulerReloadTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(self.scheduler.get_job(job_id).trigger.interval.total_seconds(), seconds)
                 self.assertEqual(sum(job.id == job_id for job in self.scheduler.get_jobs()), 1)
 
+    def test_diagnostic_cleanup_starts_immediately_and_runs_each_minute(self) -> None:
+        memory_tasks.setup_memory_tasks()
+        memory_tasks.setup_memory_tasks()
+        job = self.scheduler.get_job("fxbot_chat_lifecycle")
+        self.assertEqual(job.trigger.interval.total_seconds(), 60)
+        self.assertIsNotNone(job.next_run_time)
+        self.assertEqual(sum(item.id == job.id for item in self.scheduler.get_jobs()), 1)
+
     async def test_disable_removes_job_and_blocks_queued_execution(self) -> None:
         self.config["membership"]["enable_scheduler"] = True
         self.config["membership"]["auto_leave_expired_groups"] = True
