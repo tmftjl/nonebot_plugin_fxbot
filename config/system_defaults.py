@@ -27,7 +27,6 @@ SYSTEM_DEFAULTS = {
     },
     "chat": {
         "enabled": True,
-        "command_prefixes": ["gs", "#", "ww"],
         "private_enabled": True,
         "private_allowlist": [],
         "group_allowlist": [],
@@ -412,8 +411,11 @@ def validate_system_config(data: dict[str, Any]) -> None:
     for rule in rules:
         if not isinstance(rule, dict):
             raise ValueError("chat.reply_timing.talk_value_rules 的每一项必须是对象")
-        if not isinstance(rule.get("tenant", ""), str):
-            raise ValueError("chat.reply_timing.talk_value_rules.tenant 必须是字符串")
+        for key in ("tenant", "platform", "item_id", "type"):
+            if not isinstance(rule.get(key, ""), str):
+                raise ValueError(f"chat.reply_timing.talk_value_rules.{key} 必须是字符串")
+        if str(rule.get("type") or "").strip() not in {"", "group", "private"}:
+            raise ValueError("chat.reply_timing.talk_value_rules.type 只能是 group 或 private")
         time_range = str(rule.get("time") or "").strip()
         if time_range not in {"", "*"} and not _TIME_RANGE.fullmatch(time_range):
             raise ValueError("chat.reply_timing.talk_value_rules.time 必须形如 09:00-18:59，留空或 * 表示全天")

@@ -5,7 +5,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Refresh, Search } from '@element-plus/icons-vue'
 import PageHeader from '@/components/PageHeader.vue'
 import PillTabs from '@/components/PillTabs.vue'
-import { providerApi } from '@/api'
+import { configApi, providerApi } from '@/api'
 import type {
   ModelRoutingData,
   ModelRoutingTask,
@@ -25,9 +25,20 @@ interface ProviderForm {
   voice: string
 }
 
+interface WebServiceDraft {
+  name: string
+  adapter: string
+  base_url: string
+  api_key: string
+  timeout: number
+  search_depth: string
+  extract_depth: string
+  preview_chars: number
+}
+
 const tabs = [
   { key: 'models', label: '模型设置', hint: 'Provider 与服务模型' },
-  { key: 'routing', label: '功能分配', hint: '对话、规划与抽取使用哪个模型' },
+  { key: 'routing', label: '功能分配', hint: '对话、规划、联网使用哪个模型或服务' },
 ] as const
 
 type TabKey = (typeof tabs)[number]['key']
@@ -54,6 +65,33 @@ const routing = ref<ModelRoutingData | null>(null)
 const routingLoading = ref(false)
 const routingSaving = ref(false)
 const selectedTask = ref('')
+const showAdvanced = ref(false)
+
+const webDialogVisible = ref(false)
+const webEditingName = ref('')
+const webSaving = ref(false)
+const webDraft = ref<WebServiceDraft>(emptyWebDraft())
+
+const webAdapters = [
+  { label: 'DeepSeek', value: 'deepseek', base_url: 'https://api.deepseek.com' },
+  { label: 'Tavily', value: 'tavily', base_url: 'https://api.tavily.com' },
+  { label: 'AnySearch', value: 'anysearch', base_url: 'https://api.anysearch.com' },
+  { label: 'Exa', value: 'exa', base_url: 'https://api.exa.ai' },
+  { label: 'Firecrawl', value: 'firecrawl', base_url: 'https://api.firecrawl.dev' },
+]
+
+function emptyWebDraft(): WebServiceDraft {
+  return {
+    name: '',
+    adapter: 'deepseek',
+    base_url: '',
+    api_key: '',
+    timeout: 60,
+    search_depth: 'basic',
+    extract_depth: 'basic',
+    preview_chars: 4000,
+  }
+}
 
 function emptyForm(): ProviderForm {
   return {
@@ -112,6 +150,30 @@ const taskProviders = computed(() => {
 const isAutoCapability = (value?: string) =>
   value === 'stt' || value === 'tts' || value === 'embedding'
 
+const isWebTask = computed(() => currentTask.value?.provider_type === 'web')
+
+const assignedWebService = computed(
+  () => (routing.value?.web_services || []).find((item) => item.name === currentTask.value?.provider) || null,
+)
+
+const webServices = computed(() => routing.value?.web_services || [])
+
+const taskOptions = computed(() =>
+  isWebTask.value
+    ? webServices.value.map((item) => ({ name: item.name, label: `${item.name} · ${item.adapter}` }))
+    : taskProviders.value.map((item) => ({ name: item.name, label: `${item.name} · ${item.model || item.type_label}` })),
+)
+
+const visibleTasks = computed(() =>
+  (routing.value?.tasks || []).filter((item) => showAdvanced.value || !item.advanced),
+)
+
+watch(showAdvanced, () => {
+  if (!visibleTasks.value.some((item) => item.task === selectedTask.value)) {
+    selectedTask.value = visibleTasks.value[0]?.task || ''
+  }
+})
+
 const assignedProvider = computed(() => {
   const fallback = isAutoCapability(currentTask.value?.provider_type) ? '' : routing.value?.default_provider
   const name = currentTask.value?.provider || fallback || ''
@@ -119,11 +181,13 @@ const assignedProvider = computed(() => {
 })
 
 const taskFallbackLabel = computed(() => {
+  if (isWebTask.value) return '不启用'
   if (isAutoCapability(currentTask.value?.provider_type)) return '自动选择'
   return `跟随默认${routing.value?.default_provider ? `（${routing.value.default_provider}）` : ''}`
 })
 
 const taskHint = computed(() => {
+  if (isWebTask.value) return '搜索与网页读取共用这个服务；留空不开放统一联网工具。'
   if (currentTask.value?.provider_type === 'stt')
     return '留空时自动使用第一个语音识别 Provider；这里只决定由哪个 Provider 执行业务。'
   if (currentTask.value?.provider_type === 'tts')
@@ -131,6 +195,24 @@ const taskHint = computed(() => {
   if (currentTask.value?.provider_type === 'embedding')
     return '留空时自动使用第一个嵌入 Provider；这里只决定由哪个 Provider 执行业务。'
   return '未单独分配时沿用默认对话模型；这里只决定由哪个 Provider 执行该任务。'
+})
+
+const detailRows = computed(() => {
+  if (isWebTask.value) {
+    const service = assignedWebService.value
+    return [
+      { label: '接口类型', value: service?.adapter || '—' },
+      { label: '超时', value: service ? `${service.timeout} 秒` : '—' },
+      { label: '密钥', value: service ? (service.has_api_key ? '已配置' : '未配置') : '—' },
+    ]
+  }
+  const provider = assignedProvider.value
+  return [
+    { label: '实际模型', value: provider?.model || '—' },
+    { label: '接口类型', value: provider?.type_label || '—' },
+    { label: '超时', value: provider ? `${provider.timeout} 秒` : '—' },
+    { label: '密钥', value: provider ? (provider.has_api_key ? '已配置' : '未配置') : '—' },
+  ]
 })
 
 const capabilityLabel = (value: string) =>
@@ -209,6 +291,116 @@ const loadRouting = async () => {
   } finally {
     routingLoading.value = false
   }
+}
+
+const webBaseUrlPlaceholder = computed(
+  () => webAdapters.find((item) => item.value === webDraft.value.adapter)?.base_url || '',
+)
+
+const webNameLocked = computed(
+  () => !!webEditingName.value && webEditingName.value === currentTask.value?.provider,
+)
+
+const openWebDialog = async (name = '') => {
+  try {
+    const configs = await configApi.getAll()
+    const chat = configs.system?.chat || {}
+    const web = chat.web || {}
+    const entry = (web.services || []).find((item: any) => item?.name === name) || {}
+    webDraft.value = {
+      name,
+      adapter: String(entry.adapter || 'deepseek'),
+      base_url: String(entry.base_url || ''),
+      api_key: String(entry.api_key || ''),
+      timeout: Number(entry.timeout ?? 60),
+      search_depth: String(entry.search_depth || 'basic'),
+      extract_depth: String(entry.extract_depth || 'basic'),
+      preview_chars: Number(web.preview_chars ?? 4000),
+    }
+    webEditingName.value = name
+    webDialogVisible.value = true
+  } catch (e) {
+    console.error(e)
+    ElMessage.error('加载联网服务失败，请稍后再试')
+  }
+}
+
+const persistWebServices = async (mutate: (services: any[], routing: Record<string, any>) => void) => {
+  webSaving.value = true
+  try {
+    const configs = await configApi.getAll()
+    if (!configs.system) configs.system = {}
+    const chat = configs.system.chat || (configs.system.chat = {})
+    const web = chat.web || (chat.web = {})
+    const services = Array.isArray(web.services) ? web.services : (web.services = [])
+    const routingMap = chat.model_routing || (chat.model_routing = {})
+    mutate(services, routingMap)
+    web.preview_chars = webDraft.value.preview_chars
+    await configApi.save(configs)
+    webDialogVisible.value = false
+    ElMessage.success('联网服务已保存')
+    await loadRouting()
+  } catch (e: any) {
+    if (e?.response?.status === 409) ElMessage.error('配置已在其他页面被修改，请刷新后重试')
+    else ElMessage.error('保存失败: ' + (e?.response?.data?.detail || e?.message || e))
+  } finally {
+    webSaving.value = false
+  }
+}
+
+const saveWebService = async () => {
+  const draft = webDraft.value
+  const name = draft.name.trim()
+  if (!name) return ElMessage.error('请填写服务名称')
+  if (!draft.api_key.trim()) return ElMessage.error('请填写 API Key')
+  if (!Number.isFinite(draft.timeout) || draft.timeout < 1 || draft.timeout > 300)
+    return ElMessage.error('超时时间应大于 0 且不超过 300 秒')
+  if (draft.base_url.trim()) {
+    try {
+      const url = new URL(draft.base_url.trim())
+      if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash)
+        throw new Error('invalid')
+    } catch {
+      return ElMessage.error('API 地址须为 HTTP(S) 地址，不能包含用户名、密码、查询参数或片段')
+    }
+  }
+  const editing = webEditingName.value
+  if (name !== editing && webServices.value.some((item) => item.name === name))
+    return ElMessage.error('服务名称已存在')
+  await persistWebServices((services, modelRouting) => {
+    const entry = {
+      name,
+      adapter: draft.adapter,
+      base_url: draft.base_url.trim(),
+      api_key: draft.api_key.trim(),
+      timeout: draft.timeout,
+      search_depth: draft.search_depth,
+      extract_depth: draft.extract_depth,
+    }
+    const index = services.findIndex((item: any) => item?.name === editing)
+    if (index >= 0) services[index] = entry
+    else services.push(entry)
+    if (editing && editing !== name && modelRouting.web_search === editing) modelRouting.web_search = name
+  })
+}
+
+const deleteWebService = async () => {
+  const editing = webEditingName.value
+  if (!editing) return
+  try {
+    await ElMessageBox.confirm(`删除联网服务「${editing}」？正在使用时会被取消选用。`, '删除联网服务', {
+      type: 'warning',
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+    })
+  } catch {
+    return
+  }
+  await persistWebServices((services, modelRouting) => {
+    const index = services.findIndex((item: any) => item?.name === editing)
+    if (index >= 0) services.splice(index, 1)
+    if (modelRouting.web_search === editing) modelRouting.web_search = ''
+  })
 }
 
 const openCreateDialog = () => {
@@ -364,7 +556,9 @@ const updateTaskProvider = async (value: string) => {
       ElMessage.error(res.message || '保存失败')
       return
     }
-    ElMessage.success(value ? `已分配给「${value}」` : '已改为跟随默认模型')
+    ElMessage.success(
+      value ? `已分配给「${value}」` : isWebTask.value ? '已关闭联网工具' : '已改为跟随默认模型',
+    )
     await loadRouting()
   } catch (e) {
     console.error(e)
@@ -516,33 +710,42 @@ onMounted(() => {
         </section>
       </div>
 
-      <div v-else key="routing" class="routing-layout">
+      <div v-else-if="activeTab === 'routing'" key="routing" class="routing-layout">
         <aside class="task-side">
           <div class="vendor-head">
             <span class="vendor-title">功能任务</span>
-            <el-button link type="primary" :icon="Refresh" :loading="routingLoading" @click="loadRouting">
-              刷新
-            </el-button>
+            <div class="task-head-actions">
+              <span class="advanced-label">高级</span>
+              <el-switch v-model="showAdvanced" size="small" />
+              <el-button link type="primary" :icon="Refresh" :loading="routingLoading" @click="loadRouting">
+                刷新
+              </el-button>
+            </div>
           </div>
           <button
-            v-for="task in routing?.tasks || []"
+            v-for="task in visibleTasks"
             :key="task.task"
             type="button"
             class="task-item"
             :class="{ active: selectedTask === task.task }"
             @click="selectedTask = task.task"
           >
-            <span class="task-name">{{ task.label }}</span>
+            <span class="task-name">
+              {{ task.label }}
+              <span v-if="task.advanced" class="task-advanced">高级</span>
+            </span>
             <span class="task-meta">
               {{
                 task.provider ||
-                (isAutoCapability(task.provider_type)
-                  ? '自动选择'
-                  : `跟随默认 · ${routing?.default_provider || '未设置'}`)
+                (task.provider_type === 'web'
+                  ? '未启用'
+                  : isAutoCapability(task.provider_type)
+                    ? '自动选择'
+                    : `跟随默认 · ${routing?.default_provider || '未设置'}`)
               }}
             </span>
           </button>
-          <div v-if="!routing?.tasks.length" class="task-empty">暂无任务</div>
+          <div v-if="!visibleTasks.length" class="task-empty">暂无任务</div>
         </aside>
 
         <section class="panel task-main">
@@ -555,53 +758,50 @@ onMounted(() => {
               <el-tag size="small" :type="currentTask.provider ? 'success' : 'info'">
                 {{
                   currentTask.provider
-                    ? '单独分配'
-                    : isAutoCapability(currentTask.provider_type)
-                      ? '自动选择'
-                      : '跟随默认'
+                    ? isWebTask
+                      ? '已启用'
+                      : '单独分配'
+                    : isWebTask
+                      ? '未启用'
+                      : isAutoCapability(currentTask.provider_type)
+                        ? '自动选择'
+                        : '跟随默认'
                 }}
               </el-tag>
             </div>
 
             <div class="form-block">
-              <div class="form-label">分配模型</div>
+              <div class="form-label">{{ isWebTask ? '搜索服务' : '分配模型' }}</div>
               <el-select
                 :model-value="currentTask.provider"
                 class="provider-select"
                 :loading="routingSaving"
+                :placeholder="isWebTask ? '选择已添加的联网服务' : ''"
                 @change="(value: string) => updateTaskProvider(value)"
               >
                 <el-option value="" :label="taskFallbackLabel" />
                 <el-option
-                  v-for="provider in taskProviders"
-                  :key="provider.name"
-                  :value="provider.name"
-                  :label="`${provider.name} · ${provider.model || provider.type_label}`"
+                  v-for="option in taskOptions"
+                  :key="option.name"
+                  :value="option.name"
+                  :label="option.label"
                 />
               </el-select>
-              <div class="form-hint">{{ taskHint }}</div>
+              <div class="form-hint">
+                {{ taskOptions.length || !isWebTask ? taskHint : '还没有联网服务，请先添加连接配置。' }}
+              </div>
+              <div v-if="isWebTask" class="web-actions">
+                <el-button @click="openWebDialog()">添加联网搜索</el-button>
+                <el-button v-if="currentTask.provider" text type="primary" @click="openWebDialog(currentTask.provider)">
+                  编辑「{{ currentTask.provider }}」
+                </el-button>
+              </div>
             </div>
 
             <div class="detail-grid">
-              <div class="detail-item">
-                <span class="detail-label">实际模型</span>
-                <span class="detail-value">{{ assignedProvider?.model || '—' }}</span>
-              </div>
-              <div class="detail-item">
-                <span class="detail-label">接口类型</span>
-                <span class="detail-value">{{ assignedProvider?.type_label || '—' }}</span>
-              </div>
-              <div class="detail-item">
-                <span class="detail-label">超时</span>
-                <span class="detail-value">
-                  {{ assignedProvider ? `${assignedProvider.timeout} 秒` : '—' }}
-                </span>
-              </div>
-              <div class="detail-item">
-                <span class="detail-label">密钥</span>
-                <span class="detail-value">
-                  {{ assignedProvider ? (assignedProvider.has_api_key ? '已配置' : '未配置') : '—' }}
-                </span>
+              <div v-for="row in detailRows" :key="row.label" class="detail-item">
+                <span class="detail-label">{{ row.label }}</span>
+                <span class="detail-value">{{ row.value }}</span>
               </div>
             </div>
 
@@ -692,6 +892,81 @@ onMounted(() => {
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="saving" @click="saveProvider">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="webDialogVisible"
+      :title="webEditingName ? '编辑联网搜索' : '添加联网搜索'"
+      width="460"
+      align-center
+      class="web-service-dialog"
+    >
+      <el-form label-position="top" :model="webDraft">
+        <el-form-item label="服务名称">
+          <el-input v-model="webDraft.name" :disabled="webNameLocked" placeholder="例如：日常搜索" />
+        </el-form-item>
+        <el-form-item label="服务商">
+          <el-select v-model="webDraft.adapter" style="width: 100%">
+            <el-option v-for="item in webAdapters" :key="item.value" :label="item.label" :value="item.value" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="API Key">
+          <el-input
+            v-model="webDraft.api_key"
+            type="password"
+            show-password
+            autocomplete="new-password"
+            placeholder="粘贴服务密钥"
+          />
+        </el-form-item>
+        <el-form-item label="API 地址">
+          <el-input v-model="webDraft.base_url" :placeholder="`${webBaseUrlPlaceholder}（留空用官方地址）`" />
+        </el-form-item>
+        <div v-if="webNameLocked" class="form-hint web-locked-hint">
+          该服务正在用于联网搜索；改名或删除前，请先在功能分配中取消选用。
+        </div>
+        <details class="web-advanced">
+          <summary class="web-advanced-title">高级选项</summary>
+          <div class="web-advanced-grid">
+            <el-form-item label="请求超时（秒）">
+              <el-input-number v-model="webDraft.timeout" :min="1" :max="300" controls-position="right" />
+            </el-form-item>
+            <el-form-item label="内容预览字数">
+              <el-input-number
+                v-model="webDraft.preview_chars"
+                :min="500"
+                :max="12000"
+                :step="500"
+                controls-position="right"
+              />
+            </el-form-item>
+            <el-form-item v-if="webDraft.adapter === 'tavily'" label="搜索深度">
+              <el-select v-model="webDraft.search_depth" style="width: 100%">
+                <el-option label="基础" value="basic" />
+                <el-option label="高级" value="advanced" />
+                <el-option label="快速" value="fast" />
+                <el-option label="极速" value="ultra-fast" />
+              </el-select>
+            </el-form-item>
+            <el-form-item v-if="webDraft.adapter === 'tavily'" label="提取深度">
+              <el-select v-model="webDraft.extract_depth" style="width: 100%">
+                <el-option label="基础" value="basic" />
+                <el-option label="高级" value="advanced" />
+              </el-select>
+            </el-form-item>
+          </div>
+        </details>
+      </el-form>
+      <template #footer>
+        <div class="web-dialog-footer">
+          <el-button v-if="webEditingName" type="danger" plain @click="deleteWebService">删除</el-button>
+          <span v-else />
+          <div class="web-dialog-footer-right">
+            <el-button @click="webDialogVisible = false">取消</el-button>
+            <el-button type="primary" :loading="webSaving" @click="saveWebService">保存</el-button>
+          </div>
+        </div>
       </template>
     </el-dialog>
   </div>
@@ -918,6 +1193,27 @@ onMounted(() => {
   font-weight: 600;
 }
 
+.task-advanced {
+  margin-left: 4px;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-tertiary);
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.task-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.advanced-label {
+  color: var(--color-text-tertiary);
+  font-size: 11px;
+}
+
 .task-meta {
   overflow: hidden;
   color: var(--color-text-tertiary);
@@ -935,6 +1231,62 @@ onMounted(() => {
 
 .task-main {
   min-height: 360px;
+}
+
+.web-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.web-advanced {
+  padding: 0 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+
+  &[open] {
+    padding-bottom: 2px;
+  }
+}
+
+.web-advanced-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 0;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  list-style: none;
+
+  &::-webkit-details-marker {
+    display: none;
+  }
+
+  &::after {
+    content: '';
+    width: 6px;
+    height: 6px;
+    border-right: 1.5px solid currentColor;
+    border-bottom: 1.5px solid currentColor;
+    transform: rotate(45deg);
+    transition: transform 0.15s ease;
+  }
+}
+
+.web-advanced[open] .web-advanced-title::after {
+  transform: rotate(-135deg);
+}
+
+.web-advanced-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 12px;
+}
+
+.web-locked-hint {
+  margin: -6px 0 12px;
 }
 
 .task-title-row {
@@ -1054,6 +1406,53 @@ onMounted(() => {
 
   .form-row {
     grid-template-columns: 1fr;
+  }
+}
+</style>
+
+<style lang="scss">
+.web-service-dialog {
+  .el-dialog__header {
+    padding: 20px 24px 0;
+  }
+
+  .el-dialog__title {
+    font-size: 16px;
+    font-weight: 600;
+  }
+
+  .el-dialog__body {
+    padding: 14px 24px 0;
+  }
+
+  .el-dialog__footer {
+    padding: 6px 24px 20px;
+  }
+
+  .el-form-item {
+    margin-bottom: 12px;
+  }
+
+  .el-form-item__label {
+    padding-bottom: 4px !important;
+    color: var(--color-text);
+    font-size: 13px;
+    line-height: 20px;
+  }
+
+  .el-input-number {
+    width: 100%;
+  }
+
+  .web-dialog-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .web-dialog-footer-right {
+    display: flex;
+    gap: 8px;
   }
 }
 </style>

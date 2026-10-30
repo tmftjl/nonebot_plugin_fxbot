@@ -35,7 +35,6 @@ from .message_adapter import (
     mention_flags,
     event_identity,
     collect_mentions,
-    is_ignored_command,
     adapt_message_event,
     memory_image_sources,
     session_id_for_event,
@@ -201,8 +200,6 @@ async def _ai_fallback_rule(bot: Bot, event: Event) -> bool:
     text = message_text(event)
     if not text and not _has_image(event) and not _has_voice(event):
         return False
-    if is_ignored_command(text, cfg):
-        return False
     return True
 
 
@@ -218,8 +215,6 @@ async def _context_rule(bot: Bot, event: Event) -> bool:
     if not _should_record_context(cfg, bot, event):
         return False
     text = message_text(event)
-    if is_ignored_command(text, cfg):
-        return False
     has_image = _has_image(event)
     has_voice = _has_voice(event)
     if not text and not has_image and not has_voice:

@@ -4,8 +4,9 @@ import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Delete, Edit, Plus } from '@element-plus/icons-vue'
 import type { SchemaItem } from '@/types/schema'
-import GChatTenant from './GChatTenant.vue'
 import GTimeRange from './GTimeRange.vue'
+import GPlatformSelect from './GPlatformSelect.vue'
+import GChatTarget from './GChatTarget.vue'
 
 const props = withDefaults(
   defineProps<{
@@ -37,7 +38,11 @@ const emptyItem = () => {
       data[schema.field] = []
     } else if (schema.component === 'Switch') {
       data[schema.field] = false
-    } else if (schema.component === 'GChatTenant' || schema.component === 'GTimeRange') {
+    } else if (
+      schema.component === 'GTimeRange' ||
+      schema.component === 'GPlatformSelect' ||
+      schema.component === 'GChatTarget'
+    ) {
       data[schema.field] = ''
     }
   }
@@ -97,15 +102,22 @@ const display = (value: unknown): string => {
   return `${SCENE_LABELS[tenant[1]] || tenant[1]} ${target}`
 }
 
+const labelOf = (schema: SchemaItem | undefined, value: unknown): string => {
+  const options = schema?.componentProps?.options as Array<Record<string, any>> | undefined
+  const match = options?.find((opt) => (opt.value ?? opt) === value)
+  return match ? String(match.label ?? match) : display(value)
+}
+
 const titleOf = (item: Record<string, any>, index: number) => {
-  return display(props.titleField ? item[props.titleField] : '') || `第 ${index + 1} 项`
+  const schema = props.schemas.find((row) => row.field === props.titleField)
+  return labelOf(schema, item[props.titleField]) || `第 ${index + 1} 项`
 }
 
 const summaryOf = (item: Record<string, any>) => {
   const parts: string[] = []
   for (const schema of props.schemas) {
     if (!schema.field || schema.field === props.titleField) continue
-    const text = display(item[schema.field])
+    const text = labelOf(schema, item[schema.field])
     if (text) parts.push(`${schema.label} ${text}`)
   }
   return parts.join(' · ')
@@ -135,10 +147,7 @@ const setFormValue = (field: string | undefined, value: unknown) => {
       <el-button class="add-button" :icon="Plus" @click="openAdd">{{ addLabel }}</el-button>
     </div>
 
-    <el-dialog v-model="visible" width="620px" destroy-on-close append-to-body class="g-list-dialog">
-      <template #header>
-        <span>{{ editingIndex === null ? addLabel : '编辑' }}</span>
-      </template>
+    <el-dialog v-model="visible" width="400px" align-center destroy-on-close append-to-body class="g-list-dialog">
       <el-form label-width="110px">
         <template v-for="schema in schemas" :key="schema.field || schema.label">
           <el-form-item v-if="schema.field" :label="schema.label" :required="schema.required">
@@ -198,9 +207,18 @@ const setFormValue = (field: string | undefined, value: unknown) => {
               style="width: 100%"
               @update:model-value="(v: unknown) => setFormValue(schema.field, v)"
             />
-            <GChatTenant
-              v-else-if="schema.component === 'GChatTenant'"
+            <GPlatformSelect
+              v-else-if="schema.component === 'GPlatformSelect'"
               :model-value="getFormValue(schema.field) || ''"
+              :placeholder="schema.componentProps?.placeholder"
+              @update:model-value="(v: string) => setFormValue(schema.field, v)"
+            />
+            <GChatTarget
+              v-else-if="schema.component === 'GChatTarget'"
+              :model-value="getFormValue(schema.field) || ''"
+              :platform="getFormValue(schema.componentProps?.platformField) || ''"
+              :scene="getFormValue(schema.componentProps?.typeField) || ''"
+              :placeholder="schema.componentProps?.placeholder"
               @update:model-value="(v: string) => setFormValue(schema.field, v)"
             />
             <GTimeRange
@@ -313,12 +331,27 @@ const setFormValue = (field: string | undefined, value: unknown) => {
 <style lang="scss">
 /* 对话框传送到 body，作用域样式够不到，只能按类名限定 */
 .g-list-dialog {
+  --el-dialog-padding-primary: 0;
+
+  .el-dialog__header {
+    display: none;
+  }
+
   .el-dialog__body {
-    padding: 8px 20px 4px;
+    padding: 30px 30px 0;
+  }
+
+  .el-dialog__footer {
+    padding: 8px 30px 25px;
   }
 
   .el-form-item {
-    margin-bottom: 18px;
+    margin-bottom: 14px;
+  }
+
+  .el-form-item__label {
+    justify-content: flex-start;
+    pointer-events: none;
   }
 
   .number-input {

@@ -4,6 +4,8 @@ import { QuestionFilled } from '@element-plus/icons-vue'
 import type { SchemaItem, ConfigCard } from '@/types/schema'
 import GListForm from './GListForm.vue'
 import GSubForm from './GSubForm.vue'
+import GTags from './GTags.vue'
+import GChatPrompts from './GChatPrompts.vue'
 
 interface Props {
   card: ConfigCard
@@ -71,7 +73,7 @@ const setValue = (field: string | undefined, value: any) => {
 const getColProps = (schema: SchemaItem) => {
   const type = schema.component
   // 全宽组件
-  if (type === 'GSubForm' || type === 'GListForm' || type === 'Textarea') {
+  if (type === 'GSubForm' || type === 'GListForm' || type === 'GChatPrompts' || type === 'Textarea') {
     return { xs: 24, sm: 24, md: 24, lg: 24, xl: 24 }
   }
   
@@ -265,16 +267,20 @@ const handleArrayInputBackspace = (field: string | undefined, currentTags: unkno
                   </div>
 
                   <!-- GTags -->
-                  <div v-else-if="schema.component === 'GTags'" class="control-wrapper">
-                    <el-select
+                  <div v-else-if="schema.component === 'GTags' && schema.field" class="control-wrapper">
+                    <GTags
                       :model-value="getValue(schema.field) || []"
-                      multiple
-                      filterable
-                      allow-create
-                      default-first-option
-                      :placeholder="schema.componentProps?.placeholder || '输入后按回车添加'"
-                      style="width: 100%"
-                      @update:model-value="(v: unknown) => setValue(schema.field, v)"
+                      :placeholder="schema.componentProps?.placeholder"
+                      :suggest-scene="schema.componentProps?.suggestScene"
+                      @update:model-value="(v: string[]) => setValue(schema.field, v)"
+                    />
+                  </div>
+
+                  <!-- GChatPrompts -->
+                  <div v-else-if="schema.component === 'GChatPrompts' && schema.field" class="control-wrapper">
+                    <GChatPrompts
+                      :model-value="getValue(schema.field) || []"
+                      @update:model-value="(v: string[]) => setValue(schema.field, v)"
                     />
                   </div>
 

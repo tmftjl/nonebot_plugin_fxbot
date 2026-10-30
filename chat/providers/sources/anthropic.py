@@ -9,7 +9,7 @@ from collections.abc import AsyncGenerator
 from nonebot import logger
 from anthropic import AsyncAnthropic
 
-from ..base import ChatProvider
+from ..base import ChatProvider, local_http_client
 from ..entities import LLMResponse
 from ..register import register_provider
 
@@ -28,6 +28,7 @@ class AnthropicProvider(ChatProvider):
             api_key=config["api_key"],
             base_url=config["base_url"],
             timeout=float(config["timeout"]),
+            http_client=local_http_client(config["base_url"], float(config["timeout"])),
         )
         self.model_name = str(config["model"])
 

@@ -263,15 +263,24 @@ export interface ModelRoutingTask {
   task: string
   label: string
   description: string
+  advanced: boolean
   provider: string
   provider_type: string
   model: string
   configured: boolean
 }
 
+export interface ModelRoutingWebService {
+  name: string
+  adapter: string
+  timeout: number
+  has_api_key: boolean
+}
+
 export interface ModelRoutingData {
   tasks: ModelRoutingTask[]
   providers: ModelRoutingProvider[]
+  web_services: ModelRoutingWebService[]
   default_provider: string
 }
 
@@ -392,6 +401,7 @@ export type ChatEmojiStatus = 'registered' | 'pending' | 'unidentified' | 'disab
 
 export interface ChatEmoji {
   hash: string
+  format: string
   description: string
   tags: string[]
   count: number
@@ -690,6 +700,59 @@ export interface AmemorixImage {
   status: string
   occurrence_count: number
   latest_occurrence_at: number | null
+}
+
+export interface AmemorixImageOccurrence {
+  occurrence_id: string
+  asset_id: string
+  external_ref: string
+  source_kind: string
+  scope_type: string
+  chat_id: string
+  chat_name?: string
+  message_id: string
+  component_path: string
+  occurred_at: number | null
+  status: string
+  created_at: number
+}
+
+export interface AmemorixImageObservation {
+  observation_id: string
+  occurrence_id: string
+  text: string
+  source_kind: string
+  confirm_status: string
+  version: number
+  created_at: number
+}
+
+export interface AmemorixImageLink {
+  link_id: string
+  occurrence_id: string
+  target_type: string
+  target_id: string
+  link_kind: string
+  memory: { target_type: string; target_id: string; content: string } | null
+}
+
+export interface AmemorixImageDetail {
+  success: boolean
+  asset: {
+    asset_id: string
+    content_hash: string
+    storage_key: string
+    mime_type: string
+    byte_size: number
+    width: number
+    height: number
+    status: string
+    created_at: number
+    updated_at: number
+  }
+  occurrences: AmemorixImageOccurrence[]
+  observations: AmemorixImageObservation[]
+  links: AmemorixImageLink[]
 }
 
 export interface AmemorixImageStatus {

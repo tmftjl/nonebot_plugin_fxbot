@@ -382,12 +382,6 @@ async def collect_mentions(
     return refs
 
 
-def is_ignored_command(text: str, config: dict[str, Any]) -> bool:
-    """前缀命令不进入对话或历史，忽略开头空白和无效空前缀。"""
-    prefixes = tuple(str(value) for value in config.get("command_prefixes", []) if str(value))
-    return bool(prefixes and str(text or "").lstrip().startswith(prefixes))
-
-
 def message_text(event: Any) -> str:
     """纯文本；消息只有合并转发时补一个占位，让 AI 知道可以展开。"""
     text = event_plain_text(event)

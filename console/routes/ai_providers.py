@@ -340,22 +340,24 @@ async def set_default_ai_provider(name: str) -> dict[str, Any]:
     return _ok()
 
 
-_ROUTING_TASKS: tuple[tuple[str, str, str], ...] = (
-    ("reply", "回复模型", "生成最终回复正文"),
-    ("planner", "规划模型", "决定动作、是否接话与主动发言"),
-    ("vision", "视觉模型", "图片描述、表情识别与内容评审"),
-    ("memory", "长期记忆模型", "A_Memorix 记忆抽取与画像整理"),
-    ("utils", "通用工具模型", "工具结果压缩与辅助判断"),
-    ("learner", "表达学习模型", "学习群友表达与黑话；留空沿用通用工具模型"),
-    ("fast_model", "快速模型", "表达选择与模型断句；留空沿用通用工具模型"),
-    ("emoji", "表情管理模型", "表情包名额已满时决定替换哪一个"),
-    ("voice", "语音识别模型", "把语音消息转成文字"),
-    ("tts", "语音合成模型", "把回复合成为语音"),
-    ("embedding", "文本嵌入模型", "长期记忆向量检索"),
-    ("image_embedding", "图片嵌入模型", "图片记忆向量化"),
+_ROUTING_TASKS: tuple[tuple[str, str, str, bool], ...] = (
+    ("reply", "回复模型", "生成最终回复正文", False),
+    ("planner", "规划模型", "决定动作、是否接话与主动发言", False),
+    ("memory", "长期记忆模型", "A_Memorix 记忆抽取与画像整理", True),
+    ("learner", "表达学习模型", "学习群友表达与黑话；留空沿用通用工具模型", True),
+    ("fast_model", "快速模型", "表达选择与模型断句；留空沿用通用工具模型", True),
+    ("emoji", "表情管理模型", "表情包名额已满时决定替换哪一个", True),
+    ("utils", "通用工具模型", "工具结果压缩与辅助判断", False),
+    ("vision", "视觉模型", "图片描述、表情识别与内容评审", False),
+    ("voice", "语音识别模型", "把语音消息转成文字", True),
+    ("tts", "语音合成模型", "把回复合成为语音", True),
+    ("embedding", "文本嵌入模型", "长期记忆向量检索", False),
+    ("image_embedding", "图片嵌入模型", "图片记忆向量化", True),
+    ("web_search", "联网搜索", "通过联网服务搜索网页与读取正文", False),
 )
 
 _TASK_CAPABILITIES = {
+    "web_search": "web",
     "voice": "stt",
     "tts": "tts",
     "embedding": "embedding",
@@ -363,6 +365,7 @@ _TASK_CAPABILITIES = {
 }
 
 _CAPABILITY_MESSAGES = {
+    "web": "联网任务只能分配联网服务",
     "stt": "语音任务只能分配语音识别 Provider",
     "tts": "语音合成任务只能分配语音合成 Provider",
     "embedding": "嵌入任务只能分配嵌入 Provider",
@@ -372,6 +375,28 @@ _CAPABILITY_MESSAGES = {
 def _task_capability(task: str) -> str:
     """任务需要的 Provider 能力；未单列的对话任务都走 chat。"""
     return _TASK_CAPABILITIES.get(task, "chat")
+
+
+def _web_services(chat: dict[str, Any]) -> list[dict[str, Any]]:
+    """联网服务列表；web_search 任务从这里选服务而不是选 Provider。"""
+    web = chat.get("web")
+    entries = web.get("services") if isinstance(web, dict) else None
+    services = []
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name") or "").strip()
+        if not name:
+            continue
+        services.append(
+            {
+                "name": name,
+                "adapter": str(entry.get("adapter") or "deepseek"),
+                "timeout": entry.get("timeout") or 60,
+                "has_api_key": bool(str(entry.get("api_key") or "").strip()),
+            }
+        )
+    return services
 
 
 def _routing_map(chat: dict[str, Any]) -> dict[str, str]:
@@ -403,8 +428,10 @@ async def get_model_routing() -> dict[str, Any]:
         if str(config.get("provider_type") or "") in _CAPABILITIES
     ]
     default = str(chat.get("provider") or "") or _first_chat_provider(configs)
+    web_services = _web_services(chat)
+    web_names = {item["name"] for item in web_services}
     tasks = []
-    for task, label, description in _ROUTING_TASKS:
+    for task, label, description, advanced in _ROUTING_TASKS:
         provider = routing.get(task, "")
         config = configs.get(provider, {}) if provider else {}
         tasks.append(
@@ -412,16 +439,20 @@ async def get_model_routing() -> dict[str, Any]:
                 "task": task,
                 "label": label,
                 "description": description,
+                "advanced": advanced,
                 "provider": provider,
                 "provider_type": _task_capability(task),
                 "model": str(config.get("model") or ""),
-                "configured": bool(provider and provider in configs),
+                "configured": bool(
+                    provider and (provider in web_names if task == "web_search" else provider in configs)
+                ),
             }
         )
     return _ok(
         {
             "tasks": tasks,
             "providers": providers,
+            "web_services": web_services,
             "default_provider": default,
         }
     )
@@ -435,9 +466,11 @@ async def update_model_routing(task: str, payload: dict[str, Any]) -> dict[str, 
         return _fail("未知的模型任务")
     provider = str(payload.get("provider") or "").strip()
     chat = _chat_config()
-    configs = _provider_configs(chat)
-    if provider:
-        config = configs.get(provider)
+    if task == "web_search":
+        if provider and provider not in {item["name"] for item in _web_services(chat)}:
+            return _fail("联网服务不存在")
+    elif provider:
+        config = _provider_configs(chat).get(provider)
         if config is None:
             return _fail("Provider 不存在")
         capability = _task_capability(task)

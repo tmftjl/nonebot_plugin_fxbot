@@ -8,22 +8,26 @@ from __future__ import annotations
 
 import re
 import json
+import time
 import uuid
 import base64
+import asyncio
 import binascii
 from typing import Any
 from pathlib import Path
 from datetime import datetime, timezone
 
 from fastapi import Depends, APIRouter, HTTPException
-from nonebot import logger
+from nonebot import logger, get_bots
 from sqlmodel import select
 from fastapi.responses import FileResponse
 
 from ...db import base_models
 from ..auth import sse_auth, bearer_auth
+from ...adapter import bind_bot
 from ...utils.tz import SHANGHAI_TZ
 from ...chat.amemorix.models import ChatPerson
+from ...chat.memory.learning import tenant_target
 from ...chat.amemorix.runtime import amemorix_runtime
 from ...chat.amemorix._host.host_config import save_amemorix_config
 
@@ -43,6 +47,38 @@ def _tenant(value: str) -> str:
     if not tenant:
         raise HTTPException(status_code=400, detail="tenant 不能为空")
     return tenant
+
+
+_chat_names: dict[str, tuple[float, str]] = {}
+
+
+async def _chat_name(chat_id: str) -> str:
+    """用在线 Bot 查聊天显示名；离线或平台不支持时返回空串。"""
+    target = tenant_target(chat_id)
+    if target is None:
+        return ""
+    cached = _chat_names.get(chat_id)
+    if cached and time.time() - cached[0] < (600 if cached[1] else 60):
+        return cached[1]
+    bot_id = target.namespace.split(":", 1)[1] if ":" in target.namespace else ""
+    bot = next((item for bid, item in get_bots().items() if str(bid) == bot_id), None)
+    name = ""
+    if bot is not None:
+        client = bind_bot(bot)
+        try:
+            info = await asyncio.wait_for(
+                client.get_group_info(target.item_id) if target.is_group else client.get_user(target.item_id),
+                timeout=3,
+            )
+            if isinstance(info, dict):
+                name = str(info.get("group_name" if target.is_group else "nickname") or "")
+            else:
+                name = str(getattr(info, "group_name" if target.is_group else "nickname", "") or "")
+        except Exception:
+            name = ""
+    name = name.strip()
+    _chat_names[chat_id] = (time.time(), name)
+    return name
 
 
 def _unavailable() -> HTTPException:
@@ -1768,6 +1804,27 @@ async def upload_image(payload: dict[str, Any]) -> dict[str, Any]:
         )
     except (RuntimeError, ValueError, TypeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return result
+
+
+@router.get("/images/{asset_id}/detail")
+async def image_detail(asset_id: str, tenant: str) -> dict[str, Any]:
+    """单张图片的文件信息、来源记录、认知说明与关联记忆。"""
+    tenant = _tenant(tenant)
+    kernel = await _kernel()
+    try:
+        result = await kernel.image_memory(action="get", asset_id=asset_id, chat_ids=[tenant])
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not result.get("success"):
+        raise HTTPException(status_code=404, detail=str(result.get("error") or "图片不存在"))
+    occurrences = result.get("occurrences") or []
+    for chat_id in {str(item.get("chat_id") or "") for item in occurrences}:
+        if chat_id:
+            name = await _chat_name(chat_id)
+            for item in occurrences:
+                if str(item.get("chat_id") or "") == chat_id:
+                    item["chat_name"] = name
     return result
 
 

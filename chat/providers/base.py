@@ -5,12 +5,27 @@ from __future__ import annotations
 import abc
 import json
 import asyncio
+import ipaddress
 from typing import Any
+from urllib.parse import urlparse
 from collections.abc import AsyncGenerator
 
+import httpx
 from nonebot import logger
 
 from .entities import LLMResponse, ProviderMeta, ProviderType
+
+
+def local_http_client(base_url: str, timeout: float) -> httpx.AsyncClient | None:
+    """内网地址不走系统代理：代理转发不了局域网请求，只会回 502 空响应。"""
+    host = urlparse(str(base_url)).hostname or ""
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return None
+    if not (address.is_loopback or address.is_private):
+        return None
+    return httpx.AsyncClient(trust_env=False, timeout=timeout)
 
 
 class BaseProvider(abc.ABC):

@@ -167,6 +167,14 @@ class EmojiPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(png_only), 4)
         self.assertEqual(await chat_repository.list_emoji(self.tenant, file_format="gif"), [])
 
+    async def test_upload_without_description_stays_unidentified(self) -> None:
+        row = await emoji_module.save_emoji(self.tenant, _PNG)
+        self.assertFalse(row.registered)
+        self.assertFalse(row.vlm_processed)
+        self.assertIsNone(row.register_time)
+        self.assertEqual(emoji_module.emoji_status(row), "unidentified")
+        self.assertEqual(await emoji_module.emoji_catalog(self.tenant), [])
+
     async def test_reupload_re_enables_disabled_emoji(self) -> None:
         saved = await emoji_module.save_emoji(self.tenant, _PNG, description="旧描述")
         await chat_repository.set_emoji_enabled(self.tenant, saved.hash, False)

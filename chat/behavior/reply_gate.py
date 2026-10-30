@@ -17,6 +17,7 @@ from nonebot import logger
 
 from ...config import SYSTEM_DEFAULTS, get_manager as get_config_manager
 from ...utils.tz import now as shanghai_now
+from ..memory.learning import GROUP, PRIVATE, TenantTarget, tenant_target
 from ..memory.state import is_ready as memory_ready
 from ..memory.repository import chat_repository
 
@@ -124,8 +125,29 @@ def _matching_rule_value(rules: list[dict[str, Any]], minutes: int) -> float | N
     return fallback
 
 
+def _rule_rank(rule: dict[str, Any], tenant: str, target: TenantTarget | None) -> int:
+    """0 表示不命中；5 精确聊天流，4 平台+会话，3 平台默认，2 任意平台+会话，1 全局。"""
+    legacy = str(rule.get("tenant") or "").strip()
+    if legacy:
+        return 5 if legacy == tenant else 0
+    platform = str(rule.get("platform") or "").strip()
+    item_id = str(rule.get("item_id") or "").strip()
+    is_group = {GROUP: True, PRIVATE: False}.get(str(rule.get("type") or "").strip())
+    if target is None:
+        return 1 if not platform and not item_id else 0
+    if is_group is not None and is_group != target.is_group:
+        return 0
+    if platform not in {"", "*"} and platform != target.platform:
+        return 0
+    if item_id in {"", "*"}:
+        return 3 if platform not in {"", "*"} else 1
+    if item_id != target.item_id:
+        return 0
+    return 4 if platform not in {"", "*"} else 2
+
+
 def talk_value_for(tenant: str, *, at: datetime | None = None) -> float:
-    """读取当前生效的 talk_value；本租户优先于全局，时间段优先于全天。"""
+    """读取当前生效的 talk_value；范围越具体越优先，同范围内时间段优先于全天。"""
     cfg = reply_timing_config()
     try:
         default = float(cfg.get("talk_value", REPLY_TIMING_DEFAULTS["talk_value"]))
@@ -139,11 +161,13 @@ def talk_value_for(tenant: str, *, at: datetime | None = None) -> float:
     rules = cfg.get("talk_value_rules")
     if not isinstance(rules, list):
         return default
-    for scope in (tenant, ""):
-        scoped = [rule for rule in rules if isinstance(rule, dict) and str(rule.get("tenant") or "") == scope]
-        value = _matching_rule_value(scoped, minutes)
-        if value is not None:
-            return value
+    target = tenant_target(tenant)
+    for rank in (5, 4, 3, 2, 1):
+        scoped = [rule for rule in rules if isinstance(rule, dict) and _rule_rank(rule, tenant, target) == rank]
+        if scoped:
+            value = _matching_rule_value(scoped, minutes)
+            if value is not None:
+                return value
     return default
 
 

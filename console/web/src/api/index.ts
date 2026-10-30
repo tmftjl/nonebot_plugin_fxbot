@@ -31,6 +31,7 @@ import type {
   AmemorixGraph,
   AmemorixGraphNodeDetail,
   AmemorixImage,
+  AmemorixImageDetail,
   AmemorixImageStatus,
   AmemorixImportSettings,
   AmemorixImportTask,
@@ -204,7 +205,7 @@ export const chatApi = {
     return api.get<{ items: ChatEmoji[]; counts: ChatEmojiCounts }>(`/chat/emoji?${params.toString()}`)
   },
   uploadEmoji: (tenant: string, content: string, description = '', tags: string[] = []) =>
-    api.post<{ item: ChatEmoji }>('/chat/emoji', { tenant, content, description, tags }),
+    api.post<{ item: ChatEmoji; warning?: string }>('/chat/emoji', { tenant, content, description, tags }),
   updateEmoji: (
     tenant: string,
     hash: string,
@@ -222,6 +223,8 @@ export const chatApi = {
     api.post<{ deleted: number }>('/chat/emoji/batch-delete', { tenant, hashes }),
   emojiThumbnailUrl: (tenant: string, hash: string) =>
     `/fxbot/chat/emoji/${encodeURIComponent(hash)}/thumbnail?tenant=${encodeURIComponent(tenant)}&token=${encodeURIComponent(getToken())}`,
+  emojiImageUrl: (tenant: string, hash: string) =>
+    `/fxbot/chat/emoji/${encodeURIComponent(hash)}/image?tenant=${encodeURIComponent(tenant)}&token=${encodeURIComponent(getToken())}`,
   getHealth: () => api.get<ChatHealth>('/chat/health'),
   listTraces: (tenant: string, limit = 100) =>
     api.get<{ items: ChatTrace[] }>(
@@ -350,6 +353,8 @@ export const amemorixApi = {
   retryImages: () => api.post<Record<string, any>>('/amemorix/images/retry'),
   uploadImage: (payload: { tenant: string; content_base64: string; description?: string }) =>
     api.post<Record<string, any>>('/amemorix/images', payload),
+  imageDetail: (tenant: string, assetId: string) =>
+    api.get<AmemorixImageDetail>(`/amemorix/images/${encodeURIComponent(assetId)}/detail?${tenantQuery(tenant)}`),
   deleteImage: (tenant: string, occurrenceId: string) =>
     api.delete<Record<string, any>>(
       `/amemorix/images/${encodeURIComponent(occurrenceId)}?${tenantQuery(tenant)}`,

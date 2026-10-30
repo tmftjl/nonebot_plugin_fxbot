@@ -163,6 +163,7 @@ def _emoji_payload(row: object) -> dict[str, Any]:
     """把表情索引转成控制台结构，不暴露服务器路径。"""
     return {
         "hash": getattr(row, "hash", ""),
+        "format": Path(str(getattr(row, "path", ""))).suffix.lstrip(".").lower(),
         "description": getattr(row, "description", ""),
         "tags": [str(item) for item in _json_list(getattr(row, "tags", "[]"))],
         "count": getattr(row, "count", 0),
@@ -421,16 +422,21 @@ async def upload_emoji(payload: dict[str, Any]) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     description = str(payload.get("description") or "").strip()
     tags = [str(item).strip() for item in payload.get("tags") or [] if str(item).strip()]
+    auto_described = False
     if not description:
         description, generated_tags = await _describe_upload(data)
         tags = tags or generated_tags
+        auto_described = True
     try:
         row = await emoji_module.save_emoji(tenant, data, description=description, tags=tags)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail="聊天数据库尚未就绪") from exc
-    return {"item": _emoji_payload(row)}
+    result: dict[str, Any] = {"item": _emoji_payload(row)}
+    if auto_described and not description:
+        result["warning"] = "视觉模型没能生成描述，表情已存为未识别，请手动补充"
+    return result
 
 
 @router.patch("/emoji/{emoji_hash}")

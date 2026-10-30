@@ -30,18 +30,6 @@ def _chat_choices() -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     return personas, [{"label": name, "value": name} for name in names]
 
 
-def _provider_choices(provider_type: str) -> list[dict[str, str]]:
-    """返回指定能力 Provider 的名称，供任务路由选择。"""
-    chat = get_manager().get_system()["chat"]
-    providers = chat.get("providers")
-    names = sorted(
-        str(name)
-        for name, value in (providers.items() if isinstance(providers, dict) else ())
-        if isinstance(value, dict) and str(value.get("provider_type") or "") == provider_type
-    )
-    return [{"label": name, "value": name} for name in names]
-
-
 _CHAT_TYPE_FIELD = {
     "field": "type",
     "label": "聊天类型",
@@ -66,6 +54,26 @@ def _input_field(field: str, label: str, placeholder: str = "", *, required: boo
     return schema
 
 
+def _platform_field(placeholder: str) -> dict[str, Any]:
+    """规则列表里的平台选择。"""
+    return {
+        "field": "platform",
+        "label": "平台",
+        "component": "GPlatformSelect",
+        "componentProps": {"placeholder": placeholder},
+    }
+
+
+def _target_field(placeholder: str) -> dict[str, Any]:
+    """规则列表里的会话选择，按同行平台与聊天类型过滤。"""
+    return {
+        "field": "item_id",
+        "label": "会话 ID",
+        "component": "GChatTarget",
+        "componentProps": {"platformField": "platform", "typeField": "type", "placeholder": placeholder},
+    }
+
+
 def _switch_field(field: str, label: str, default: bool = True) -> dict[str, Any]:
     """规则列表里的开关字段。"""
     return {"field": field, "label": label, "component": "Switch", "componentProps": {"defaultValue": default}}
@@ -84,8 +92,8 @@ def _learning_fields(defaults_key: str) -> list[dict[str, Any]]:
             "helpMessage": "按聊天流覆盖；平台和 ID 都留空表示全局默认，只填平台表示平台兜底。",
             "componentProps": {
                 "schemas": [
-                    _input_field("platform", "平台", "留空表示任意平台"),
-                    _input_field("item_id", "聊天流 ID", "留空表示该平台默认"),
+                    _platform_field("留空表示任意平台"),
+                    _target_field("留空表示该平台默认"),
                     _CHAT_TYPE_FIELD,
                     _switch_field("use", "使用已学内容"),
                     _switch_field("learn", "继续学习"),
@@ -108,8 +116,8 @@ def _learning_fields(defaults_key: str) -> list[dict[str, Any]]:
                         "component": "GListForm",
                         "componentProps": {
                             "schemas": [
-                                _input_field("platform", "平台", "* 表示任意平台"),
-                                _input_field("item_id", "聊天流 ID", "* 表示任意聊天"),
+                                _platform_field("* 表示任意平台"),
+                                _target_field("* 表示任意聊天"),
                                 _CHAT_TYPE_FIELD,
                             ],
                             "titleField": "item_id",
@@ -123,41 +131,9 @@ def _learning_fields(defaults_key: str) -> list[dict[str, Any]]:
     ]
 
 
-def _routing_field(
-    field: str,
-    label: str,
-    providers: list[dict[str, str]],
-    help_message: str = "留空时跟随会话绑定或默认 Provider。",
-) -> dict[str, Any]:
-    """任务路由按 Provider 名称选择。"""
-    return {
-        "field": field,
-        "label": label,
-        "component": "Select",
-        "default": SYSTEM_DEFAULTS["chat"]["model_routing"][field],
-        "helpMessage": help_message,
-        "componentProps": {"options": [{"label": "跟随默认", "value": ""}, *providers]},
-    }
-
-
-def _web_service_choices() -> list[dict[str, str]]:
-    """联网服务名称，供任务路由下拉选择。"""
-    web = get_manager().get_system()["chat"].get("web") or {}
-    entries = web.get("services") if isinstance(web, dict) else None
-    names = [
-        str(entry.get("name"))
-        for entry in (entries or [])
-        if isinstance(entry, dict) and str(entry.get("name") or "").strip()
-    ]
-    return [{"label": name, "value": name} for name in names]
-
-
 def _all_config_tab() -> dict[str, Any]:
     """返回系统配置表单结构，含 chat 卡片。"""
     personas, providers = _chat_choices()
-    web_services = _web_service_choices()
-    stt_providers = _provider_choices("stt")
-    embedding_providers = _provider_choices("embedding")
     return {
         "key": "system",
         "title": "系统配置",
@@ -288,6 +264,7 @@ def _all_config_tab() -> dict[str, Any]:
                         "component": "GTags",
                         "default": SYSTEM_DEFAULTS["chat"]["private_allowlist"],
                         "helpMessage": "留空表示所有私聊用户可用；填写后仅这些用户 ID 可用。",
+                        "componentProps": {"suggestScene": "private"},
                     },
                     {
                         "field": "group_allowlist",
@@ -295,13 +272,7 @@ def _all_config_tab() -> dict[str, Any]:
                         "component": "GTags",
                         "default": SYSTEM_DEFAULTS["chat"]["group_allowlist"],
                         "helpMessage": "留空表示所有群在 @Bot 时可用；填写后仅这些群 ID 可用（QQ 官方群填 openid）。",
-                    },
-                    {
-                        "field": "command_prefixes",
-                        "label": "忽略命令前缀",
-                        "component": "GTags",
-                        "default": SYSTEM_DEFAULTS["chat"]["command_prefixes"],
-                        "helpMessage": "以这些前缀开头的消息（忽略开头空白）不进入 AI 对话，也不计入群聊或私聊历史。",
+                        "componentProps": {"suggestScene": "group"},
                     },
                     {
                         "field": "persona",
@@ -415,58 +386,6 @@ def _all_config_tab() -> dict[str, Any]:
                             "titleField": "reaction",
                             "addLabel": "添加正则规则",
                         },
-                    },
-                ],
-            },
-            {
-                "key": "chat.model_routing",
-                "title": "任务模型路由",
-                "category": "能力",
-                "schemas": [
-                    _routing_field("reply", "回复", providers),
-                    _routing_field("planner", "规划", providers),
-                    _routing_field("vision", "图片描述", providers),
-                    _routing_field("memory", "长期记忆", providers, "留空由记忆调用方选择可用模型。"),
-                    _routing_field("utils", "通用工具", providers),
-                    _routing_field("learner", "表达学习", providers, "留空沿用通用工具模型。"),
-                    _routing_field(
-                        "fast_model",
-                        "快速模型",
-                        providers,
-                        "表达选择、模型断句使用；留空沿用通用工具模型。",
-                    ),
-                    _routing_field("emoji", "表情管理", providers, "留空沿用规划模型。"),
-                    {
-                        "field": "embedding",
-                        "label": "文本嵌入",
-                        "component": "Select",
-                        "default": SYSTEM_DEFAULTS["chat"]["model_routing"]["embedding"],
-                        "helpMessage": "长期记忆向量检索使用；留空时自动使用第一个嵌入 Provider。",
-                        "componentProps": {"options": [{"label": "自动选择", "value": ""}, *embedding_providers]},
-                    },
-                    {
-                        "field": "image_embedding",
-                        "label": "图片嵌入",
-                        "component": "Select",
-                        "default": SYSTEM_DEFAULTS["chat"]["model_routing"]["image_embedding"],
-                        "helpMessage": "图片记忆使用，需要 Provider 支持图片嵌入；留空时自动使用第一个嵌入 Provider。",
-                        "componentProps": {"options": [{"label": "自动选择", "value": ""}, *embedding_providers]},
-                    },
-                    {
-                        "field": "voice",
-                        "label": "语音识别",
-                        "component": "Select",
-                        "default": SYSTEM_DEFAULTS["chat"]["model_routing"]["voice"],
-                        "helpMessage": "从模型配置页的语音识别 Provider 中选择；留空时自动使用第一个。",
-                        "componentProps": {"options": [{"label": "自动选择", "value": ""}, *stt_providers]},
-                    },
-                    {
-                        "field": "web_search",
-                        "label": "联网服务",
-                        "component": "Select",
-                        "default": SYSTEM_DEFAULTS["chat"]["model_routing"]["web_search"],
-                        "helpMessage": "从「联网服务」卡里选一个服务；留空不开放联网工具。",
-                        "componentProps": {"options": [{"label": "不启用", "value": ""}, *web_services]},
                     },
                 ],
             },
@@ -762,16 +681,13 @@ def _all_config_tab() -> dict[str, Any]:
                         "component": "GListForm",
                         "default": SYSTEM_DEFAULTS["chat"]["reply_timing"]["talk_value_rules"],
                         "helpMessage": (
-                            "聊天流按平台、机器人、聊天类型、会话逐个选择，全部留空表示全局；时间段不选按全天。"
+                            "按平台、聊天类型和会话匹配；平台和会话留空表示该层级默认，全部留空即全局。时间段不选按全天。"
                         ),
                         "componentProps": {
                             "schemas": [
-                                {
-                                    "field": "tenant",
-                                    "label": "聊天流",
-                                    "component": "GChatTenant",
-                                    "componentProps": {"placeholder": "全部留空表示全局"},
-                                },
+                                _platform_field("留空表示任意平台"),
+                                _target_field("留空表示整个平台"),
+                                _CHAT_TYPE_FIELD,
                                 {
                                     "field": "time",
                                     "label": "时间段",
@@ -785,7 +701,7 @@ def _all_config_tab() -> dict[str, Any]:
                                     "componentProps": {"min": 0, "max": 1, "step": 0.1, "defaultValue": 0.5},
                                 },
                             ],
-                            "titleField": "time",
+                            "titleField": "item_id",
                             "addLabel": "添加频率规则",
                         },
                     },
@@ -875,9 +791,9 @@ def _all_config_tab() -> dict[str, Any]:
                     {
                         "field": "chat_prompts",
                         "label": "指定聊天要求",
-                        "component": "GTags",
+                        "component": "GChatPrompts",
                         "default": SYSTEM_DEFAULTS["chat"]["behavior"]["chat_prompts"],
-                        "helpMessage": "格式：平台:群号或用户ID:group|private:提示词；只对匹配的聊天生效。",
+                        "helpMessage": "按平台、聊天类型和会话选择，只对匹配的聊天生效；提示词只追加给这些聊天。",
                     },
                 ],
             },
@@ -1213,84 +1129,6 @@ def _all_config_tab() -> dict[str, Any]:
                     },
                 ],
             },
-            {
-                "key": "chat.web",
-                "title": "联网服务",
-                "category": "能力",
-                "schemas": [
-                    {
-                        "field": "preview_chars",
-                        "label": "内容预览字数",
-                        "component": "InputNumber",
-                        "default": SYSTEM_DEFAULTS["chat"]["web"]["preview_chars"],
-                        "helpMessage": "单次返回给模型的预览字数；完整内容用原文编号回查。",
-                        "componentProps": {"min": 500, "max": 12000, "step": 500},
-                    },
-                    {
-                        "field": "services",
-                        "label": "服务列表",
-                        "component": "GListForm",
-                        "default": SYSTEM_DEFAULTS["chat"]["web"]["services"],
-                        "helpMessage": "定义联网服务；在「任务模型路由 → 联网服务」里选中后才会开放工具。",
-                        "componentProps": {
-                            "schemas": [
-                                _input_field("name", "服务名称", "如 deepseek", required=True),
-                                {
-                                    "field": "adapter",
-                                    "label": "协议",
-                                    "component": "Select",
-                                    "componentProps": {
-                                        "defaultValue": "deepseek",
-                                        "options": [
-                                            {"label": "DeepSeek", "value": "deepseek"},
-                                            {"label": "Tavily", "value": "tavily"},
-                                            {"label": "AnySearch", "value": "anysearch"},
-                                            {"label": "Exa", "value": "exa"},
-                                            {"label": "Firecrawl", "value": "firecrawl"},
-                                        ],
-                                    },
-                                },
-                                _input_field("base_url", "API 地址", "留空使用官方地址"),
-                                _input_field("api_key", "API Key"),
-                                {
-                                    "field": "timeout",
-                                    "label": "超时（秒）",
-                                    "component": "InputNumber",
-                                    "componentProps": {"min": 1, "max": 300, "step": 1, "defaultValue": 60},
-                                },
-                                {
-                                    "field": "search_depth",
-                                    "label": "搜索深度",
-                                    "component": "Select",
-                                    "componentProps": {
-                                        "defaultValue": "basic",
-                                        "options": [
-                                            {"label": "基础", "value": "basic"},
-                                            {"label": "高级", "value": "advanced"},
-                                            {"label": "快速", "value": "fast"},
-                                            {"label": "极速", "value": "ultra-fast"},
-                                        ],
-                                    },
-                                },
-                                {
-                                    "field": "extract_depth",
-                                    "label": "提取深度",
-                                    "component": "Select",
-                                    "componentProps": {
-                                        "defaultValue": "basic",
-                                        "options": [
-                                            {"label": "基础", "value": "basic"},
-                                            {"label": "高级", "value": "advanced"},
-                                        ],
-                                    },
-                                },
-                            ],
-                            "titleField": "name",
-                            "addLabel": "添加联网服务",
-                        },
-                    },
-                ],
-            },
         ],
     }
 
@@ -1303,7 +1141,7 @@ def _system_config_tab() -> dict[str, Any]:
 
 
 def _chat_config_tab() -> dict[str, Any]:
-    """AI 对话设置页的卡片；模型分配在模型配置页维护。"""
+    """AI 对话设置页的卡片；模型分配与联网服务在模型配置页维护。"""
     tab = _all_config_tab()
     tab.update(key="chat-settings", title="对话设置", order=5, dataKey="chat")
     tab["cards"] = [

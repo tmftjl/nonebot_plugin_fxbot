@@ -9,7 +9,7 @@ from collections.abc import AsyncGenerator
 from openai import AsyncOpenAI
 from nonebot import logger
 
-from ..base import STTProvider, TTSProvider, ChatProvider, EmbeddingProvider
+from ..base import STTProvider, TTSProvider, ChatProvider, EmbeddingProvider, local_http_client
 from ..entities import LLMResponse, ProviderType
 from ..register import register_provider
 
@@ -28,6 +28,7 @@ class OpenAIProvider(ChatProvider):
             api_key=config["api_key"],
             base_url=config["base_url"],
             timeout=float(config["timeout"]),
+            http_client=local_http_client(config["base_url"], float(config["timeout"])),
         )
         self.model_name = str(config["model"])
 
@@ -200,6 +201,7 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
             api_key=config["api_key"],
             base_url=config["base_url"],
             timeout=float(config["timeout"]),
+            http_client=local_http_client(config["base_url"], float(config["timeout"])),
         )
         self.model_name = str(config["model"])
 
@@ -235,6 +237,7 @@ class OpenAISTTProvider(STTProvider):
             api_key=config["api_key"],
             base_url=config["base_url"],
             timeout=float(config["timeout"]),
+            http_client=local_http_client(config["base_url"], float(config["timeout"])),
         )
         self.model_name = str(config["model"])
 
@@ -273,6 +276,7 @@ class OpenAITTSProvider(TTSProvider):
             api_key=config["api_key"],
             base_url=config["base_url"],
             timeout=float(config["timeout"]),
+            http_client=local_http_client(config["base_url"], float(config["timeout"])),
         )
         self.model_name = str(config["model"])
 

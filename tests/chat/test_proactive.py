@@ -138,6 +138,32 @@ class TalkValueTests(unittest.TestCase):
             self.assertAlmostEqual(talk_value_for("t", at=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)), 0.3)
             self.assertAlmostEqual(talk_value_for("other", at=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)), 1.0)
 
+    def test_scope_rules_by_platform_and_session(self) -> None:
+        rules = [
+            {"time": "", "value": 0.2},
+            {"platform": "OneBot V11", "time": "", "value": 0.5},
+            {"platform": "OneBot V11", "item_id": "123", "type": "group", "time": "", "value": 0.9},
+        ]
+        at = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        with _patch_gate_config(_pick({"talk_value": 0.1, "enable_talk_value_rules": True, "talk_value_rules": rules})):
+            self.assertAlmostEqual(talk_value_for("OneBot V11:1:group:123", at=at), 0.9)
+            self.assertAlmostEqual(talk_value_for("OneBot V11:1:group:456", at=at), 0.5)
+            self.assertAlmostEqual(talk_value_for("OneBot V11:1:private:123", at=at), 0.5)
+            self.assertAlmostEqual(talk_value_for("QQ:1:group:123", at=at), 0.2)
+
+    def test_scope_falls_back_when_time_misses(self) -> None:
+        rules = [
+            {"platform": "OneBot V11", "item_id": "123", "type": "group", "time": "09:00-18:00", "value": 0.9},
+            {"time": "", "value": 0.3},
+        ]
+        with _patch_gate_config(_pick({"talk_value": 0.1, "enable_talk_value_rules": True, "talk_value_rules": rules})):
+            self.assertAlmostEqual(
+                talk_value_for("OneBot V11:1:group:123", at=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)), 0.9
+            )
+            self.assertAlmostEqual(
+                talk_value_for("OneBot V11:1:group:123", at=datetime(2026, 1, 1, 23, 0, tzinfo=timezone.utc)), 0.3
+            )
+
     def test_cross_midnight_rule(self) -> None:
         rules = [{"tenant": "", "time": "22:00-02:00", "value": 0.4}]
         with _patch_gate_config(_pick({"talk_value": 0.9, "enable_talk_value_rules": True, "talk_value_rules": rules})):
@@ -302,7 +328,6 @@ def _chat_cfg() -> dict[str, object]:
         "max_context_size": 10,
         "group_allowlist": [],
         "private_enabled": False,
-        "command_prefixes": ["/", "#"],
         "persona": "",
     }
 

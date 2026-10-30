@@ -7,8 +7,6 @@ import time
 import hashlib
 import unicodedata
 
-from ...config import get_manager as get_config_manager
-
 # 敏感信息统一在过滤层判定，学习模块共用。
 SENSITIVE = re.compile(
     r"(密码|口令|token|secret|api[_ ]?key|身份证|银行卡|信用卡|手机号|\b1[3-9]\d{9}\b|住址)",
@@ -24,16 +22,6 @@ _recent_hashes: dict[tuple[str, str], float] = {}
 def reset_recent_hashes() -> None:
     """清空重复消息缓存，供测试使用。"""
     _recent_hashes.clear()
-
-
-def _command_prefixes() -> tuple[str, ...]:
-    """读取当前命令前缀；配置不可用时退回常见前缀。"""
-    try:
-        value = get_config_manager().get_system()["chat"]["command_prefixes"]
-        prefixes = tuple(str(item) for item in value if str(item))
-    except Exception:
-        prefixes = ("#", "/", "gs", "ww")
-    return prefixes + ("/",) if "/" not in prefixes else prefixes
 
 
 def _digest(text: str) -> str:
@@ -68,8 +56,6 @@ def should_learn(text: str, *, tenant: str = "", now: float | None = None, check
     """判断一条人类消息是否值得进入长期抽取；回填只看内容噪声。"""
     content = " ".join(str(text or "").split())
     if not content or _visible_chars(content) < 2:
-        return False
-    if content.startswith(_command_prefixes()):
         return False
     if _URL_ONLY.match(content):
         return False

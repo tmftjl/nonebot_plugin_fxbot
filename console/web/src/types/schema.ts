@@ -25,7 +25,9 @@ export type SpecialComponent =
   | 'GArrayInput'     // 数组输入（列表编辑）
   | 'GSubForm'        // 子表单（动态对象/数组）
   | 'GListForm'       // 对象数组编辑（规则列表）
-  | 'GChatTenant'     // 聊天流选择器（平台 / 机器人 / 类型 / 会话）
+  | 'GChatPrompts'    // 指定聊天要求（平台 / 类型 / 会话 / 提示词）
+  | 'GPlatformSelect' // 平台选择（已有会话的平台，可手输）
+  | 'GChatTarget'     // 会话 ID 选择（按同行平台与类型过滤，可手输）
   | 'GTimeRange'      // 时间段选择（HH:mm-HH:mm，留空按全天）
   | 'GSelectGroup'    // 群组选择器
   | 'GSelectFriend'   // 好友选择器

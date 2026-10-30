@@ -64,6 +64,16 @@ const traces = ref<ChatTrace[]>([])
 const traceLoading = ref(false)
 const loaded = ref(false)
 
+const RECORD_PAGE_SIZE = 20
+const plannerPage = ref(1)
+const tracePage = ref(1)
+const plannerRows = computed(() =>
+  plannerSamples.value.slice((plannerPage.value - 1) * RECORD_PAGE_SIZE, plannerPage.value * RECORD_PAGE_SIZE),
+)
+const traceRows = computed(() =>
+  traces.value.slice((tracePage.value - 1) * RECORD_PAGE_SIZE, tracePage.value * RECORD_PAGE_SIZE),
+)
+
 const plannerLabelCounts = computed(() => {
   const replies = plannerSamples.value.filter((row) => row.label === 1).length
   return { replies, silent: plannerSamples.value.length - replies }
@@ -118,6 +128,7 @@ const loadPlannerSamples = async () => {
   try {
     const result = await chatApi.listPlannerSamples(tenant.value)
     plannerSamples.value = result.items || []
+    plannerPage.value = 1
   } catch (error) {
     console.error('加载规划样本失败', error)
     ElMessage.error('加载规划样本失败，请重试')
@@ -161,6 +172,7 @@ const loadTraces = async () => {
   try {
     const result = await chatApi.listTraces(tenant.value)
     traces.value = result.items || []
+    tracePage.value = 1
   } catch (error) {
     console.error('加载轮次追踪失败', error)
     ElMessage.error('加载轮次追踪失败，请重试')
@@ -301,7 +313,7 @@ onMounted(() => {
             Planner 每次调用记录首轮动作；label 为 1 表示决定回复，0 表示保持安静或等待。当前样本：回复
             {{ plannerLabelCounts.replies }} 条，不回复 {{ plannerLabelCounts.silent }} 条。
           </div>
-          <el-table :data="plannerSamples" row-key="id" empty-text="暂无规划样本">
+          <el-table :data="plannerRows" row-key="id" empty-text="暂无规划样本">
             <el-table-column label="时间" min-width="170">
               <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
             </el-table-column>
@@ -325,6 +337,15 @@ onMounted(() => {
             </el-table-column>
             <el-table-column prop="model" label="模型" min-width="160" show-overflow-tooltip />
           </el-table>
+          <el-pagination
+            v-if="plannerSamples.length > RECORD_PAGE_SIZE"
+            v-model:current-page="plannerPage"
+            :page-size="RECORD_PAGE_SIZE"
+            :total="plannerSamples.length"
+            layout="prev, pager, next, total"
+            class="table-pager"
+            small
+          />
         </div>
 
         <div v-if="activeTab === 'gate'" class="panel">
@@ -419,7 +440,7 @@ onMounted(() => {
           <div class="tenant-help">
             每轮对话一条记录，展开查看 Planner、回复生成与发送阶段；总耗时包含各阶段，不重复相加。记录保留 7 天。
           </div>
-          <el-table :data="traces" row-key="id" empty-text="暂无轮次追踪">
+          <el-table :data="traceRows" row-key="id" empty-text="暂无轮次追踪">
             <el-table-column type="expand">
               <template #default="{ row }">
                 <div class="trace-detail">
@@ -475,6 +496,15 @@ onMounted(() => {
               <template #default="{ row }">{{ row.error || '—' }}</template>
             </el-table-column>
           </el-table>
+          <el-pagination
+            v-if="traces.length > RECORD_PAGE_SIZE"
+            v-model:current-page="tracePage"
+            :page-size="RECORD_PAGE_SIZE"
+            :total="traces.length"
+            layout="prev, pager, next, total"
+            class="table-pager"
+            small
+          />
         </div>
       </div>
     </Transition>
@@ -530,6 +560,11 @@ onMounted(() => {
   margin-top: 10px;
   color: var(--color-text-secondary);
   font-size: 12px;
+}
+
+.table-pager {
+  justify-content: flex-end;
+  margin-top: 12px;
 }
 
 .health-panel {

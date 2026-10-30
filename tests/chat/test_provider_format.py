@@ -12,6 +12,7 @@ if importlib.util.find_spec("anthropic") is None:
     # 只是验证转换函数，不需要真实 SDK
     sys.modules["anthropic"] = types.SimpleNamespace(AsyncAnthropic=object)
 
+from src.plugins.nonebot_plugin_fxbot.chat.providers.base import local_http_client
 from src.plugins.nonebot_plugin_fxbot.chat.providers.entities import LLMResponse
 from src.plugins.nonebot_plugin_fxbot.chat.providers.sources.vertex import VertexAIProvider
 from src.plugins.nonebot_plugin_fxbot.chat.providers.sources.anthropic import AnthropicProvider
@@ -43,6 +44,20 @@ class SystemMergeTests(unittest.TestCase):
         messages = [{"role": "user", "content": "你好"}]
         self.assertEqual(object.__new__(AnthropicProvider)._convert_to_anthropic_format(messages)[0], "")
         self.assertNotIn("systemInstruction", object.__new__(VertexAIProvider)._convert_to_vertex_format(messages))
+
+
+class LocalProxyBypassTests(unittest.IsolatedAsyncioTestCase):
+    """局域网中转站不能被系统代理接管，否则只会收到 502。"""
+
+    async def test_lan_base_url_bypasses_proxy(self) -> None:
+        client = local_http_client("http://192.168.7.27:19997/api/v1", 30)
+        self.assertIsNotNone(client)
+        self.assertFalse(client._trust_env)
+        await client.aclose()
+
+    async def test_public_base_url_keeps_system_proxy(self) -> None:
+        self.assertIsNone(local_http_client("https://api.deepseek.com", 30))
+        self.assertIsNone(local_http_client("https://relay.example.com/v1", 30))
 
 
 class ProviderRoundTripTests(unittest.TestCase):

@@ -211,6 +211,13 @@ class ConsoleP6Tests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["item"]["hash"], "h")
         save.assert_awaited_once_with("t", _PNG, description="开心", tags=["大笑"])
 
+        with (
+            patch.object(chat_routes, "_describe_upload", new=AsyncMock(return_value=("", []))),
+            patch.object(chat_routes.emoji_module, "save_emoji", new=AsyncMock(return_value=row)),
+        ):
+            failed = await chat_routes.upload_emoji({"tenant": "t", "content": content})
+        self.assertIn("warning", failed)
+
         with self.assertRaises(HTTPException):
             await chat_routes.upload_emoji({"tenant": "t", "content": "!!!"})
 

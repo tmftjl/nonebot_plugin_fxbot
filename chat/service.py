@@ -30,7 +30,6 @@ from .memory.inject import learning_context
 from .behavior.quote import forget_counter
 from .amemorix.inject import memory_block
 from .context_summary import clear_summary, current_summary, compact_messages
-from .message_adapter import is_ignored_command
 from .message_receive import sender as sender_module, history as history_module
 from .memory.filtering import sanitize_line
 from .behavior.debounce import default_debounce_registry
@@ -460,8 +459,6 @@ class ChatService:
             return
         chat_cfg = get_config_manager().get_system()["chat"]
         limit = history_limit(chat_cfg, is_group)
-        if is_ignored_command(text, chat_cfg):
-            return
         if limit <= 0:
             return
         await self._hydrate(session_id, limit)

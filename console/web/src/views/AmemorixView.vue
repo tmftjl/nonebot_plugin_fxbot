@@ -15,6 +15,7 @@ import type {
   AmemorixGraph,
   AmemorixGraphNodeDetail,
   AmemorixImage,
+  AmemorixImageDetail,
   AmemorixImageStatus,
   AmemorixImportSettings,
   AmemorixImportTask,
@@ -133,6 +134,18 @@ const actionLabels: Record<string, string> = {
   refresh_person_profile: '刷新画像',
 }
 
+const imageSourceLabels: Record<string, string> = {
+  chat: '聊天消息',
+  manual: '手动写入',
+  user_statement: '消息原话',
+  model_description: '模型识别',
+}
+
+const imageConfirmLabels: Record<string, string> = {
+  unconfirmed: '待核对',
+  confirmed: '已确认',
+}
+
 const tenant = ref(localStorage.getItem(TENANT_KEY) || '')
 const tenants = ref<ChatTenant[]>([])
 const loaded = ref(false)
@@ -199,11 +212,17 @@ const importName = ref('')
 const importLlm = ref(true)
 const importLoading = ref(false)
 const importInput = ref<HTMLInputElement>()
+const IMAGE_PAGE_SIZE = 24
 const images = ref<AmemorixImage[]>([])
+const imageOffset = ref(0)
 const imageStatus = ref<AmemorixImageStatus | null>(null)
 const imageLoading = ref(false)
 const imageDescription = ref('')
 const imageInput = ref<HTMLInputElement>()
+const imageDetailVisible = ref(false)
+const imageDetailLoading = ref(false)
+const imageDetail = ref<AmemorixImageDetail | null>(null)
+const imageDetailRow = ref<AmemorixImage | null>(null)
 
 const fileToBase64 = (file: File) =>
   new Promise<string>((resolve, reject) => {
@@ -218,6 +237,66 @@ const formatTime = (value: string | null | undefined) => {
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
 }
+
+const formatEpoch = (value: number | null | undefined) => {
+  if (!value) return '—'
+  return new Date(value * 1000).toLocaleString()
+}
+
+const formatBytes = (value: number | null | undefined) => {
+  const size = Number(value) || 0
+  if (size < 1024) return `${size} B`
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
+  return `${(size / 1024 / 1024).toFixed(1)} MB`
+}
+
+const imageDetailOccurrences = computed(() => imageDetail.value?.occurrences || [])
+
+const imageDetailOccurrence = computed(() => {
+  const rows = imageDetailOccurrences.value
+  const target = imageDetailRow.value?.occurrence_id
+  return rows.find((item) => item.occurrence_id === target) || rows[0] || null
+})
+
+const chatLabel = (value: string) => {
+  const parts = String(value || '').split(':')
+  const id = parts[parts.length - 1]
+  if (parts.length >= 2 && /^\d+$/.test(id)) {
+    if (parts[parts.length - 2] === 'private') return `私聊 ${id}`
+    if (parts[parts.length - 2] === 'group') return `群聊 ${id}`
+  }
+  return value || '—'
+}
+
+const observationText = (text: string) => {
+  const lines = String(text || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !/^\[(图片|表情)\]$/.test(line))
+  if (lines.length && /^.{1,60}\(\d+\)[:：]$/.test(lines[0])) lines.shift()
+  return lines.join('\n')
+}
+
+const observationLabel = (sourceKind: string, confirmStatus: string) => {
+  const source = imageSourceLabels[sourceKind] || sourceKind
+  const confirm = imageConfirmLabels[confirmStatus]
+  return confirm ? `${source} · ${confirm}` : source
+}
+
+const imageDetailObservations = computed(() => {
+  const seen = new Set<string>()
+  return (imageDetail.value?.observations || [])
+    .map((item) => ({ ...item, text: observationText(item.text) }))
+    .filter((item) => {
+      if (!item.text) return false
+      const key = `${item.source_kind}:${item.text}`
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+})
+
+const imageDetailLinks = computed(() => (imageDetail.value?.links || []).filter((item) => item.memory))
 
 const filteredNodes = computed(() => {
   const keyword = graphQuery.value.trim().toLowerCase()
@@ -749,7 +828,7 @@ const loadImages = async () => {
   imageLoading.value = true
   try {
     const [result, statusResult] = await Promise.all([
-      amemorixApi.images(tenant.value),
+      amemorixApi.images(tenant.value, IMAGE_PAGE_SIZE, imageOffset.value),
       amemorixApi.imageStatus(),
     ])
     images.value = result.items || []
@@ -760,6 +839,11 @@ const loadImages = async () => {
   } finally {
     imageLoading.value = false
   }
+}
+
+const stepImagePage = async (delta: number) => {
+  imageOffset.value = Math.max(0, imageOffset.value + delta * IMAGE_PAGE_SIZE)
+  await loadImages()
 }
 
 const chooseImageFile = () => imageInput.value?.click()
@@ -780,29 +864,57 @@ const onImageFile = async (event: Event) => {
     })
     imageDescription.value = ''
     ElMessage.success('图片记忆已写入')
+    imageOffset.value = 0
     await loadImages()
   } catch (error: any) {
     ElMessage.error(error?.response?.data?.detail || '写入图片记忆失败')
   }
 }
 
+const openImageDetail = async (row: AmemorixImage) => {
+  imageDetailRow.value = row
+  imageDetail.value = null
+  imageDetailVisible.value = true
+  imageDetailLoading.value = true
+  try {
+    imageDetail.value = await amemorixApi.imageDetail(tenant.value, row.asset_id)
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || '加载图片详情失败')
+    imageDetailVisible.value = false
+  } finally {
+    imageDetailLoading.value = false
+  }
+}
+
 const removeImage = async (row: AmemorixImage) => {
   if (!row.occurrence_id) {
     ElMessage.warning('当前会话没有这张图片的出现记录')
-    return
+    return false
   }
   try {
     await ElMessageBox.confirm('确认删除这张图片记忆？', '删除图片', { type: 'warning' })
   } catch {
-    return
+    return false
   }
   try {
     await amemorixApi.deleteImage(tenant.value, row.occurrence_id)
     ElMessage.success('已删除')
     await loadImages()
+    // 删掉当前页最后一张时退回上一页
+    if (!images.value.length && imageOffset.value > 0) {
+      imageOffset.value = Math.max(0, imageOffset.value - IMAGE_PAGE_SIZE)
+      await loadImages()
+    }
+    return true
   } catch (error: any) {
     ElMessage.error(error?.response?.data?.detail || '删除失败')
+    return false
   }
+}
+
+const removeImageFromDetail = async () => {
+  if (!imageDetailRow.value) return
+  if (await removeImage(imageDetailRow.value)) imageDetailVisible.value = false
 }
 
 const retryImages = async () => {
@@ -854,6 +966,7 @@ const refreshCurrent = async () => {
 
 const onTenantChange = async () => {
   localStorage.setItem(TENANT_KEY, tenant.value)
+  imageOffset.value = 0
   recordDrawer.value = false
   profileDrawer.value = false
   selectedKeys.value = []
@@ -1050,38 +1163,58 @@ onMounted(async () => {
                 </div>
               </div>
               <div class="meta-grid">
+                <span>已记住 <strong>{{ imageStatus?.stats?.asset_count ?? 0 }}</strong> 张</span>
+                <span>图片说明 <strong>{{ imageStatus?.stats?.observation_count ?? 0 }}</strong></span>
+                <span>关联记忆 <strong>{{ imageStatus?.stats?.link_count ?? 0 }}</strong></span>
                 <span>状态 <el-tag size="small">{{ imageStatus?.status || '—' }}</el-tag></span>
                 <span v-if="imageStatus?.dimension">维度 {{ imageStatus.dimension }}</span>
                 <span v-if="imageStatus?.message">{{ imageStatus.message }}</span>
               </div>
-              <el-table :data="images" empty-text="当前会话没有图片记忆">
-                <el-table-column label="预览" width="110">
-                  <template #default="{ row }">
-                    <el-image
-                      v-if="row.occurrence_id"
-                      :src="amemorixApi.imageUrl(tenant, row.occurrence_id)"
-                      :preview-src-list="[amemorixApi.imageUrl(tenant, row.occurrence_id)]"
-                      fit="cover"
-                      class="image-thumb"
-                    />
-                  </template>
-                </el-table-column>
-                <el-table-column label="信息" min-width="240">
-                  <template #default="{ row }">
-                    <div class="record-title">{{ row.mime_type || 'image' }}</div>
-                    <div class="record-summary">
-                      {{ row.width }}×{{ row.height }} · {{ Math.round((row.byte_size || 0) / 1024) }} KB
-                    </div>
-                  </template>
-                </el-table-column>
-                <el-table-column label="状态" width="100" prop="status" />
-                <el-table-column label="出现次数" width="90" prop="occurrence_count" />
-                <el-table-column label="操作" width="90" fixed="right">
-                  <template #default="{ row }">
-                    <el-button link type="danger" @click="removeImage(row)">删除</el-button>
-                  </template>
-                </el-table-column>
-              </el-table>
+              <div class="image-memory">
+                <div v-if="!images.length" class="image-memory-empty">
+                  {{ imageOffset > 0 ? '这一页没有更多图片了' : '当前会话没有图片记忆' }}
+                </div>
+                <div v-else class="image-grid">
+                  <button
+                    v-for="row in images"
+                    :key="row.asset_id"
+                    type="button"
+                    class="image-card"
+                    @click="openImageDetail(row)"
+                  >
+                    <span class="image-card-frame">
+                      <img
+                        v-if="row.occurrence_id"
+                        :src="amemorixApi.imageUrl(tenant, row.occurrence_id)"
+                        alt=""
+                        class="image-card-image"
+                      >
+                      <span
+                        v-if="row.occurrence_count > 1"
+                        class="image-card-count"
+                        title="出现次数"
+                      >×{{ row.occurrence_count }}</span>
+                    </span>
+                    <span class="image-card-meta">
+                      <span class="image-card-dims">{{ row.width }} × {{ row.height }}</span>
+                      <span class="image-card-bytes">{{ formatBytes(row.byte_size) }}</span>
+                    </span>
+                  </button>
+                </div>
+                <div v-if="imageOffset > 0 || images.length >= IMAGE_PAGE_SIZE" class="image-pager">
+                  <el-button size="small" :disabled="imageOffset === 0 || imageLoading" @click="stepImagePage(-1)">
+                    上一页
+                  </el-button>
+                  <span>第 {{ imageOffset / IMAGE_PAGE_SIZE + 1 }} 页</span>
+                  <el-button
+                    size="small"
+                    :disabled="images.length < IMAGE_PAGE_SIZE || imageLoading"
+                    @click="stepImagePage(1)"
+                  >
+                    下一页
+                  </el-button>
+                </div>
+              </div>
             </div>
 
             <div v-if="activeTab === 'timeline'" class="panel">
@@ -1467,6 +1600,91 @@ onMounted(async () => {
         </Transition>
       </section>
     </div>
+
+    <el-dialog v-model="imageDetailVisible" title="图片记忆" width="760" align-center class="image-detail-dialog">
+      <div class="image-detail">
+        <div v-if="imageDetailLoading" class="image-detail-loading">正在加载图片详情…</div>
+        <template v-else>
+          <div class="image-detail-media">
+            <el-image
+              v-if="imageDetailOccurrence"
+              :src="amemorixApi.imageUrl(tenant, imageDetailOccurrence.occurrence_id)"
+              :preview-src-list="[amemorixApi.imageUrl(tenant, imageDetailOccurrence.occurrence_id)]"
+              preview-teleported
+              fit="contain"
+              class="image-detail-thumb"
+            />
+          </div>
+          <div v-if="imageDetail" class="image-detail-body">
+            <section class="detail-section">
+              <h4 class="detail-title">文件信息</h4>
+              <div class="detail-hash">{{ imageDetail.asset.content_hash }}</div>
+              <div class="detail-meta">
+                {{ imageDetail.asset.mime_type }} ·
+                {{ formatBytes(imageDetail.asset.byte_size) }} ·
+                {{ imageDetail.asset.width }}×{{ imageDetail.asset.height }}
+              </div>
+            </section>
+
+            <section class="detail-section">
+              <h4 class="detail-title">图片来自哪里</h4>
+              <div class="detail-card">
+                <div class="detail-card-head">
+                  <span class="detail-card-main">
+                    {{ imageDetailOccurrence?.chat_name || chatLabel(imageDetailOccurrence?.chat_id || tenant) }}
+                    <el-tag v-if="imageDetailOccurrences.length > 1" size="small" effect="plain">
+                      出现 {{ imageDetailOccurrences.length }} 次
+                    </el-tag>
+                  </span>
+                  <el-button
+                    v-if="imageDetailOccurrence"
+                    link
+                    type="danger"
+                    aria-label="删除这张图片"
+                    @click="removeImageFromDetail"
+                  >
+                    <el-icon><Delete /></el-icon>
+                  </el-button>
+                </div>
+                <div class="detail-card-time">
+                  {{ formatEpoch(imageDetailOccurrence?.occurred_at || imageDetailOccurrence?.created_at) }}
+                </div>
+                <details v-if="imageDetailOccurrences.length" class="detail-records">
+                  <summary>来源记录信息</summary>
+                  <div v-for="item in imageDetailOccurrences" :key="item.occurrence_id" class="detail-record">
+                    <span>{{ imageSourceLabels[item.source_kind] || item.source_kind }}</span>
+                    <span class="detail-record-time">{{ formatEpoch(item.occurred_at || item.created_at) }}</span>
+                    <span v-if="item.message_id" class="detail-record-msg">消息 {{ item.message_id }}</span>
+                  </div>
+                </details>
+              </div>
+            </section>
+
+            <section class="detail-section">
+              <h4 class="detail-title">记忆中的说明</h4>
+              <div v-for="item in imageDetailObservations" :key="item.observation_id" class="detail-observation">
+                <div class="detail-observation-text">{{ item.text }}</div>
+                <div class="detail-observation-meta">
+                  <el-tag size="small" effect="plain">
+                    {{ observationLabel(item.source_kind, item.confirm_status) }}
+                  </el-tag>
+                </div>
+              </div>
+              <div v-if="!imageDetailObservations.length" class="detail-empty">还没有记录说明</div>
+            </section>
+
+            <section class="detail-section">
+              <h4 class="detail-title">关联记忆</h4>
+              <div v-for="item in imageDetailLinks" :key="item.link_id" class="detail-link">
+                <el-tag size="small">{{ typeLabels[item.target_type] || item.target_type }}</el-tag>
+                <span class="detail-link-text">{{ item.memory?.content }}</span>
+              </div>
+              <div v-if="!imageDetailLinks.length" class="detail-empty">暂无关联记忆</div>
+            </section>
+          </div>
+        </template>
+      </div>
+    </el-dialog>
 
     <el-dialog v-model="correctionDialog" title="修正所选记忆" width="680" align-center>
       <div class="correction-head">
@@ -1955,10 +2173,284 @@ onMounted(async () => {
   margin-top: 12px;
 }
 
-.image-thumb {
-  width: 72px;
-  height: 72px;
+.image-memory {
+  margin-top: 14px;
+  container-type: inline-size;
+}
+
+.image-memory-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 160px;
+  color: var(--color-text-tertiary);
+  font-size: 13px;
+}
+
+.image-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+@container (min-width: 30rem) {
+  .image-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@container (min-width: 40rem) {
+  .image-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@container (min-width: 60rem) {
+  .image-grid {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+}
+
+@container (min-width: 80rem) {
+  .image-grid {
+    grid-template-columns: repeat(8, minmax(0, 1fr));
+  }
+}
+
+.image-card {
+  display: block;
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg-card);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+
+  &:hover {
+    border-color: var(--color-primary);
+    box-shadow: var(--shadow-sm);
+  }
+}
+
+.image-card-frame {
+  position: relative;
+  display: block;
+  height: 144px;
+  background: var(--color-bg-secondary);
+}
+
+.image-card-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.image-card-count {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  padding: 0 5px;
+  border-radius: 3px;
+  background: rgba(17, 24, 26, 0.55);
+  color: #fff;
+  font-size: 11px;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+.image-card-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+}
+
+.image-card-dims {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.image-card-bytes {
+  flex: none;
+  white-space: nowrap;
+}
+
+.image-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+}
+
+.image-detail {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: 20px;
+  min-height: 240px;
+}
+
+.image-detail-loading {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 200px;
+  color: var(--color-text-tertiary);
+  font-size: 13px;
+}
+
+.image-detail-media {
+  align-self: start;
+  padding: 8px;
+  border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
+}
+
+.image-detail-thumb {
+  width: 100%;
+  height: 260px;
+  border-radius: var(--radius-md);
+  cursor: zoom-in;
+}
+
+.image-detail-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+  max-height: 62vh;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.detail-title {
+  margin: 0 0 6px;
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.detail-hash {
+  color: var(--color-text-secondary);
+  font-family: 'Courier New', monospace;
+  font-size: 11px;
+  word-break: break-all;
+}
+
+.detail-meta {
+  margin-top: 4px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+.detail-card {
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.detail-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+
+  .el-button {
+    padding: 0;
+    margin-top: -2px;
+  }
+}
+
+.detail-card-main {
+  color: var(--color-text);
+  font-weight: 500;
+  word-break: break-all;
+
+  .el-tag {
+    margin-left: 6px;
+  }
+}
+
+.detail-card-time {
+  margin-top: 4px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.detail-records {
+  margin-top: 8px;
+  font-size: 12px;
+
+  summary {
+    color: var(--color-text-secondary);
+    cursor: pointer;
+  }
+}
+
+.detail-record {
+  display: flex;
+  gap: 10px;
+  padding: 4px 0 0 8px;
+  color: var(--color-text-secondary);
+}
+
+.detail-record-msg {
+  margin-left: auto;
+  font-family: 'Courier New', monospace;
+  font-size: 11px;
+  word-break: break-all;
+}
+
+.detail-observation {
+  padding-left: 10px;
+  border-left: 2px solid var(--color-border);
+
+  & + & {
+    margin-top: 8px;
+  }
+}
+
+.detail-observation-text {
+  color: var(--color-text);
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.detail-observation-meta {
+  margin-top: 6px;
+}
+
+.detail-link {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 12px;
+}
+
+.detail-link-text {
+  color: var(--color-text);
+  line-height: 1.5;
+}
+
+.detail-empty {
+  color: var(--color-text-secondary);
+  font-size: 12px;
 }
 
 .config-hint {

@@ -23,6 +23,12 @@ class _Chat:
                 "whisper": {"provider_type": "stt", "type": "openai", "model": "whisper-1"},
             },
             "model_routing": {"reply": "backup"},
+            "web": {
+                "services": [
+                    {"name": "search", "adapter": "tavily", "api_key": "k", "timeout": 30},
+                    {"name": "reader", "adapter": "exa", "api_key": ""},
+                ]
+            },
         }
 
     def get_chat(self) -> dict:
@@ -60,6 +66,33 @@ class ConsoleAiRoutingTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(next(item for item in data["tasks"] if item["task"] == task)["provider_type"], "chat")
         for task in ("embedding", "image_embedding"):
             self.assertEqual(next(item for item in data["tasks"] if item["task"] == task)["provider_type"], "embedding")
+        advanced = {item["task"] for item in data["tasks"] if item["advanced"]}
+        self.assertEqual(advanced, {"memory", "learner", "fast_model", "emoji", "voice", "tts", "image_embedding"})
+        web = next(item for item in data["tasks"] if item["task"] == "web_search")
+        self.assertEqual((web["provider_type"], web["provider"], web["configured"]), ("web", "", False))
+        self.assertEqual(
+            data["web_services"],
+            [
+                {"name": "search", "adapter": "tavily", "timeout": 30, "has_api_key": True},
+                {"name": "reader", "adapter": "exa", "timeout": 60, "has_api_key": False},
+            ],
+        )
+
+    async def test_update_routing_web_search_binds_service(self) -> None:
+        store = _Chat()
+        chat_patch, save_patch, label_patch = self._patched(store)
+        with chat_patch, save_patch, label_patch:
+            result = await ai_providers.update_model_routing("web_search", {"provider": "search"})
+        self.assertTrue(result["success"])
+        self.assertEqual(store.chat["model_routing"]["web_search"], "search")
+
+        with chat_patch, save_patch, label_patch:
+            result = await ai_providers.update_model_routing("web_search", {"provider": "main"})
+        self.assertEqual(result, {"success": False, "message": "联网服务不存在"})
+        with chat_patch, save_patch, label_patch:
+            result = await ai_providers.update_model_routing("web_search", {"provider": ""})
+        self.assertTrue(result["success"])
+        self.assertEqual(store.chat["model_routing"]["web_search"], "")
 
     async def test_update_routing_voice_requires_stt_provider(self) -> None:
         store = _Chat()

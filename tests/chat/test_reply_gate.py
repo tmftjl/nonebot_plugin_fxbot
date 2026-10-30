@@ -331,7 +331,6 @@ class RouterWiringTests(RouterUnitTests):
             "max_context_size": 10,
             "group_allowlist": [],
             "private_enabled": False,
-            "command_prefixes": ["/", "#"],
             "persona": "",
         }
         with (

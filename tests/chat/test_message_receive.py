@@ -66,50 +66,13 @@ def _voice_event() -> SimpleNamespace:
     return event
 
 
-class IgnoredCommandTests(RouterUnitTests):
-    """命令前缀消息既不触发回复，也不通过群历史入口保存。"""
-
-    async def test_prefix_message_with_image_never_reaches_chat_or_history(self) -> None:
-        config = {**SYSTEM_DEFAULTS["chat"], "command_prefixes": ["#", "gs", ""]}
-        for group_id in (None, "group"):
-            for text in ("#测试", "  #测试", "gs查询"):
-                with self.subTest(group_id=group_id, text=text):
-                    event = _event(text)
-                    event.group_id = group_id
-                    with (
-                        patch.object(router, "should_process_fxbot_message", return_value=True),
-                        patch.object(router, "_chat_cfg", return_value=config),
-                        patch.object(router, "_match_context", return_value=True),
-                        patch.object(router, "_should_record_context", return_value=True),
-                        patch.object(router, "_has_image", return_value=True),
-                        patch.object(adapter_module, "get_platform_adapter", return_value=OneBotV12MessageAdapter()),
-                    ):
-                        self.assertFalse(await router._ai_fallback_rule(object(), event))
-                        self.assertFalse(await router._context_rule(object(), event))
-
-    async def test_direct_history_entry_rejects_prefix_without_touching_storage(self) -> None:
-        service = service_module.ChatService(ChatSessionStore())
-        config = SimpleNamespace(get_system=lambda: {"chat": {**SYSTEM_DEFAULTS["chat"], "command_prefixes": ["#"]}})
-        with (
-            patch.object(service_module, "get_config_manager", return_value=config),
-            patch.object(service, "_hydrate", new=AsyncMock()) as hydrate,
-            patch.object(service_module.history_module, "record_group_message", new=AsyncMock()) as record,
-        ):
-            await service.record_group_message(
-                "own", "user", "测试", "  #查询", is_group=True, images=["image"], has_image=True
-            )
-        hydrate.assert_not_awaited()
-        record.assert_not_awaited()
-        self.assertEqual(service.session_store.get("own"), [])
-
-
 class VoiceRuleTests(RouterUnitTests):
     """纯语音没有文字，但要在适配阶段放行并转写。"""
 
     async def test_voice_only_message_reaches_adaptation(self) -> None:
         with (
             patch.object(router, "should_process_fxbot_message", return_value=True),
-            patch.object(router, "_chat_cfg", return_value={"enabled": True, "command_prefixes": ["/"]}),
+            patch.object(router, "_chat_cfg", return_value={"enabled": True}),
             patch.object(router, "_match_context", return_value=True),
         ):
             self.assertTrue(await router._ai_fallback_rule(object(), _voice_event()))
@@ -120,7 +83,7 @@ class VoiceRuleTests(RouterUnitTests):
         event.get_message = lambda: []
         with (
             patch.object(router, "should_process_fxbot_message", return_value=True),
-            patch.object(router, "_chat_cfg", return_value={"enabled": True, "command_prefixes": ["/"]}),
+            patch.object(router, "_chat_cfg", return_value={"enabled": True}),
             patch.object(router, "_match_context", return_value=True),
         ):
             self.assertFalse(await router._ai_fallback_rule(object(), event))

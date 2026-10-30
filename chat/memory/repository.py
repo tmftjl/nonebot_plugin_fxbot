@@ -965,6 +965,8 @@ class ChatRepository:
         tags: list[str] | None = None,
     ) -> ChatEmoji:
         """写入或更新一条表情索引；重复上传只刷新描述与标签。"""
+        # 没有描述的表情不会进入发送候选，保持未识别状态等人工补充
+        ready = bool(description.strip())
         await session.execute(
             sqlite_insert(ChatEmoji)
             .values(
@@ -973,9 +975,9 @@ class ChatRepository:
                 path=path,
                 description=description,
                 tags=json.dumps(tags or [], ensure_ascii=False),
-                registered=True,
-                vlm_processed=True,
-                register_time=utc_now_naive(),
+                registered=ready,
+                vlm_processed=ready,
+                register_time=utc_now_naive() if ready else None,
             )
             .on_conflict_do_update(
                 index_elements=["tenant", "hash"],
@@ -984,8 +986,8 @@ class ChatRepository:
                     "description": description,
                     "tags": json.dumps(tags or [], ensure_ascii=False),
                     "enabled": True,
-                    "registered": True,
-                    "vlm_processed": True,
+                    "registered": ready,
+                    "vlm_processed": ready,
                 },
             )
         )
