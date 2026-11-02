@@ -152,6 +152,8 @@ const isAutoCapability = (value?: string) =>
 
 const isWebTask = computed(() => currentTask.value?.provider_type === 'web')
 
+const isVisionTask = computed(() => currentTask.value?.task === 'vision')
+
 const assignedWebService = computed(
   () => (routing.value?.web_services || []).find((item) => item.name === currentTask.value?.provider) || null,
 )
@@ -175,6 +177,7 @@ watch(showAdvanced, () => {
 })
 
 const assignedProvider = computed(() => {
+  if (isVisionTask.value) return providers.value.find((item) => item.name === currentTask.value?.provider) || null
   const fallback = isAutoCapability(currentTask.value?.provider_type) ? '' : routing.value?.default_provider
   const name = currentTask.value?.provider || fallback || ''
   return providers.value.find((item) => item.name === name) || null
@@ -182,12 +185,15 @@ const assignedProvider = computed(() => {
 
 const taskFallbackLabel = computed(() => {
   if (isWebTask.value) return '不启用'
+  if (isVisionTask.value) return '不启用视觉'
   if (isAutoCapability(currentTask.value?.provider_type)) return '自动选择'
   return `跟随默认${routing.value?.default_provider ? `（${routing.value.default_provider}）` : ''}`
 })
 
 const taskHint = computed(() => {
   if (isWebTask.value) return '搜索与网页读取共用这个服务；留空不开放统一联网工具。'
+  if (isVisionTask.value)
+    return '留空表示不启用视觉：图片理解与表情识别都不会调用模型，不会回落到默认对话模型。请分配一个支持图片输入的 Provider。'
   if (currentTask.value?.provider_type === 'stt')
     return '留空时自动使用第一个语音识别 Provider；这里只决定由哪个 Provider 执行业务。'
   if (currentTask.value?.provider_type === 'tts')
@@ -557,7 +563,13 @@ const updateTaskProvider = async (value: string) => {
       return
     }
     ElMessage.success(
-      value ? `已分配给「${value}」` : isWebTask.value ? '已关闭联网工具' : '已改为跟随默认模型',
+      value
+        ? `已分配给「${value}」`
+        : isWebTask.value
+          ? '已关闭联网工具'
+          : isVisionTask.value
+            ? '已关闭视觉识别'
+            : '已改为跟随默认模型',
     )
     await loadRouting()
   } catch (e) {
@@ -761,7 +773,7 @@ onMounted(() => {
                     ? isWebTask
                       ? '已启用'
                       : '单独分配'
-                    : isWebTask
+                    : isWebTask || isVisionTask
                       ? '未启用'
                       : isAutoCapability(currentTask.provider_type)
                         ? '自动选择'
