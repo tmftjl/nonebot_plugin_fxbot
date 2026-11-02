@@ -316,7 +316,7 @@ export interface ChatJargon {
   id: number
   term: string
   meaning: string
-  status: 'active' | 'rejected' | string
+  status: 'active' | 'pending' | 'rejected' | string
   count: number
   learn_count: number
   use_count: number

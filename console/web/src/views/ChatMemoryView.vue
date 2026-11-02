@@ -103,6 +103,19 @@ const expressionTag = (row: ChatExpression): { type: 'success' | 'warning' | 'in
   return row.rejected ? { type: 'info', text: '已拒绝' } : { type: 'success', text: '生效' }
 }
 
+const jargonTag = (status: string): { type: 'success' | 'warning' | 'info'; text: string } => {
+  if (status === 'active') return { type: 'success', text: '生效' }
+  if (status === 'pending') return { type: 'warning', text: '待推断' }
+  return { type: 'info', text: '已拒绝' }
+}
+
+const jargonMeaning = (row: ChatJargon): string => {
+  if (row.meaning) return row.meaning
+  if (row.status !== 'pending') return '未推断出释义'
+  const threshold = [4, 8, 25, 100].find((value) => value > row.count)
+  return threshold ? `出现 ${threshold} 次后推断释义（当前 ${row.count} 次）` : '重复出现后推断释义'
+}
+
 const filteredExpressions = computed(() => {
   const keyword = expressionSearch.value.trim().toLowerCase()
   if (!keyword) return expressions.value
@@ -764,6 +777,7 @@ onMounted(() => {
                 <el-select v-model="jargonStatus" class="status-select" @change="loadJargon">
                   <el-option label="全部" value="all" />
                   <el-option label="生效中" value="active" />
+                  <el-option label="待推断" value="pending" />
                   <el-option label="已拒绝" value="rejected" />
                 </el-select>
                 <el-input
@@ -799,11 +813,15 @@ onMounted(() => {
             >
               <el-table-column type="selection" width="44" />
               <el-table-column prop="term" label="词条" min-width="130" show-overflow-tooltip />
-              <el-table-column prop="meaning" label="释义" min-width="240" show-overflow-tooltip />
+              <el-table-column label="释义" min-width="240" show-overflow-tooltip>
+                <template #default="{ row }">
+                  <span :class="{ 'meaning-hint': !row.meaning }">{{ jargonMeaning(row) }}</span>
+                </template>
+              </el-table-column>
               <el-table-column label="状态" width="90">
                 <template #default="{ row }">
-                  <el-tag :type="row.status === 'active' ? 'success' : 'info'" size="small">
-                    {{ row.status === 'active' ? '生效' : '已拒绝' }}
+                  <el-tag :type="jargonTag(row.status).type" size="small">
+                    {{ jargonTag(row.status).text }}
                   </el-tag>
                 </template>
               </el-table-column>
@@ -1149,6 +1167,11 @@ onMounted(() => {
 }
 
 .scope-current {
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+}
+
+.meaning-hint {
   color: var(--color-text-tertiary);
   font-size: 12px;
 }
