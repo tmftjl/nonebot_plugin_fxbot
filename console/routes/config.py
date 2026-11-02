@@ -83,7 +83,6 @@ def _learning_fields(defaults_key: str) -> list[dict[str, Any]]:
     """学习范围：按聊天流覆盖「使用 / 学习」，共享组让多个聊天共用已学内容。"""
     chat = SYSTEM_DEFAULTS["chat"]
     return [
-        {"component": "Divider", "label": "学习范围"},
         {
             "field": "learning_list",
             "label": "学习配置",
@@ -754,7 +753,6 @@ def _all_config_tab() -> dict[str, Any]:
                         "default": SYSTEM_DEFAULTS["chat"]["behavior"]["enable_reply_at"],
                         "helpMessage": "模型可在回复开头写 @昵称 来 @ 本条消息的发送者或被 @ 的人。",
                     },
-                    {"component": "Divider", "label": "场景提示词"},
                     {
                         "field": "group_chat_prompt",
                         "label": "群聊提示词",
@@ -771,7 +769,6 @@ def _all_config_tab() -> dict[str, Any]:
                         "helpMessage": "私聊回复的通用注意事项，随系统提示发给模型。",
                         "componentProps": {"rows": 4},
                     },
-                    {"component": "Divider", "label": "临时风格"},
                     {
                         "field": "multiple_reply_style",
                         "label": "备用表达风格",
@@ -787,7 +784,6 @@ def _all_config_tab() -> dict[str, Any]:
                         "helpMessage": "0 表示不随机切换；1 表示每轮都抽一条备用风格。",
                         "componentProps": {"min": 0, "max": 1, "step": 0.1},
                     },
-                    {"component": "Divider", "label": "额外 Prompt"},
                     {
                         "field": "chat_prompts",
                         "label": "指定聊天要求",

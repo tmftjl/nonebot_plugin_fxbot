@@ -85,7 +85,6 @@ def get_ui_schema() -> dict[str, Any]:
                         "default": DEFAULTS["use_ban_word"],
                         "helpMessage": "过滤敏感词。",
                     },
-                    {"label": "表情保护设置", "component": "Divider"},
                     {
                         "field": "whitelist_ids",
                         "label": "保护白名单",
