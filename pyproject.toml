@@ -8,7 +8,7 @@ dependencies = [
     "nonebot-adapter-onebot",
     "nonebot-plugin-apscheduler",
     "pydantic",
-    "sqlmodel",
+    "sqlmodel==0.0.42",
     "sqlalchemy",
     "aiosqlite",
     "httpx[socks]",
