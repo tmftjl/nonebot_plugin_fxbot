@@ -266,6 +266,23 @@ def _all_config_tab() -> dict[str, Any]:
                         "componentProps": {"suggestScene": "private"},
                     },
                     {
+                        "field": "work_time",
+                        "label": "上班时间",
+                        "component": "Input",
+                        "default": SYSTEM_DEFAULTS["chat"]["work_time"],
+                        "helpMessage": "北京时间，格式 08:30-17:30；同一天内起止时间，结束时刻起停止回复。",
+                    },
+                    {
+                        "field": "rest_time_no_reply",
+                        "label": "休息时间不回复",
+                        "component": "Switch",
+                        "default": SYSTEM_DEFAULTS["chat"]["rest_time_no_reply"],
+                        "helpMessage": (
+                            "开启后仅法定工作日的上班时间回复，含调休补班；群聊、私聊、主动接话及 Focus 均受限。"
+                            "日历自动缓存和每日更新，缺少当年数据时暂停回复。"
+                        ),
+                    },
+                    {
                         "field": "group_allowlist",
                         "label": "群聊白名单",
                         "component": "GTags",

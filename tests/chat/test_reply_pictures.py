@@ -121,6 +121,7 @@ class ReplyPictureTests(unittest.IsolatedAsyncioTestCase):
         tenant = f"test:picture-receipt:{uuid4().hex}"
         self.addAsyncCleanup(attachments.chat_repository.clear_tenant, tenant)
         request = replace(self.request, session_id=tenant, accepted_epoch=0)
+        request.metadata["sent_quote_id"] = "previous-text-quote"
         self.store.append(tenant, {"role": "user", "content": "看图"})
         turn_id = await attachments.chat_repository.upsert_turn(ChatTurn(tenant=tenant, turn_key=request.turn_id))
 
@@ -143,3 +144,4 @@ class ReplyPictureTests(unittest.IsolatedAsyncioTestCase):
         [row] = await ChatTurnItem.select_rows(tenant=tenant)
         self.assertEqual((row.visible, row.send_status, row.platform_message_id), (True, "sent", "sent-picture"))
         self.assertEqual(self.store.get(tenant)[-1]["content"], "[图片]")
+        self.assertEqual(self.store.get(tenant)[-1]["_quote_ids"], [])

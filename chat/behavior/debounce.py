@@ -156,17 +156,18 @@ class PendingBatch:
         """合并成一个请求；同作者续发不重复加发言人前缀。"""
         if len(self.requests) == 1:
             return self.requests[0]
-        first = self.requests[0]
+        anchor = self.requests[-1]
         texts: list[str] = []
         images: list[Any] = []
         mentions: list[Any] = []
         message_ids: list[str] = []
         author_ids: list[str] = []
         quoted = ""
+        multiple_authors = len({request.user_id for request in self.requests}) > 1
         for index, request in enumerate(self.requests):
             text = request.text.strip()
             if text:
-                if request.user_id == first.user_id:
+                if not multiple_authors:
                     texts.append(text)
                 else:
                     texts.append(f"{speaker_label(request.user_id, request.user_name)}: {text}")
@@ -181,7 +182,8 @@ class PendingBatch:
             if request.user_id not in author_ids:
                 author_ids.append(request.user_id)
         return replace(
-            first,
+            anchor,
+            metadata=dict(anchor.metadata),
             text="\n".join(texts),
             images=images,
             mentions=mentions,
@@ -189,11 +191,11 @@ class PendingBatch:
             batched=True,
             source_message_ids=message_ids,
             source_author_ids=author_ids,
-            trigger_kind=self.forced_kind or first.trigger_kind,
+            trigger_kind=self.forced_kind or ("proactive" if self.has_proactive else anchor.trigger_kind),
             # 批次里出现强制触发时按普通轮处理，只有纯主动批次才算主动轮
             proactive=self.has_proactive and not self.forced_kind,
             trigger_seq=self.trigger_seq,
-            trigger_owner=self.trigger_owner or first.trigger_owner or first.user_id,
+            trigger_owner=self.trigger_owner or anchor.trigger_owner or anchor.user_id,
             accepted_epoch=self.accepted_epoch,
             activity_seq=max(request.activity_seq for request in self.requests),
         )

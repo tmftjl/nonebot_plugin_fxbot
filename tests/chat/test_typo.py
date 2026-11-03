@@ -234,7 +234,7 @@ class SendTypoTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(sent)
         self.assertEqual(matcher.sent, ["错字文本。"])
         self.assertEqual(
-            self.history,
+            [{"role": item["role"], "content": item["content"]} for item in self.history],
             [
                 {"role": "user", "content": "你好"},
                 {"role": "assistant", "content": "错字文本。"},

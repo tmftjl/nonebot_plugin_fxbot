@@ -538,9 +538,14 @@ def _scheduler_jobs() -> list[dict[str, Any]]:
 async def chat_health() -> dict[str, Any]:
     """返回聊天存储、调度器与在线 Bot 的可用状态。"""
     try:
-        enabled = bool(get_config_manager().get_system()["chat"].get("enabled"))
+        chat = get_config_manager().get_system()["chat"]
+        enabled = bool(chat.get("enabled"))
     except Exception:
         enabled = False
+        chat = {"enabled": False}
+    from ...chat.work_schedule import schedule_status
+
+    work_schedule = schedule_status(chat)
     focus_groups = []
     focus_ok = True
     try:
@@ -553,6 +558,7 @@ async def chat_health() -> dict[str, Any]:
         logger.opt(exception=True).debug("[ChatFocus] 健康状态读取失败")
     return {
         "enabled": enabled,
+        "work_schedule": work_schedule,
         "storage_ready": is_ready(),
         "degraded_reason": degraded_reason(),
         "scheduler_ready": bool(_scheduler_jobs()),

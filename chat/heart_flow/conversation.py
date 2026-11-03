@@ -7,6 +7,7 @@ import asyncio
 from time import perf_counter
 from uuid import uuid4
 from typing import Any
+from datetime import datetime
 from contextlib import suppress
 from dataclasses import replace
 
@@ -22,6 +23,7 @@ from ...utils.tz import now
 from ..providers import LLMResponse
 from .attachments import tool_media, resolve_pictures
 from ..tools.result import prepare_tool_result_content
+from ..work_schedule import can_reply
 from ..context_summary import planner_snapshot
 from ..tools.discovery import sync_discovered, deferred_reminder
 from ..behavior.mentions import reply_at_enabled
@@ -114,13 +116,23 @@ async def interruptible_step(service: Any, context: Any, provider: Any, messages
     """新消息到达时取消规划并重建上下文；清空会话时终止。"""
     request = context.request
     while service.is_current(request.session_id, context.epoch):
+        if not can_reply():
+            return None
         version = service.session_store.activity(request.session_id)
+        request.metadata["passive_reply_target"] = next(
+            (
+                str(message["_source_ids"][-1])
+                for message in reversed(service.session_store.get(request.session_id))
+                if message.get("_source_ids") and not message.get("_planner_internal")
+            ),
+            request.message_id or request.dedupe_key,
+        )
         steering = plan_flow.steering_enabled()
         task = asyncio.create_task(asyncio.wait_for(request_step(provider, messages, tools, stream=steering), 180))
         try:
             while not task.done():
                 done, _ = await asyncio.wait({task}, timeout=0.1)
-                if not service.is_current(request.session_id, context.epoch):
+                if not service.is_current(request.session_id, context.epoch) or not can_reply():
                     return None
                 if steering and service.session_store.activity(request.session_id) != version:
                     break
@@ -137,7 +149,6 @@ async def interruptible_step(service: Any, context: Any, provider: Any, messages
         request.metadata.pop("planner_pending", None)
         messages[:] = [
             *rebuilt,
-            *request.metadata.get("planner_trace", []),
             *request.metadata.get("planner_instruction", []),
         ]
     return None
@@ -148,10 +159,9 @@ async def run(service: Any, context: Any) -> ChatResponse:
     request = context.request
     passive = bool(planner_config().get("passive_replyer"))
     trace = request.metadata.setdefault("planner_trace", [])
-    messages = [*context.messages, *trace]
+    messages = list(context.messages)
     sent_any = bool(request.metadata.get("planner_sent"))
     snapshot = None
-    target_ids = request.source_message_ids or [request.message_id or request.dedupe_key]
     instruction = (
         "需要信息或操作时调用工具；决定发言时直接输出指导正文，不附带工具调用；不发言用 stop，需要稍后判断用 wait。"
         if passive
@@ -160,16 +170,42 @@ async def run(service: Any, context: Any) -> ChatResponse:
     reminder = plan_flow.wait_reminder(request.session_id)
     request.metadata["planner_instruction"] = [
         {"role": "user", "content": f"时间：{now():%Y-%m-%d %H:%M:%S}"},
-        {"role": "user", "content": f"{instruction}\n本轮消息 ID：{', '.join(target_ids)}\n{reminder}"},
+        {"role": "user", "content": f"{instruction}\n{reminder}"},
     ]
     messages.extend(request.metadata["planner_instruction"])
     post_messages: list[dict[str, Any]] = []
+
+    def remember_internal(message: dict[str, Any]) -> None:
+        """按真实执行顺序保存 Planner 协议，不能在所有聊天消息之后补写。"""
+        if service.is_current(request.session_id, context.epoch):
+            service.session_store.append(
+                request.session_id,
+                {**message, "_planner_internal": True, "_logical_turn_id": request.turn_id},
+                limit=context.limit,
+            )
+
+    async def finish_cycle() -> None:
+        """每次内部循环处理上下文，不等整个长对话结束才裁切和生成状态摘要。"""
+        if snapshot is None or not service.is_current(request.session_id, context.epoch):
+            return
+        service.session_store.process_cycle(request.session_id, context.limit)
+        dropped = service.session_store.take_dropped(request.session_id)
+        if dropped:
+            from ..context_summary import compact_messages
+
+            await compact_messages(
+                request.session_id,
+                dropped,
+                planner_request=snapshot,
+                recent_messages=service.session_store.get(request.session_id),
+            )
 
     async def reply(arguments: dict[str, Any]) -> tuple[dict[str, Any], ChatResponse | None]:
         """回复目标只能引用当前会话消息，发送结果回到 Planner。"""
         nonlocal sent_any
         reference = arguments.get("reply_reference")
         target = str(arguments.get("msg_id") or "")
+        target_ids = request.source_message_ids or [request.message_id or request.dedupe_key]
         known_ids = set(target_ids)
         for message in service.session_store.get(request.session_id):
             known_ids.update(str(value) for value in message.get("_source_ids", []))
@@ -191,12 +227,39 @@ async def run(service: Any, context: Any) -> ChatResponse:
             selected.get("user_name") or (request.user_name if sender_id == request.user_id else sender_id)
         )
         selected_text = str(selected.get("text") or request.text)
+        selected_time = request.occurred_at
+        target_quotes: list[str] = []
+        target_at_bot = bool(request.metadata.get("has_at_bot")) if target == request.message_id else False
+        for message in service.session_store.get(request.session_id):
+            if target in message.get("_source_ids", []):
+                sender_id = str(message.get("_sender_id") or sender_id)
+                sender_name = str(message.get("_sender_name") or sender_name)
+                prefix = f"{speaker_label(sender_id, sender_name)}: "
+                selected_text = str(message.get("content") or "").removeprefix(prefix)
+                target_quotes = list(message.get("_quote_ids", []))
+                target_at_bot = bool(message.get("_at_bot"))
+                if timestamp := message.get("_timestamp"):
+                    selected_time = datetime.fromisoformat(timestamp)
         if target != (request.message_id or request.dedupe_key):
             row = await chat_repository.message_by_identity(request.session_id, target)
             if row is not None:
                 sender_id, sender_name = row.sender_id, row.sender_name
                 prefix = f"{speaker_label(sender_id, sender_name)}: "
                 selected_text = row.content.removeprefix(prefix)
+                selected_time = row.occurred_at or row.ingested_at
+        previous_reply = next(
+            (
+                str(message.get("content") or "")
+                for message in reversed(service.session_store.get(request.session_id))
+                if message.get("_self_message") and target in message.get("_quote_ids", [])
+            ),
+            "",
+        )
+        if previous_reply:
+            reference = (
+                f"{reference}\n你刚刚已经回复过这条消息，你刚刚的发言是：“{' '.join(previous_reply.split())}”\n"
+                "你现在想再次回复这条消息，进行补充，注意请不要和之前你的发言重复。"
+            )
         reply_request = replace(
             request,
             turn_id=uuid4().hex,
@@ -204,15 +267,21 @@ async def run(service: Any, context: Any) -> ChatResponse:
             user_name=sender_name,
             text=selected_text,
             message_id=target,
+            occurred_at=selected_time,
             source_message_ids=[target],
             source_author_ids=[sender_id],
             images=request.images if target == request.message_id else [],
+            mentions=request.mentions if target == request.message_id else [],
+            quoted_text=request.quoted_text if target == request.message_id else "",
             reply_to_message_id=target,
             metadata={
                 **request.metadata,
                 "history_recorded": True,
                 "planner_reply": True,
+                "planner_parent_turn_id": request.turn_id,
                 "reply_target_id": target,
+                "target_quote_ids": target_quotes,
+                "has_at_bot": target_at_bot,
                 "requested_reply_style": str(arguments.get("reply_style") or ""),
                 "planner_trace": [],
                 "reply_at_users": list(dict.fromkeys(authors[str(message_id)] for message_id in attached)),
@@ -237,12 +306,13 @@ async def run(service: Any, context: Any) -> ChatResponse:
         return {"ok": sent, "content": response.text if sent else "回复未成功发送"}, None
 
     async with fallback_provider("planner", request.session_id) as provider:
-        for _ in range(MAX_INTERNAL_ROUNDS):
-            if not service.is_current(request.session_id, context.epoch):
+        for round_index in range(MAX_INTERNAL_ROUNDS):
+            if not service.is_current(request.session_id, context.epoch) or not can_reply():
                 break
-            if request.metadata.pop("planner_pending", False):
+            await finish_cycle()
+            if request.metadata.pop("planner_pending", False) or round_index > 0:
                 rebuilt = await plan_flow.rebuild_messages(service, context)
-                messages[:] = [*rebuilt, *trace, *request.metadata["planner_instruction"]]
+                messages[:] = [*rebuilt, *request.metadata["planner_instruction"]]
             sync_discovered(request.session_id, messages)
             names, tools = await allowed_tools(context.runtime, session_id=request.session_id)
             tools = [*control_tools(passive), *tools]
@@ -293,13 +363,14 @@ async def run(service: Any, context: Any) -> ChatResponse:
             assistant = response.to_message_dict()
             messages.append(assistant)
             trace.append(assistant)
+            remember_internal(assistant)
             if not response.tool_calls:
                 if passive and response.content.strip():
                     options = request.metadata.pop("planner_reply_options", {})
-                    _, generated = await reply(
-                        {**options, "msg_id": target_ids[-1], "reply_reference": response.content}
-                    )
+                    target = str(request.metadata["passive_reply_target"])
+                    _, generated = await reply({**options, "msg_id": target, "reply_reference": response.content})
                     if generated is not None:
+                        await finish_cycle()
                         return generated
                 break
             pause: float | None = None
@@ -314,7 +385,12 @@ async def run(service: Any, context: Any) -> ChatResponse:
                     arguments = json.loads(raw_arguments) if isinstance(raw_arguments, str) else raw_arguments
                     if not isinstance(arguments, dict):
                         raise ValueError("工具参数必须为对象")
-                    if stopped or pause is not None or not service.is_current(request.session_id, context.epoch):
+                    if (
+                        stopped
+                        or pause is not None
+                        or not service.is_current(request.session_id, context.epoch)
+                        or not can_reply()
+                    ):
                         result = {"ok": False, "error": "本轮已暂停或结束，工具未执行"}
                     elif name == "reply" and not passive:
                         result, generated = await reply(arguments)
@@ -374,15 +450,20 @@ async def run(service: Any, context: Any) -> ChatResponse:
                 }
                 messages.append(output)
                 trace.append(output)
+                remember_internal(output)
                 if generated is not None:
+                    await finish_cycle()
                     return generated
             messages.extend(post_messages)
             trace.extend(post_messages)
+            for message in post_messages:
+                remember_internal(message)
             if stopped:
                 break
             if pause is not None:
                 plan_flow.note_plan(request.session_id, "wait")
                 if pause > 0:
+                    await finish_cycle()
                     request.activity_seq = service.session_store.activity(request.session_id)
                     return ChatResponse(text="", epoch=context.epoch, metadata={"wait_seconds": pause})
             else:
@@ -391,22 +472,6 @@ async def run(service: Any, context: Any) -> ChatResponse:
     request.metadata.pop("planner_reply_options", None)
     request.metadata.pop("planner_instruction", None)
     plan_flow.note_plan(request.session_id, "stop")
-    if service.is_current(request.session_id, context.epoch):
-        service.session_store.append_many(
-            request.session_id,
-            [{**message, "_planner_internal": True, "_logical_turn_id": request.turn_id} for message in trace],
-            limit=context.limit,
-        )
-        service.session_store.process_cycle(request.session_id, context.limit)
-        dropped = service.session_store.take_dropped(request.session_id)
-        if dropped:
-            from ..context_summary import compact_messages
-
-            await compact_messages(
-                request.session_id,
-                dropped,
-                planner_request=snapshot,
-                recent_messages=service.session_store.get(request.session_id),
-            )
+    await finish_cycle()
     await end_turn_without_reply(request, context.provider_name)
     return ChatResponse(text="", epoch=context.epoch, metadata={"planner_sent": sent_any})

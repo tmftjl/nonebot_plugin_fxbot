@@ -7,6 +7,7 @@ from nonebot import logger
 from ..emoji import emoji_config, emoji_cleanup_tick, emoji_reconcile_tick
 from .cleanup import lifecycle_tick
 from ...utils.tz import now
+from ..work_schedule import refresh_calendar
 
 
 def setup_memory_tasks() -> None:
@@ -16,6 +17,16 @@ def setup_memory_tasks() -> None:
     except Exception:
         logger.warning("[ChatStorage] nonebot-plugin-apscheduler 未安装或未加载，跳过聊天后台任务")
         return
+    scheduler.add_job(
+        refresh_calendar,
+        trigger="interval",
+        minutes=1,
+        next_run_time=now(),
+        id="fxbot_chat_work_calendar",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
     scheduler.add_job(
         lifecycle_tick,
         trigger="interval",

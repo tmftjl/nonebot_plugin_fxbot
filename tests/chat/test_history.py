@@ -38,6 +38,20 @@ from src.plugins.nonebot_plugin_fxbot.chat.memory.repository import ChatReposito
 from .support import RouterUnitTests, ReplyPipelineTests
 
 
+def _visible_history(messages: list[dict]) -> list[dict]:
+    """正文与可见性用例只比较内容和入站来源，身份元信息由独立回归验证。"""
+    return [
+        {
+            key: value
+            for key, value in message.items()
+            if key in {"role", "content"}
+            or (key in {"_sender_id", "_source_ids"} and value and not message.get("_self_message"))
+        }
+        for message in messages
+        if not message.get("_reference")
+    ]
+
+
 def _utc(hour: int) -> datetime:
     """构造测试用 naive UTC。"""
     return datetime(2026, 1, 1, hour, tzinfo=timezone.utc).replace(tzinfo=None)
@@ -182,9 +196,9 @@ class RepositoryTests(unittest.IsolatedAsyncioTestCase):
         def entries(*items: tuple[str, str]) -> list[dict[str, str]]:
             return [{"role": role, "content": content} for role, content in items]
 
-        self.assertEqual(a_history, entries(("user", "一"), ("user", "二"), ("assistant", "回复")))
-        self.assertEqual(b_history, entries(("user", "别的租户"), ("assistant", "别的回复")))
-        self.assertEqual(limited, entries(("user", "二"), ("assistant", "回复")))
+        self.assertEqual(_visible_history(a_history), entries(("user", "一"), ("user", "二"), ("assistant", "回复")))
+        self.assertEqual(_visible_history(b_history), entries(("user", "别的租户"), ("assistant", "别的回复")))
+        self.assertEqual(_visible_history(limited), entries(("user", "二"), ("assistant", "回复")))
 
     async def test_sent_item_enters_history(self) -> None:
         async with self.maker() as session:
@@ -211,7 +225,7 @@ class RepositoryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(before, [])
         self.assertEqual((first, second), (True, False))
-        self.assertEqual(after, [{"role": "assistant", "content": "回复"}])
+        self.assertEqual(_visible_history(after), [{"role": "assistant", "content": "回复"}])
 
     async def test_partial_send_keeps_prefix_visible(self) -> None:
         async with self.maker() as session:
@@ -246,7 +260,7 @@ class RepositoryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(partial_status, "partial")
         # 进程在第一段之后中断，重启也要能看到已发出的前缀
-        self.assertEqual(prefix, [{"role": "assistant", "content": "第一段"}])
+        self.assertEqual(_visible_history(prefix), [{"role": "assistant", "content": "第一段"}])
         self.assertEqual(sent_status, "sent")
         self.assertEqual([row["content"] for row in whole], ["第一段", "第二段"])
 
@@ -333,8 +347,8 @@ class HydrateTests(unittest.IsolatedAsyncioTestCase):
             await self.service._hydrate("tenant", 3)
             await self.service._hydrate("tenant", 3)
 
-        self.assertEqual(self.store.get("tenant"), history[-3:])
-        restore.assert_awaited_once_with("tenant", 3)
+        self.assertEqual(_visible_history(self.store.get("tenant")), history[-3:])
+        restore.assert_awaited_once_with("tenant", 2)
 
     async def test_does_not_overwrite_live_messages(self) -> None:
         self.store.append("tenant", {"role": "user", "content": "新消息"})
@@ -345,7 +359,7 @@ class HydrateTests(unittest.IsolatedAsyncioTestCase):
         ):
             await self.service._hydrate("tenant", 10)
 
-        self.assertEqual(self.store.get("tenant"), [{"role": "user", "content": "新消息"}])
+        self.assertEqual(_visible_history(self.store.get("tenant")), [{"role": "user", "content": "新消息"}])
         self.assertTrue(self.store.is_hydrated("tenant"))
         restore.assert_not_awaited()
 
@@ -364,7 +378,7 @@ class HydrateTests(unittest.IsolatedAsyncioTestCase):
             patch.object(memory_state, "is_ready", return_value=True),
         ):
             await self.service._hydrate("tenant", 10)
-        self.assertEqual(self.store.get("tenant"), [{"role": "user", "content": "恢复"}])
+        self.assertEqual(_visible_history(self.store.get("tenant")), [{"role": "user", "content": "恢复"}])
 
     async def test_degraded_memory_skips_database(self) -> None:
         restore = AsyncMock()
@@ -478,7 +492,10 @@ class TurnPersistenceTests(unittest.IsolatedAsyncioTestCase):
         ):
             await self.service.mark_sent(request, response, 0, "pmid")
 
-        mark.assert_awaited_once_with("tenant", 5, "pmid", generation=0)
+        self.assertEqual(mark.await_args.args, ("tenant", 5, "pmid"))
+        self.assertEqual(mark.await_args.kwargs["generation"], 0)
+        self.assertEqual(mark.await_args.kwargs["content"], "回复")
+        self.assertTrue(mark.await_args.kwargs["context"]["_self_message"])
 
 
 class RestartContinuityTests(ReplyPipelineTests):
@@ -512,7 +529,7 @@ class RestartContinuityTests(ReplyPipelineTests):
         store = ChatSessionStore()
         await ChatService(store)._hydrate(self.tenant, 10)
         self.assertEqual(
-            store.get(self.tenant),
+            _visible_history(store.get(self.tenant)),
             [
                 {"role": "user", "content": "Alice(user): 你好", "_sender_id": "user"},
                 {"role": "assistant", "content": "回复"},
@@ -557,7 +574,7 @@ class EmptyAndFailedSendTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([call.kwargs["send_status"] for call in update_item.await_args_list], ["sending", "failed"])
         self.assertEqual([call.kwargs["status"] for call in update_turn.await_args_list], ["sending", "failed"])
         self.assertIn("发送失败", update_turn.await_args.kwargs["error"])
-        self.assertEqual(self.service.session_store.get("tenant"), [])
+        self.assertEqual(_visible_history(self.service.session_store.get("tenant")), [])
 
     async def test_mark_sent_appends_reply_once(self) -> None:
         request = _request()
@@ -573,7 +590,7 @@ class EmptyAndFailedSendTests(unittest.IsolatedAsyncioTestCase):
             await self.service.mark_sent(request, response)
 
         self.assertEqual(
-            self.service.session_store.get("tenant"),
+            _visible_history(self.service.session_store.get("tenant")),
             [{"role": "user", "content": "你好"}, {"role": "assistant", "content": "回复"}],
         )
         self.assertEqual(mark.await_count, 2)
@@ -590,7 +607,7 @@ class EmptyAndFailedSendTests(unittest.IsolatedAsyncioTestCase):
             await self.service.mark_sent(request, response, 0, None, content="错字文本")
 
         self.assertEqual(
-            self.service.session_store.get("tenant"),
+            _visible_history(self.service.session_store.get("tenant")),
             [{"role": "user", "content": "你好"}, {"role": "assistant", "content": "错字文本"}],
         )
 
@@ -715,9 +732,9 @@ class SendStateTests(ReplyPipelineTests):
         await service.mark_send_failed(request, response, RuntimeError("net down"))
 
         user = {"role": "user", "content": "Alice(user): 你好", "_sender_id": "user"}
-        self.assertEqual(store.get(self.tenant), [user])
+        self.assertEqual(_visible_history(store.get(self.tenant)), [user])
         self.assertEqual((await self._turn(request)).status, "failed")
-        self.assertEqual(await chat_repository.get_recent_messages(self.tenant, 10), [user])
+        self.assertEqual(_visible_history(await chat_repository.get_recent_messages(self.tenant, 10)), [user])
 
     async def test_empty_response_is_failed_and_not_sent(self) -> None:
         request = self._new_request()
@@ -738,7 +755,7 @@ class SendStateTests(ReplyPipelineTests):
         turn = await self._turn(request)
         self.assertEqual((turn.status, turn.error), ("failed", "空响应"))
         self.assertEqual(
-            await chat_repository.get_recent_messages(self.tenant, 10),
+            _visible_history(await chat_repository.get_recent_messages(self.tenant, 10)),
             [{"role": "user", "content": "Alice(user): 你好", "_sender_id": "user"}],
         )
 
@@ -762,7 +779,7 @@ class SendStateTests(ReplyPipelineTests):
         self.assertFalse(ChatService(store).is_current(self.tenant, response.epoch))
         self.assertEqual((await self._turn(request)).status, "aborted")
         self.assertEqual(
-            await chat_repository.get_recent_messages(self.tenant, 10),
+            _visible_history(await chat_repository.get_recent_messages(self.tenant, 10)),
             [{"role": "user", "content": "Alice(user): 你好", "_sender_id": "user"}],
         )
 
@@ -780,8 +797,8 @@ class SendStateTests(ReplyPipelineTests):
             {"role": "user", "content": "Alice(user): 你好", "_sender_id": "user"},
             {"role": "assistant", "content": "回复"},
         ]
-        self.assertEqual(store.get(self.tenant), expected)
-        self.assertEqual(await chat_repository.get_recent_messages(self.tenant, 10), expected)
+        self.assertEqual(_visible_history(store.get(self.tenant)), expected)
+        self.assertEqual(_visible_history(await chat_repository.get_recent_messages(self.tenant, 10)), expected)
         self.assertEqual((await self._turn(request)).status, "sent")
 
     async def test_same_user_new_trigger_aborts_before_generation(self) -> None:
@@ -797,7 +814,7 @@ class SendStateTests(ReplyPipelineTests):
         self.assertNotIn("turn_item_ids", response.metadata)
         self.assertEqual((await self._turn(request)).status, "aborted")
         self.assertEqual(
-            await chat_repository.get_recent_messages(self.tenant, 10),
+            _visible_history(await chat_repository.get_recent_messages(self.tenant, 10)),
             [{"role": "user", "content": "Alice(user): 你好", "_sender_id": "user"}],
         )
 
@@ -835,7 +852,7 @@ class SendStateTests(ReplyPipelineTests):
         self.assertNotIn("turn_item_ids", response.metadata)
         self.assertEqual((await self._turn(request)).status, "aborted")
         self.assertEqual(
-            await chat_repository.get_recent_messages(self.tenant, 10),
+            _visible_history(await chat_repository.get_recent_messages(self.tenant, 10)),
             [{"role": "user", "content": "Alice(user): 你好", "_sender_id": "user"}],
         )
 
@@ -849,7 +866,7 @@ class SendStateTests(ReplyPipelineTests):
         response = await self._process(request, store, _fake_lease)
 
         self.assertEqual(response.text, "")
-        self.assertEqual(await chat_repository.get_recent_messages(self.tenant, 10), [])
+        self.assertEqual(_visible_history(await chat_repository.get_recent_messages(self.tenant, 10)), [])
 
     async def test_abort_before_send_voids_turn_item(self) -> None:
         request = self._new_request()
@@ -870,7 +887,7 @@ class SendStateTests(ReplyPipelineTests):
             )[0]
         self.assertEqual((item.send_status, item.visible), ("skipped", False))
         self.assertEqual(
-            await chat_repository.get_recent_messages(self.tenant, 10),
+            _visible_history(await chat_repository.get_recent_messages(self.tenant, 10)),
             [{"role": "user", "content": "Alice(user): 你好", "_sender_id": "user"}],
         )
 
@@ -998,7 +1015,7 @@ class SplitSendTests(ReplyPipelineTests):
         items = await self._assistant_items(request)
         self.assertEqual([item.send_status for item in items], ["failed", "skipped", "skipped"])
         self.assertEqual(
-            await chat_repository.get_recent_messages(self.tenant, 10),
+            _visible_history(await chat_repository.get_recent_messages(self.tenant, 10)),
             [{"role": "user", "content": "User(user): 你好", "_sender_id": "user"}],
         )
 
@@ -1015,7 +1032,7 @@ class SplitSendTests(ReplyPipelineTests):
         self.assertEqual([item.send_status for item in items], ["sent", "failed", "skipped"])
         self.assertEqual([item.visible for item in items], [True, False, False])
         self.assertEqual(
-            await chat_repository.get_recent_messages(self.tenant, 10),
+            _visible_history(await chat_repository.get_recent_messages(self.tenant, 10)),
             [
                 {"role": "user", "content": "User(user): 你好", "_sender_id": "user"},
                 {"role": "assistant", "content": _LONG_PARTS[0]},
@@ -1146,8 +1163,8 @@ class ClearTests(ReplyPipelineTests):
         service = ChatService(store)
         await service.clear_session(self.tenant)
 
-        self.assertEqual(store.get(self.tenant), [])
-        self.assertEqual(await chat_repository.get_recent_messages(self.tenant, 10), [])
+        self.assertEqual(_visible_history(store.get(self.tenant)), [])
+        self.assertEqual(_visible_history(await chat_repository.get_recent_messages(self.tenant, 10)), [])
         state = await chat_repository.get_session_state(self.tenant)
         self.assertEqual(state.generation, 1)
         self.assertEqual(store.epoch(self.tenant), 1)
@@ -1190,7 +1207,7 @@ class ClearTests(ReplyPipelineTests):
         async with base_models.async_maker() as session:
             for model in (ChatTurn, ChatTurnItem, ChatMessage):
                 self.assertEqual(await model.select_rows(tenant=self.tenant, session=session), [])
-        self.assertEqual(await chat_repository.get_recent_messages(self.tenant, 10), [])
+        self.assertEqual(_visible_history(await chat_repository.get_recent_messages(self.tenant, 10)), [])
 
     async def test_clear_while_provider_is_generating_leaves_no_content(self) -> None:
         for database_only in (False, True):
@@ -1296,7 +1313,7 @@ class ClearTests(ReplyPipelineTests):
             [("新回复", False, "pending", None)],
         )
         self.assertEqual([message.content for message in messages], ["新消息"])
-        self.assertEqual(store.get(self.tenant), [])
+        self.assertEqual(_visible_history(store.get(self.tenant)), [])
 
 
 class _MutableConfig:
@@ -1416,9 +1433,9 @@ class ZeroHistoryLimitTests(ReplyPipelineTests):
         response = await self._process(self._request(group_id=None, trigger_kind="private"), store)
 
         self.assertEqual(response.text, "回复")
-        self.assertEqual(store.get(self.tenant), [])
+        self.assertEqual(_visible_history(store.get(self.tenant)), [])
         self.assertEqual(store.take_dropped(self.tenant), [])
-        self.assertEqual(await chat_repository.get_recent_messages(self.tenant, 10), [])
+        self.assertEqual(_visible_history(await chat_repository.get_recent_messages(self.tenant, 10)), [])
         self.assertEqual(await self._rows(ChatTurn), [])
         self.assertEqual(await self._rows(ChatTrace), [])
 
@@ -1428,9 +1445,9 @@ class ZeroHistoryLimitTests(ReplyPipelineTests):
         response = await self._process(self._request(group_id="group", trigger_kind="mention"), store)
 
         self.assertEqual(response.text, "回复")
-        self.assertEqual(store.get(self.tenant), [])
+        self.assertEqual(_visible_history(store.get(self.tenant)), [])
         self.assertEqual(store.take_dropped(self.tenant), [])
-        self.assertEqual(await chat_repository.get_recent_messages(self.tenant, 10), [])
+        self.assertEqual(_visible_history(await chat_repository.get_recent_messages(self.tenant, 10)), [])
         self.assertEqual(await self._rows(ChatTurn), [])
 
     async def test_non_zero_keeps_recording(self) -> None:
@@ -1442,7 +1459,7 @@ class ZeroHistoryLimitTests(ReplyPipelineTests):
 
         self.assertEqual(response.text, "回复")
         self.assertEqual(
-            store.get(self.tenant),
+            _visible_history(store.get(self.tenant)),
             [
                 {"role": "user", "content": "Alice(user): 你好", "_sender_id": "user"},
                 {"role": "assistant", "content": "回复"},
@@ -1497,7 +1514,7 @@ class BatchPersistenceTests(ReplyPipelineTests):
         # 本轮只把合并内容放进内存历史，原始消息留在库里等重启后恢复
         self.assertEqual([entry["content"] for entry in store.get(self.tenant)], ["Alice(user): 你好\n在吗"])
         self.assertEqual(
-            await chat_repository.get_recent_messages(self.tenant, 10),
+            _visible_history(await chat_repository.get_recent_messages(self.tenant, 10)),
             [
                 {"role": "user", "content": "Alice(user): 你好", "_source_ids": ["1"], "_sender_id": "user"},
                 {"role": "user", "content": "Alice(user): 在吗", "_source_ids": ["2"], "_sender_id": "user"},

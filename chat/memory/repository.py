@@ -29,6 +29,7 @@ from .models import (
     ChatRecallTombstone,
     utc_now_naive,
 )
+from ..message_context import message_metadata
 
 DIAGNOSTIC_RETENTION_HOURS = 72
 DIAGNOSTIC_MAX_RECORDS = 10000
@@ -83,6 +84,20 @@ class TenantJobState:
 
 class ChatRepository:
     """只暴露按 tenant 隔离的读写，不跨租户查询。"""
+
+    @with_session
+    async def invalidate_generation(self, session: AsyncSession, tenant: str) -> int:
+        """撤回使在途结果失效但保留聊天历史，同步持久化代次。"""
+        current = await self._lock_generation(session, tenant)
+        await session.execute(
+            sqlite_insert(ChatSessionState)
+            .values(tenant=tenant, generation=current + 1, updated_at=utc_now_naive())
+            .on_conflict_do_update(
+                index_elements=["tenant"],
+                set_={"generation": current + 1, "updated_at": utc_now_naive()},
+            )
+        )
+        return current + 1
 
     async def _lock_generation(self, session: AsyncSession, tenant: str) -> int:
         """先取得 SQLite 写锁再读取代次，避免校验与写入之间被清空。"""
@@ -215,6 +230,15 @@ class ChatRepository:
         for row in messages:
             if row.content:
                 message: dict[str, object] = {"role": "user", "content": row.content}
+                message.update(
+                    message_metadata(
+                        timestamp=row.occurred_at or row.ingested_at,
+                        sender_id=row.sender_id,
+                        sender_name=row.sender_name,
+                        quote_id=row.reply_to_message_id or "",
+                    )
+                )
+                message.update(json.loads(row.payload or "{}").get("context", {}))
                 if row.platform_message_id:
                     message["_source_ids"] = [row.platform_message_id]
                 if row.sender_id:
@@ -222,7 +246,16 @@ class ChatRepository:
                 entries.append((row.occurred_at or row.ingested_at, 0, message))
         for row in items:
             if row.content:
-                entries.append((row.created_at, 1, {"role": "assistant", "content": row.content}))
+                message = {
+                    "role": "assistant",
+                    "content": row.content,
+                    **message_metadata(timestamp=row.created_at),
+                    **json.loads(row.payload or "{}").get("context", {}),
+                    "_self_message": True,
+                }
+                if row.platform_message_id:
+                    message["_source_ids"] = [row.platform_message_id]
+                entries.append((row.created_at, 1, message))
         entries.sort(key=lambda entry: (entry[0], entry[1]))
         return [entry[2] for entry in entries[-limit:]]
 
@@ -305,6 +338,8 @@ class ChatRepository:
         platform_message_id: str | None = None,
         *,
         generation: int | None = None,
+        content: str | None = None,
+        context: dict[str, Any] | None = None,
     ) -> bool:
         """发送成功后让助手条目进入历史；未发完时轮次记为部分发送，重启后前缀仍可见。"""
         await self._lock_generation(session, tenant)
@@ -315,10 +350,13 @@ class ChatRepository:
         item = rows[0]
         if item.send_status == "sent":
             return False
+        fields: dict[str, Any] = {"visible": True, "send_status": "sent", "platform_message_id": platform_message_id}
+        if content is not None:
+            fields["content"] = content
+        if context is not None:
+            fields["payload"] = json.dumps({**json.loads(item.payload or "{}"), "context": context}, ensure_ascii=False)
         await session.execute(
-            update(ChatTurnItem)
-            .where(ChatTurnItem.tenant == tenant, ChatTurnItem.id == item_id)
-            .values(visible=True, send_status="sent", platform_message_id=platform_message_id)
+            update(ChatTurnItem).where(ChatTurnItem.tenant == tenant, ChatTurnItem.id == item_id).values(**fields)
         )
         items = await ChatTurnItem.select_rows(tenant=tenant, turn_id=item.turn_id, session=session)
         assistant = [row for row in items if row.role == "assistant"]

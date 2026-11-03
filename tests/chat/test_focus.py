@@ -296,7 +296,7 @@ class GroupRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(SESSION, self.group._ready)
         entry = self.group._pending[SESSION][0]
         self.assertTrue(entry.messages[0]["content"].startswith(f"[{SESSION}]"))
-        self.assertIn(f"[msg_id: {request.message_id or request.dedupe_key}]", entry.messages[0]["content"])
+        self.assertIn(f'msg_id="{request.message_id or request.dedupe_key}"', entry.messages[0]["content"])
         self.assertIn("Alice", entry.messages[0]["content"])
         self.group._take_ready_inputs()
         self.assertEqual(len(self.group.entries), 1)

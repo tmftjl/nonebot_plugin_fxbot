@@ -170,7 +170,7 @@ class ChatSessionStore:
         return current
 
     def _trim_head(self, session_id: str, history: deque[dict[str, Any]]) -> None:
-        while history and history[0].get("role") != "user":
+        while history and history[0].get("role") != "user" and not history[0].get("_self_message"):
             self._dropped.setdefault(session_id, []).append(history.popleft())
 
     def get(self, session_id: str) -> list[dict[str, Any]]:
@@ -191,7 +191,9 @@ class ChatSessionStore:
         visible = [
             index
             for index, message in enumerate(messages)
-            if message.get("role") in {"user", "assistant"} and not message.get("_planner_internal")
+            if message.get("role") in {"user", "assistant"}
+            and not message.get("_planner_internal")
+            and not message.get("_reference")
         ]
         if len(visible) < ceil(limit * 1.2):
             return []
@@ -210,6 +212,16 @@ class ChatSessionStore:
         for index, message in enumerate(messages):
             if turn := message.get("_logical_turn_id"):
                 spans.setdefault(str(turn), []).append(index)
+                if message.get("tool_calls"):
+                    anchor = next(
+                        (
+                            previous
+                            for previous in reversed(visible)
+                            if previous < index and messages[previous].get("role") == "user"
+                        ),
+                        index,
+                    )
+                    spans[str(turn)].append(anchor)
         while any(min(indices) < boundary <= max(indices) for indices in spans.values()):
             boundary = min(min(indices) for indices in spans.values() if min(indices) < boundary <= max(indices))
         if boundary <= 0:

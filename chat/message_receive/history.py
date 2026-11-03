@@ -24,6 +24,7 @@ from ..providers import LLMResponse
 from ..memory.models import ChatTurn, ChatMessage, ChatTurnItem, utc_now_naive
 from ..replyer.prompt import strip_images, mentions_line, build_user_content
 from ..amemorix.people import remember_person
+from ..message_context import message_metadata, restore_reference
 from ..memory.repository import chat_repository
 from ..providers.routing import fallback_provider
 from ..amemorix.writeback import chat_writeback
@@ -46,11 +47,13 @@ async def hydrate(service: Any, session_id: str, limit: int) -> None:
             state = await chat_repository.get_session_state(session_id)
             if state is not None:
                 service.session_store.set_epoch(session_id, state.generation)
-            history = await chat_repository.get_recent_messages(session_id, limit)
+            history = await chat_repository.get_recent_messages(session_id, max(1, (limit + 1) // 2))
         except Exception:
             logger.opt(exception=True).warning("[Chat] 历史恢复失败，本轮从内存开始")
             return
         service.session_store.append_many(session_id, history[-limit:], limit=limit)
+        if reference := restore_reference(history):
+            service.session_store.append(session_id, reference, limit=limit)
         service.session_store.mark_hydrated(session_id)
 
 
@@ -67,7 +70,17 @@ def _message_row(request: ChatRequest, content: str) -> ChatMessage:
         sender_name=request.user_name,
         content=content,
         payload=json.dumps(
-            {"has_image": bool(request.images), "image_memory": request.metadata.get("image_memory", [])},
+            {
+                "has_image": bool(request.images),
+                "image_memory": request.metadata.get("image_memory", []),
+                "context": message_metadata(
+                    timestamp=request.occurred_at,
+                    sender_id=request.user_id,
+                    sender_name=request.user_name,
+                    quote_id=request.reply_to_message_id or "",
+                    at_bot=bool(request.metadata.get("has_at_bot")),
+                ),
+            },
             ensure_ascii=False,
         ),
         source="live",
@@ -261,6 +274,19 @@ async def persist_turn_end(
                     part_index=index,
                     role="assistant",
                     content=part,
+                    payload=json.dumps(
+                        {
+                            "context": {
+                                **message_metadata(
+                                    timestamp=utc_now_naive(),
+                                    sender_id=str(request.metadata.get("bot_id") or ""),
+                                    sender_name=str(request.metadata.get("bot_name") or ""),
+                                ),
+                                "_self_message": True,
+                            }
+                        },
+                        ensure_ascii=False,
+                    ),
                     visible=False,
                     send_status="pending",
                 ),
@@ -307,21 +333,43 @@ async def mark_sent(
         logger.debug("[Chat] 跳过过期发送结果: tenant={} generation={}", request.session_id, response.epoch)
         return
     repeat = False
+    sent_parts = parts(response)
+    text = content if content is not None else sent_parts[index] if 0 <= index < len(sent_parts) else response.text
+    context = {
+        **message_metadata(
+            timestamp=utc_now_naive(),
+            sender_id=str(request.metadata.get("bot_id") or ""),
+            sender_name=str(request.metadata.get("bot_name") or ""),
+            quote_id=str(request.metadata.get("sent_quote_id") or "") if index == 0 else "",
+        ),
+        "_self_message": True,
+    }
     turn_item_id = item_id(response, index)
     if turn_item_id is not None and memory_state.is_ready():
         try:
             repeat = not await chat_repository.mark_turn_item_sent(
-                request.session_id, turn_item_id, platform_message_id, generation=response.epoch
+                request.session_id,
+                turn_item_id,
+                platform_message_id,
+                generation=response.epoch,
+                content=text,
+                context=context,
             )
         except Exception:
             logger.opt(exception=True).warning("[Chat] 记录发送结果失败")
-    sent_parts = parts(response)
-    text = content if content is not None else sent_parts[index] if 0 <= index < len(sent_parts) else response.text
     if repeat or not text or not service.is_current(request.session_id, response.epoch):
         return
     async with service.session_store.lock(request.session_id):
         if service.is_current(request.session_id, response.epoch):
-            service.session_store.append(request.session_id, {"role": "assistant", "content": text}, limit=limit)
+            entry = {
+                "role": "assistant",
+                "content": text,
+                **context,
+                "_logical_turn_id": str(request.metadata.get("planner_parent_turn_id") or request.turn_id),
+            }
+            if platform_message_id:
+                entry["_source_ids"] = [platform_message_id]
+            service.session_store.append(request.session_id, entry, limit=limit)
 
 
 async def _skip_items(request: ChatRequest, response: ChatResponse, start: int) -> None:
@@ -430,6 +478,7 @@ async def record_group_message(
     reply_to_message_id: str | None = None,
     occurred_at: datetime | None = None,
     memory_images: list[tuple[str, str | bytes]] | None = None,
+    has_at_bot: bool = False,
 ) -> None:
     """记录群聊或私聊的上下文消息，图片同样转成文字描述写入历史。"""
     if limit <= 0:
@@ -444,7 +493,14 @@ async def record_group_message(
         lines.append(line)
     lines.extend(placeholders)
     entry: dict[str, Any] = {"role": "user", "content": "\n".join(lines)}
-    entry["_sender_id"] = user_id
+    context = message_metadata(
+        timestamp=occurred_at or utc_now_naive(),
+        sender_id=user_id,
+        sender_name=user_name,
+        quote_id=reply_to_message_id or "",
+        at_bot=has_at_bot,
+    )
+    entry.update(context)
     if images:
         entry["_image_sources"] = images
     if message_id:
@@ -459,7 +515,10 @@ async def record_group_message(
         memory_sources = [source for _, source in memory_images] if memory_images is not None else images
         memory_paths = [path for path, _ in memory_images] if memory_images is not None else None
         image_items = await image_writeback.prepare(session_id, memory_sources, memory_paths)
-        payload = json.dumps({"has_image": bool(has_image or images), "image_memory": image_items}, ensure_ascii=False)
+        payload = json.dumps(
+            {"has_image": bool(has_image or images), "image_memory": image_items, "context": context},
+            ensure_ascii=False,
+        )
         try:
             row_id = await chat_repository.append_message(
                 ChatMessage(

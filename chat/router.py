@@ -29,6 +29,7 @@ from ..adapter import (
 )
 from .personas import effective_persona_name
 from .tool_runtime import default_runtime_factory
+from .work_schedule import can_reply
 from .behavior.quote import quote_counter
 from .message_adapter import (
     message_text,
@@ -36,6 +37,7 @@ from .message_adapter import (
     event_identity,
     collect_mentions,
     adapt_message_event,
+    message_occurred_at,
     memory_image_sources,
     session_id_for_event,
     image_sources_for_event,
@@ -193,7 +195,7 @@ async def _ai_fallback_rule(bot: Bot, event: Event) -> bool:
     if not should_process_fxbot_message(bot, event):
         return False
     cfg = _chat_cfg()
-    if not bool(cfg["enabled"]) or _message_filtered(cfg, event):
+    if not can_reply(cfg) or _message_filtered(cfg, event):
         return False
     if not getattr(event, _PROACTIVE_ATTR, False) and not _match_context(cfg, bot, event):
         return False
@@ -259,7 +261,11 @@ async def _handle_context(bot: Bot, event: Event) -> None:
         message_id=identity.message_id,
         reply_to_message_id=identity.reply_to_message_id,
         memory_images=memory_image_sources(event),
+        has_at_bot=mention_flags(bot, event)[0],
+        occurred_at=message_occurred_at(event),
     )
+    if not can_reply(_chat_cfg()):
+        return
     if focus_mode_manager.enabled() or focus_mode_manager.attached(identity.session_id):
         focus_request = await adapt_message_event(bot, event, trigger_kind="mention")
         # 这条消息刚由 record_group_message 写入历史，Focus 回复时不能再写一遍
@@ -350,6 +356,7 @@ async def _handle_ai_fallback(bot: Bot, event: Event, matcher: Matcher) -> None:
         reply_to_message_id=request.reply_to_message_id,
         occurred_at=request.occurred_at,
         memory_images=list(zip(request.metadata.get("raw_image_paths", []), request.metadata.get("raw_images", []))),
+        has_at_bot=mention_flags(bot, event)[0],
     )
     request.metadata.update({"history_recorded": True, "history_appended": True})
     has_at_bot, at_other = mention_flags(bot, event)

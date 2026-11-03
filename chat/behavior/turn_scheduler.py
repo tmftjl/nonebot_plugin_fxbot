@@ -11,6 +11,7 @@ from nonebot import logger
 from ..types import ChatRequest
 from .debounce import PendingBatch, DebounceRegistry, default_debounce_registry
 from .reply_gate import talk_value_for, proactive_switch, default_reply_gate_registry
+from ..work_schedule import can_reply
 
 
 @dataclass
@@ -36,9 +37,9 @@ class NormalChatScheduler:
 
     async def submit(self, service: Any, request: ChatRequest, runtime: Any) -> None:
         """保存消息后唤醒会话 worker，进行中的 Planner 直接接收后续消息。"""
-        if self.stopping:
+        if self.stopping or not can_reply():
             return
-        if await service.queue_message(request):
+        if await service.queue_message(request, runtime):
             return
         state = self.chats.get(request.session_id)
         if state is None:
@@ -74,6 +75,8 @@ class NormalChatScheduler:
         """一个会话只维护一条调度循环和一条生成发送链。"""
         try:
             while not self.stopping and self.chats.get(tenant) is state:
+                if not can_reply():
+                    return
                 if state.quiet is not None:
                     quiet = state.quiet
                     await quiet.wait()
@@ -117,7 +120,7 @@ class NormalChatScheduler:
                     gate.mark_triggered()
                 elif latest.is_group:
                     gate.record_forced_turn([request.dedupe_key for request in snapshot])
-                merged = replace(snapshot[0], metadata=dict(snapshot[0].metadata))
+                merged = replace(latest, metadata=dict(latest.metadata))
                 if len(snapshot) > 1:
                     batch = PendingBatch(
                         tenant=tenant,

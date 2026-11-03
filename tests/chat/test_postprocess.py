@@ -117,7 +117,9 @@ class PostprocessWiringTests(ReplyPipelineTests):
         self.assertEqual(response.metadata["reply_parts"], ["你好"])
         with patch.object(memory_state, "is_ready", return_value=False):
             await ChatService(store).mark_sent(_request(), response)
-        self.assertEqual(store.get("tenant")[-1], {"role": "assistant", "content": "你好"})
+        sent = store.get("tenant")[-1]
+        self.assertEqual((sent["role"], sent["content"]), ("assistant", "你好"))
+        self.assertTrue(sent["_self_message"])
 
     async def test_replyer_uses_source_reference_instruction(self) -> None:
         _response, provider, _store = await self._process({})

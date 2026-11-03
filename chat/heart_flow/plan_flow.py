@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from ..tools import ToolRuntime
 from ..types import ChatRequest
 from ...config import get_manager as get_config_manager
-from ..replyer.prompt import assemble_messages
+from ..replyer.prompt import recall_query, assemble_messages, build_user_content
 from ..context_summary import current_summary
 
 
@@ -59,15 +59,42 @@ def note_plan(session_id: str, action: str) -> None:
 
 async def rebuild_messages(service: Any, context: PlanContext) -> list[dict[str, Any]]:
     """等待结束后重新读取历史，合并等待期间写入的普通消息。"""
+    latest = context.request.metadata.pop("planner_latest_request", None)
+    if latest is not None:
+        request = context.request
+        for key in (
+            "user_id",
+            "user_name",
+            "message_id",
+            "dedupe_key",
+            "text",
+            "images",
+            "quoted_text",
+            "reply_to_message_id",
+            "occurred_at",
+            "source_message_ids",
+            "source_author_ids",
+            "mentions",
+        ):
+            setattr(request, key, getattr(latest, key))
+        for key in ("has_at_bot", "at_other"):
+            request.metadata[key] = latest.metadata.get(key, False)
+        context.current_content = build_user_content(latest)
+    if runtime := context.request.metadata.pop("planner_latest_runtime", None):
+        context.runtime = runtime
     async with service.session_store.lock(context.request.session_id):
         service.session_store.trim(context.request.session_id, context.limit)
         history = [
             message
             for message in service.session_store.get(context.request.session_id)
-            if message.get("role") != "system" and message is not context.entry
+            if message.get("role") != "system"
         ]
-        while history and history[0].get("role") != "user":
+        while history and history[0].get("role") != "user" and not history[0].get("_self_message"):
             history.pop(0)
+    if latest is not None:
+        from ..service import _memory_block
+
+        context.memory_block = await _memory_block(context.request, recall_query(context.request, history))
     return assemble_messages(
         context.request,
         history,

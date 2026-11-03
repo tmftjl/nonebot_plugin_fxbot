@@ -169,6 +169,7 @@ class RecallLifecycleTests(unittest.IsolatedAsyncioTestCase):
             patch.object(lifecycle_module, "default_debounce_registry", DebounceRegistry()),
             patch.object(lifecycle_module, "forget_summarized", MagicMock(return_value=False)),
             patch.object(lifecycle_module.chat_repository, "invalidate_message", AsyncMock(return_value=result)),
+            patch.object(lifecycle_module.chat_repository, "invalidate_generation", AsyncMock(return_value=1)),
             patch(
                 "src.plugins.nonebot_plugin_fxbot.chat.focus.focus_mode_manager.discard_message",
                 AsyncMock(return_value=False),

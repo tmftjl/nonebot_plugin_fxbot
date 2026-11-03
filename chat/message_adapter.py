@@ -459,16 +459,22 @@ def event_identity(bot: Any, event: Any) -> MessageIdentity:
     )
 
 
-async def adapt_message_event(bot: Any, event: Any, *, trigger_kind: TriggerKind) -> ChatRequest:
-    """适配 NoneBot 消息事件。"""
-    received_at = to_naive_utc(now())
-    occurred_at = received_at
+def message_occurred_at(event: Any, received_at: datetime | None = None) -> datetime:
+    """提取平台原始时间，普通历史消息和触发消息使用相同时间语义。"""
+    occurred_at = received_at if received_at is not None else to_naive_utc(now())
     event_time = getattr(event, "time", None)
     if isinstance(event_time, (int, float)) and not isinstance(event_time, bool):
         try:
             occurred_at = to_naive_utc(datetime.fromtimestamp(event_time, tz=timezone.utc))
         except (ValueError, OverflowError, OSError):
             pass
+    return occurred_at
+
+
+async def adapt_message_event(bot: Any, event: Any, *, trigger_kind: TriggerKind) -> ChatRequest:
+    """适配 NoneBot 消息事件。"""
+    received_at = to_naive_utc(now())
+    occurred_at = message_occurred_at(event, received_at)
     user_id = normalize_id(event_user_id(event)) or ""
     group_id = normalize_id(event_group_id(event))
     identity = event_identity(bot, event)

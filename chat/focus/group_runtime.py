@@ -22,11 +22,13 @@ from ..types import ChatRequest, speaker_label
 from .context import FocusEntry, FocusCheckpointStore, closed_entry, restore_entries
 from ...config import get_manager as get_config_manager
 from ..service import chat_service, _memory_block
-from ..personas import DEFAULT_PERSONA
+from ..personas import DEFAULT_PERSONA, effective_persona_name
 from ...utils.tz import now
 from ..memory.models import ChatPlannerSample
+from ..work_schedule import can_reply
 from ..replyer.prompt import recall_query, strip_images, build_persona_text, build_user_content
 from ..context_summary import SUMMARY_HEADER, clear_summary, compact_messages, planner_snapshot
+from ..message_context import render_message, message_metadata
 from ..tools.discovery import deferred_reminder
 from ..behavior.debounce import quiet_wait
 from ..behavior.mentions import reply_at_enabled
@@ -261,8 +263,23 @@ class FocusGroupRuntime:
         self._sequence += 1
         content = strip_images([{"role": "user", "content": build_user_content(request)}])[0]["content"]
         key = request.message_id or request.dedupe_key
+        rendered = render_message(
+            {
+                "role": "user",
+                "content": content,
+                "_source_ids": [key],
+                **message_metadata(
+                    timestamp=request.occurred_at,
+                    sender_id=request.user_id,
+                    sender_name=request.user_name,
+                    quote_id=request.reply_to_message_id or "",
+                    at_bot=bool(request.metadata.get("has_at_bot")),
+                ),
+            },
+            bot_name=effective_persona_name(session_id),
+        )
         entry = FocusEntry(
-            [{"role": "user", "content": f"[{session_id}]\n[msg_id: {key}]\n{content}"}],
+            [{"role": "user", "content": f"[{session_id}]\n{rendered['content']}"}],
             {session_id},
             self._sequence,
             {session_id: [[self._sequence, key]]},
@@ -467,6 +484,20 @@ class FocusGroupRuntime:
 
     async def _idle_or_turn(self) -> None:
         """处理一次等待或一轮规划。"""
+        if not can_reply():
+            self._take_ready_inputs()
+            for entry in self.entries:
+                for session_id, sequence in entry.progress.items():
+                    self._considered[session_id] = max(self._considered.get(session_id, 0), sequence)
+                entry.prune_inputs(self._considered)
+            self._wait_until = None
+            self._wait_session_id = None
+            self._event.clear()
+            try:
+                await asyncio.wait_for(self._event.wait(), timeout=60)
+            except asyncio.TimeoutError:
+                pass
+            return
         if self._wait_until is not None:
             remaining = max(0.0, self._wait_until - time.time())
             self._event.clear()
@@ -502,7 +533,7 @@ class FocusGroupRuntime:
     async def _run_turn(self) -> None:
         source_session = ""
         for _ in range(MAX_INTERNAL_ROUNDS):
-            if self._closed or self._wait_until is not None:
+            if self._closed or self._wait_until is not None or not can_reply():
                 return
             source_session = self._take_ready_inputs() or source_session
             definitions = await self.tools.refresh()
@@ -519,7 +550,7 @@ class FocusGroupRuntime:
             turn_id = f"focus-{uuid4().hex}"
             generation = self._generation
             response, provider, model = await self._chat(self._build_messages(references), definitions)
-            if self._closed:
+            if self._closed or not can_reply():
                 return
             if self._invalidated or generation != self._generation:
                 self._planner_snapshot = None
@@ -647,7 +678,7 @@ class FocusGroupRuntime:
                 arguments = {}
             if not isinstance(arguments, dict):
                 arguments = {}
-            if paused or self._closed:
+            if paused or self._closed or not can_reply():
                 content, call_paused = _failure("本批次已暂停，此工具未执行。"), False
             else:
                 content, call_paused = await self.tools.invoke(

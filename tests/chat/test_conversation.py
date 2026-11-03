@@ -40,7 +40,12 @@ class ConversationTests(unittest.IsolatedAsyncioTestCase):
             runtime=SimpleNamespace(matcher=object()),
             provider_name="test",
             limit=30,
+            entry=None,
+            persona_text="",
+            memory_block="",
+            current_content="你好",
         )
+        self.store.append("tenant-a", {"role": "user", "content": "你好", "_source_ids": ["m1"]})
         self.provider = SimpleNamespace(chat=AsyncMock())
         self.enterContext(patch.object(conversation, "end_turn_without_reply", AsyncMock()))
         self.enterContext(patch.object(conversation, "record_plan_sample", AsyncMock()))
@@ -82,6 +87,65 @@ class ConversationTests(unittest.IsolatedAsyncioTestCase):
         response = await conversation.run(self.service, self.context)
         self.assertFalse(response.metadata["planner_sent"])
         self.service._process_locked.assert_not_awaited()
+
+    async def test_repeated_target_gets_upstream_supplement_reminder(self) -> None:
+        self.store.append(
+            "tenant-a", {"role": "assistant", "content": "之前的回答", "_self_message": True, "_quote_ids": ["m1"]}
+        )
+        self.provider.chat.side_effect = [
+            LLMResponse(tool_calls=[call("reply", msg_id="m1", reply_reference="补充说明")]),
+            LLMResponse(tool_calls=[call("stop")]),
+        ]
+        await conversation.run(self.service, self.context)
+        guidance = self.service._process_locked.await_args.kwargs["focus_instruction"]
+        self.assertIn("你刚刚已经回复过这条消息", guidance)
+        self.assertIn("之前的回答", guidance)
+
+    async def test_passive_reply_target_is_frozen_before_model_request(self) -> None:
+        async def generate(**kwargs):
+            self.store.append("tenant-a", {"role": "user", "content": "后来到的消息", "_source_ids": ["later"]})
+            return LLMResponse(content="回应原来那条消息")
+
+        self.provider.chat.side_effect = generate
+        with patch.object(conversation, "planner_config", return_value={"passive_replyer": True}):
+            await conversation.run(self.service, self.context)
+        self.assertEqual(self.service._process_locked.await_args.args[0].message_id, "m1")
+
+    async def test_planner_protocol_is_saved_before_later_im_messages(self) -> None:
+        self.provider.chat.side_effect = [
+            LLMResponse(tool_calls=[call("reply", msg_id="m1", reply_reference="回答")]),
+            LLMResponse(tool_calls=[call("stop")]),
+        ]
+
+        async def send(*args):
+            self.store.append("tenant-a", {"role": "assistant", "content": "实际发言", "_self_message": True})
+            return True
+
+        self.service._send_generated.side_effect = send
+        await conversation.run(self.service, self.context)
+        history = self.store.get("tenant-a")
+        call_index = next(index for index, item in enumerate(history) if item.get("tool_calls"))
+        reply_index = next(index for index, item in enumerate(history) if item.get("_self_message"))
+        self.assertLess(call_index, reply_index)
+
+    async def test_long_conversation_compacts_before_next_internal_request(self) -> None:
+        for index in range(40):
+            self.store.append("tenant-a", {"role": "user", "content": f"历史{index}"})
+        calls = 0
+
+        async def generate(**kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return LLMResponse(tool_calls=[call("lookup", query="资料")])
+            visible = [item for item in self.store.get("tenant-a") if not item.get("_planner_internal")]
+            self.assertLessEqual(len(visible), 6)
+            return LLMResponse(tool_calls=[call("stop")])
+
+        self.provider.chat.side_effect = generate
+        with patch("src.plugins.nonebot_plugin_fxbot.chat.context_summary.compact_messages", AsyncMock()) as compact:
+            await conversation.run(self.service, self.context)
+        compact.assert_awaited_once()
 
     async def test_tool_picture_can_be_attached_in_the_same_model_response(self) -> None:
         self.execute.return_value = {

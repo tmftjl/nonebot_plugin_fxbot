@@ -17,7 +17,10 @@ async def handle_recall(tenant: str, platform_message_id: str, *, operator: str 
         raise RuntimeError("聊天存储暂不可用")
     result = await chat_repository.invalidate_message(tenant, platform_message_id, operator=operator)
     if await _discard_runtime(tenant, platform_message_id):
-        default_session_store.invalidate(tenant)
+        async with default_session_store.lock(tenant):
+            default_session_store.invalidate(tenant)
+            generation = await chat_repository.invalidate_generation(tenant)
+            default_session_store.set_epoch(tenant, generation)
         logger.debug(f"[Chat] 撤回后运行时上下文已失效: session={tenant} message={platform_message_id}")
     return result
 

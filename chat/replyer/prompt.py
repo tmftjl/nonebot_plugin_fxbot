@@ -8,11 +8,14 @@ from __future__ import annotations
 
 import random
 from typing import Any
+from datetime import datetime
 
 from ..types import ChatRequest, speaker_label
 from ..bindings import PERSONA, get_binding
 from ..personas import DEFAULT_PERSONA, get_persona_text, compose_persona_prompt
+from ...utils.tz import as_shanghai
 from ..context_summary import SUMMARY_HEADER
+from ..message_context import render_message, message_metadata
 from ..message_receive.reactions import reaction_block
 
 MAX_CURRENT_CHARS = 4000
@@ -88,8 +91,10 @@ def requested_reply_style(style: str) -> str:
     }.get(style.strip(), "")
 
 
-def _public(message: dict[str, Any]) -> dict[str, Any]:
+def _public(message: dict[str, Any], *, bot_name: str = "") -> dict[str, Any]:
     """去掉只给运行时用的内部字段，历史条目里的来源标记不发给模型。"""
+    if message.get("_timestamp") or message.get("_reference"):
+        return render_message(message, bot_name=bot_name)
     public = {key: value for key, value in message.items() if not str(key).startswith("_")}
     source_ids = message.get("_source_ids")
     if source_ids and public.get("role") == "user":
@@ -115,10 +120,20 @@ def assemble_messages(
     """组装发给模型的消息：人格、记忆、状态摘要、历史背景和本轮待回应内容。"""
     current_ids = set(request.source_message_ids or [request.message_id or request.dedupe_key])
     current_present = any(
-        message.get("role") == "user" and bool(current_ids.intersection(message.get("_source_ids", [])))
+        (message.get("role") == "user" or message.get("_self_message"))
+        and bool(current_ids.intersection(message.get("_source_ids", [])))
         for message in history
     )
-    history = [_public(message) for message in history]
+    history = protocol_history(history)
+    public_history = []
+    previous_date = None
+    for message in history:
+        if timestamp := message.get("_timestamp"):
+            local = as_shanghai(datetime.fromisoformat(timestamp))
+            if previous_date is not None and previous_date != local.date():
+                public_history.append({"role": "user", "content": f"时间：{local:%Y-%m-%d %H:%M:%S}"})
+            previous_date = local.date()
+        public_history.append(_public(message, bot_name=str(request.metadata.get("bot_name") or "")))
     messages: list[dict[str, Any]] = []
     if persona_text:
         messages.append({"role": "system", "content": persona_text})
@@ -126,10 +141,53 @@ def assemble_messages(
         messages.append({"role": "system", "content": memory_block})
     if context_summary:
         messages.append({"role": "system", "content": f"{SUMMARY_HEADER}\n{context_summary}"})
-    messages.extend(history)
+    messages.extend(public_history)
     if not current_present:
-        messages.append({"role": "user", "content": current_content})
+        messages.append(
+            _public(
+                {
+                    "role": "user",
+                    "content": current_content,
+                    "_source_ids": request.source_message_ids or [request.message_id or request.dedupe_key],
+                    **message_metadata(
+                        timestamp=request.occurred_at,
+                        sender_id=request.user_id,
+                        sender_name=request.user_name,
+                        quote_id=request.reply_to_message_id or "",
+                        at_bot=bool(request.metadata.get("has_at_bot")),
+                    ),
+                },
+                bot_name=str(request.metadata.get("bot_name") or ""),
+            )
+        )
     return messages
+
+
+def protocol_history(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """工具调用与返回保持协议原子段，生成中的未完成调用不进入回复器。"""
+    result = []
+    index = 0
+    while index < len(history):
+        message = history[index]
+        calls = message.get("tool_calls")
+        if not calls:
+            if message.get("role") != "tool":
+                result.append(message)
+            index += 1
+            continue
+        stop = index + 1
+        while stop < len(history) and not (
+            history[stop].get("role") == "assistant" and history[stop].get("_planner_internal")
+        ):
+            stop += 1
+        following = history[index + 1 : stop]
+        outputs = {item.get("tool_call_id"): item for item in following if item.get("role") == "tool"}
+        ids = [call.get("id") for call in calls]
+        if all(identity in outputs for identity in ids):
+            result.extend([message, *(outputs[identity] for identity in ids)])
+        result.extend(item for item in following if item.get("role") != "tool")
+        index = stop
+    return result
 
 
 def truncate_content(content: Any, limit: int = MAX_CURRENT_CHARS) -> Any:

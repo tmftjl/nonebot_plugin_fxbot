@@ -27,9 +27,11 @@ from ..utils.tz import now
 from .providers import LLMResponse
 from .heart_flow import plan_flow, conversation
 from .memory.inject import learning_context
+from .work_schedule import can_reply
 from .behavior.quote import forget_counter
 from .amemorix.inject import memory_block
 from .context_summary import clear_summary, current_summary, compact_messages
+from .message_context import message_metadata
 from .message_receive import sender as sender_module, history as history_module
 from .memory.filtering import sanitize_line
 from .behavior.debounce import default_debounce_registry
@@ -116,11 +118,15 @@ class ChatService:
         self.session_store = session_store
         self._active_requests: dict[str, ChatRequest] = {}
 
-    async def queue_message(self, request: ChatRequest) -> bool:
+    async def queue_message(self, request: ChatRequest, runtime: ToolRuntime | None = None) -> bool:
         """运行中的会话接收后续消息，由同一个 Planner 消费。"""
         active = self._active_requests.get(request.session_id)
         if active is None:
             return False
+        active.metadata["planner_latest_request"] = request
+        if runtime is not None:
+            active.metadata["planner_latest_runtime"] = runtime
+            active.metadata["planner_runtime"] = runtime
         if request.metadata.get("history_recorded"):
             active.metadata["planner_pending"] = True
             return True
@@ -138,6 +144,7 @@ class ChatService:
             message_id=request.message_id,
             reply_to_message_id=request.reply_to_message_id,
             occurred_at=request.occurred_at,
+            has_at_bot=bool(request.metadata.get("has_at_bot")),
         )
         request.metadata["history_recorded"] = True
         request.metadata["history_appended"] = True
@@ -159,16 +166,17 @@ class ChatService:
 
     async def process_and_send(self, request: ChatRequest, runtime: ToolRuntime | None = None) -> bool:
         """生成并逐段发送；生成到发送结束之间持有轮次锁，规划等待期间让出。"""
-        if await self.queue_message(request):
+        if await self.queue_message(request, runtime):
             return False
         self._active_requests[request.session_id] = request
         try:
             while True:
                 async with self.session_store.turn_lock(request.session_id):
-                    response = await self._process_locked(request, runtime)
+                    current_runtime = request.metadata.get("planner_runtime", runtime)
+                    response = await self._process_locked(request, current_runtime)
                     pause = float(response.metadata.get("wait_seconds") or 0)
                     if not pause:
-                        sent = await self._send_generated(request, response, runtime)
+                        sent = await self._send_generated(request, response, current_runtime)
                         if request.metadata.pop("planner_pending", False):
                             continue
                         return sent
@@ -204,6 +212,8 @@ class ChatService:
         epoch = request.accepted_epoch or 0
         deadline = time.monotonic() + seconds
         while True:
+            if not can_reply():
+                return False
             if not self._alive(request, epoch):
                 await self._mark_turn_aborted(request, "等待期间被新触发取代")
                 return False
@@ -255,6 +265,8 @@ class ChatService:
     ) -> ChatResponse:
         """调用方已持有轮次锁。"""
         chat_cfg = get_config_manager().get_system()["chat"]
+        if not can_reply(chat_cfg):
+            return ChatResponse(text="", epoch=self.session_store.epoch(request.session_id))
         await self._hydrate(request.session_id, history_limit(chat_cfg, request.is_group))
         if request.accepted_epoch is None:
             request.accepted_epoch = self.session_store.epoch(request.session_id)
@@ -452,6 +464,7 @@ class ChatService:
         reply_to_message_id: str | None = None,
         occurred_at: datetime | None = None,
         memory_images: list[tuple[str, str | bytes]] | None = None,
+        has_at_bot: bool = False,
     ) -> None:
         """记录群聊或私聊的上下文消息，图片同样转成文字描述写入历史。"""
         images = list(images or [])
@@ -480,6 +493,7 @@ class ChatService:
             reply_to_message_id=reply_to_message_id,
             occurred_at=occurred_at,
             memory_images=memory_images,
+            has_at_bot=has_at_bot,
         )
         if active := self._active_requests.get(session_id):
             active.metadata["planner_pending"] = True
@@ -553,13 +567,15 @@ class ChatService:
         user_content = prompt.build_user_content(request)
         current_content = prompt.truncate_content(user_content)
         effective_persona, persona_text = prompt.build_persona_text(request, chat_cfg, behavior)
+        request.metadata["bot_name"] = effective_persona
+        request.metadata["bot_id"] = str(getattr(getattr(runtime, "bot", None), "self_id", "") or "")
 
         description_task = None
         try:
             async with self.session_store.lock(request.session_id):
                 self.session_store.trim(request.session_id, limit)
                 history = [m for m in self.session_store.get(request.session_id) if m.get("role") != "system"]
-                while history and history[0].get("role") != "user":
+                while history and history[0].get("role") != "user" and not history[0].get("_self_message"):
                     history.pop(0)
                 epoch = (
                     request.accepted_epoch
@@ -568,6 +584,15 @@ class ChatService:
                 )
                 entry = prompt.strip_images([{"role": "user", "content": user_content}])[0]
                 entry["_sender_id"] = request.user_id
+                entry.update(
+                    message_metadata(
+                        timestamp=request.occurred_at,
+                        sender_id=request.user_id,
+                        sender_name=request.user_name,
+                        quote_id=request.reply_to_message_id or "",
+                        at_bot=bool(request.metadata.get("has_at_bot")),
+                    )
+                )
                 source_ids = request.source_message_ids or ([request.message_id] if request.message_id else [])
                 if source_ids:
                     # 撤回通知按平台消息 ID 找到并丢弃这一条
@@ -616,14 +641,24 @@ class ChatService:
             )
             if focus_instruction:
                 messages.append({"role": "user", "content": focus_instruction.strip()})
+                is_self = bool(request.metadata.get("bot_id")) and request.user_id == request.metadata["bot_id"]
+                target_id = request.message_id or request.dedupe_key
+                target_note = (
+                    f"你想要补充说明你自己（{effective_persona}） 发送的 msg_id为 {target_id} 的消息，"
+                    "你可以在这条目标消息的基础上补充发言，不要把你自己的发言当成别人的发言。"
+                    if is_self
+                    else f"你想要回复的消息是 {request.user_name or request.user_id} 发送的 msg_id为 "
+                    f"{target_id} 的消息，你这次要回复的就是这条目标消息，不要把其他历史消息当成当前回复对象。"
+                )
+                quote_note = ""
+                if quotes := request.metadata.get("target_quote_ids"):
+                    quote_note = f"- quote={','.join(quotes)}\n"
                 messages.append(
                     {
                         "role": "user",
                         "content": (
                             f"当前时间：{now():%Y-%m-%d %H:%M:%S}\n\n"
-                            f"你想要回复的消息是 {request.user_name or request.user_id} 发送的 msg_id为 "
-                            f"{request.message_id or request.dedupe_key} 的消息，你这次要回复的就是这条目标消息，"
-                            "不要把其他历史消息当成当前回复对象。\n"
+                            f"{target_note}\n{quote_note}"
                             f"- 发言内容：{' '.join(request.text.split())[:300] or '[无可见文本内容]'}\n\n"
                             "请自然地回复。不要输出多余说明、括号、@ 或额外标记，只输出实际要发言的内容。"
                         ),

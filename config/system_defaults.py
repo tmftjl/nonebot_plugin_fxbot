@@ -28,6 +28,8 @@ SYSTEM_DEFAULTS = {
     "chat": {
         "enabled": True,
         "private_enabled": True,
+        "work_time": "08:30-17:30",
+        "rest_time_no_reply": False,
         "private_allowlist": [],
         "group_allowlist": [],
         "persona": "小鱼",
@@ -246,6 +248,16 @@ def validate_system_config(data: dict[str, Any]) -> None:
     chat = data.get("chat", {})
     if not isinstance(chat, dict):
         raise ValueError("chat 必须是对象")
+    if not isinstance(chat.get("rest_time_no_reply", False), bool):
+        raise ValueError("chat.rest_time_no_reply 必须是布尔值")
+    work_time = chat.get("work_time", "08:30-17:30")
+    if not isinstance(work_time, str) or not re.fullmatch(
+        r"(?:[01]\d|2[0-3]):[0-5]\d-(?:[01]\d|2[0-3]):[0-5]\d", work_time
+    ):
+        raise ValueError("chat.work_time 必须形如 08:30-17:30")
+    start, end = work_time.split("-")
+    if start >= end:
+        raise ValueError("上班时间的结束时刻必须晚于开始时刻，不支持跨午夜")
 
     for key in ("max_context_size", "max_private_context_size"):
         limit = chat.get(key, SYSTEM_DEFAULTS["chat"][key])

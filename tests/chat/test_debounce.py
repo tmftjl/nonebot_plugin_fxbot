@@ -114,7 +114,9 @@ class BatchMergeTests(_NaturalMode):
         )
         self.assertIs(merged_batch, batch)
         self.assertTrue(batch.forced)
-        self.assertEqual(batch.merge().text, "你好\nBob(u2): 在吗")
+        self.assertEqual(batch.merge().text, "Alice(u1): 你好\nBob(u2): 在吗")
+        self.assertEqual(batch.merge().user_id, "u2")
+        self.assertEqual(batch.merge().message_id, "2")
 
     def test_window_is_capped_at_batch_limit(self) -> None:
         now = [0.0]

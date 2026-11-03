@@ -22,6 +22,7 @@ from ..memory import state as memory_state
 from ..session import history_enabled
 from ...adapter import build_message, supports_reply, build_reply_segment, build_message_segment
 from ..memory.models import ChatTurnItem, utc_now_naive
+from ..work_schedule import can_reply
 from ..behavior.quote import decide_quote, quote_counter, quote_frequency
 from ..behavior.mentions import split_mentions, reply_at_enabled
 from ..behavior.response import typing_time, process_response
@@ -57,7 +58,7 @@ def _receipt_id(receipt: Any) -> str | None:
 
 def _alive(service: Any, request: ChatRequest, response: ChatResponse) -> bool:
     """附加输出（语音、纠错、表情）与正文共用同一轮次令牌。"""
-    return service.is_current(request.session_id, response.epoch) and service.is_latest(request)
+    return can_reply() and service.is_current(request.session_id, response.epoch) and service.is_latest(request)
 
 
 def _always_alive() -> bool:
@@ -87,6 +88,7 @@ def _should_quote(request: ChatRequest, runtime: Any, part: str) -> bool:
 
 def first_payload(service: Any, request: ChatRequest, runtime: Any, part: str, user_ids: list[str]) -> Any:
     """首段可带引用段与开头的 @ 段；构造失败时降级为纯文本。"""
+    request.metadata["sent_quote_id"] = ""
     bot = getattr(runtime, "bot", None)
     if bot is None:
         return part
@@ -96,6 +98,7 @@ def first_payload(service: Any, request: ChatRequest, runtime: Any, part: str, u
             if supports_reply(bot):
                 target = str(request.metadata.get("reply_target_id") or request.message_id or "")
                 segments.append(build_reply_segment(bot, target))
+                request.metadata["sent_quote_id"] = target
         except Exception:
             logger.opt(exception=True).debug("[Chat] 引用构造失败，降级为纯文本")
     if user_ids:
@@ -103,6 +106,7 @@ def first_payload(service: Any, request: ChatRequest, runtime: Any, part: str, u
             segments.extend(build_message_segment(bot, "at", user_id) for user_id in user_ids)
         except Exception:
             logger.opt(exception=True).debug("[Chat] @ 段构造失败，降级为纯文本")
+            request.metadata["sent_quote_id"] = ""
             return part
     if not segments:
         return part
@@ -111,6 +115,7 @@ def first_payload(service: Any, request: ChatRequest, runtime: Any, part: str, u
         return build_message(bot, *segments)
     except Exception:
         logger.opt(exception=True).debug("[Chat] 首段构造失败，降级为纯文本")
+        request.metadata["sent_quote_id"] = ""
         return part
 
 
@@ -162,6 +167,7 @@ async def send_pictures(service: Any, request: ChatRequest, response: ChatRespon
             epoch=response.epoch,
             metadata={"reply_parts": ["[图片]"], "turn_item_ids": [persisted_id] if persisted_id is not None else []},
         )
+        request.metadata["sent_quote_id"] = ""
         await service.mark_sent(request, attachment, 0, _receipt_id(receipt), content="[图片]")
 
 
@@ -262,8 +268,10 @@ async def deliver_emoji(
     try:
         segment = build_message_segment(bot, "image", row.path)
         segments = [segment]
+        quoted = False
         if target_id and supports_reply(bot):
             segments.insert(0, build_reply_segment(bot, target_id))
+            quoted = True
         receipt = await matcher.send(build_message(bot, *segments))
     except Exception:
         logger.opt(exception=True).warning("[Chat] 表情发送失败")
@@ -286,6 +294,7 @@ async def deliver_emoji(
         epoch=response.epoch,
         metadata={"reply_parts": [content], "turn_item_ids": [identifier] if identifier is not None else []},
     )
+    request.metadata["sent_quote_id"] = target_id if quoted else ""
     receipt_id = _receipt_id(receipt)
     await service.mark_sent(request, visible, 0, receipt_id, content=content)
     if receipt_id:
@@ -402,13 +411,13 @@ async def _send_parts(
         for index, part in enumerate(send_queue):
             if index > 0:
                 await asyncio.sleep(typing_time(part))
-            if not service.is_current(request.session_id, response.epoch) or not service.is_latest(request):
+            if not alive():
                 delivery["cancelled"] = True
                 await service.mark_send_aborted(request, response, index)
                 break
             await service.mark_sending(request, response, index)
             # 标记发送中会写库，期间同一用户可能已经发来新消息
-            if not service.is_current(request.session_id, response.epoch) or not service.is_latest(request):
+            if not alive():
                 delivery["cancelled"] = True
                 await service.mark_send_aborted(request, response, index)
                 break

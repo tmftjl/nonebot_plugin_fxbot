@@ -132,9 +132,10 @@ class BudgetIntegrationTests(ReplyPipelineTests):
 
         await self._run(provider, _Config(), "啊" * 4500)
 
-        current = next(text for text in _contents(provider.prompts[0]) if text.startswith("用户40001: "))
-        self.assertTrue(current.startswith("用户40001: "))
-        self.assertEqual(len(current), 4000)
+        current = next(text for text in _contents(provider.prompts[0]) if text.startswith("<message "))
+        self.assertIn('user="40001"', current)
+        current = current.split("\n", 1)[1]
+        self.assertEqual(len(current), 4000 - len("用户40001: "))
         self.assertTrue(current.endswith("…"))
         stored = self.store.get(TENANT)[-1]["content"]
         self.assertGreater(len(stored), 4000)
