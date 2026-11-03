@@ -22,12 +22,17 @@ from src.plugins.nonebot_plugin_fxbot.console.routes import chat as chat_routes
 from src.plugins.nonebot_plugin_fxbot.chat.memory.inject import learning_context
 from src.plugins.nonebot_plugin_fxbot.chat.memory.models import ChatMessage, utc_now_naive
 from src.plugins.nonebot_plugin_fxbot.chat.memory.expression import (
+    CHUNK_LENGTH,
     ExpressionItem,
     text_hash,
     merge_candidates,
     learn_expressions,
     parse_expressions,
     build_learn_prompt,
+    split_learning_text,
+    build_learning_sources,
+    parse_text_expressions,
+    extract_text_expressions,
 )
 from src.plugins.nonebot_plugin_fxbot.chat.memory.repository import chat_repository
 
@@ -171,6 +176,55 @@ class ParseExpressionTests(unittest.TestCase):
 
         self.assertIn("[id:21]", prompt[0]["content"])
         self.assertIn("场景", prompt[0]["content"])
+
+
+class TextExpressionLearningTests(unittest.IsolatedAsyncioTestCase):
+    """粘贴文本按段提取候选，依据直接取原文。"""
+
+    def test_split_prefers_paragraph_boundaries(self) -> None:
+        text = "第一段。" * 1200
+        chunks = split_learning_text(text)
+
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(all(len(chunk) <= CHUNK_LENGTH for chunk in chunks))
+        self.assertEqual("".join(chunks), text)
+
+    def test_parse_keeps_evidence_and_deduplicates(self) -> None:
+        sources = build_learning_sources("甲：这也太离谱了。\n乙：确实，笑死。")
+        parsed = parse_text_expressions(
+            json.dumps(
+                {
+                    "candidates": [
+                        {"situation": "别人炫耀时", "style": "使用 笑死", "source_id": 1},
+                        {"situation": "别人炫耀时", "style": "笑死", "source_id": 99},
+                        {"situation": "", "style": "空情境"},
+                    ]
+                },
+                ensure_ascii=False,
+            ),
+            sources,
+        )
+
+        self.assertEqual(
+            [(item.situation, item.style, item.evidence) for item in parsed],
+            [("别人炫耀时", "笑死", "甲：这也太离谱了。")],
+        )
+
+    async def test_extract_uses_learner_provider(self) -> None:
+        provider = _QueueProvider({"candidates": [{"situation": "被夸时", "style": "低调点", "source_id": 1}]})
+
+        items = await extract_text_expressions("甲：你太强了。\n乙：低调点。", "tenant", provider=provider)
+
+        self.assertEqual([(item.situation, item.style) for item in items], [("被夸时", "低调点")])
+        self.assertEqual(provider.calls, 1)
+
+    def test_invalid_payload_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            parse_text_expressions("", {})
+        with self.assertRaises(ValueError):
+            parse_text_expressions('{"candidates": "x"}', {})
+        with self.assertRaises(ValueError):
+            parse_text_expressions(json.dumps({"candidates": [{}] * 31}), {})
 
 
 class MergeExpressionTests(unittest.TestCase):
@@ -640,6 +694,43 @@ class ConsoleExpressionTests(_ExpressionTestCase):
 
         with self.assertRaises(HTTPException) as empty:
             await chat_routes.list_expressions("   ", "all")
+        self.assertEqual(empty.exception.status_code, 400)
+
+    async def test_manual_create_and_import_mark_active(self) -> None:
+        created = await chat_routes.create_expression(
+            {"tenant": self.tenant, "situation": " 别人炫耀时 ", "style": " 使用 笑死 "}
+        )
+        self.assertEqual((created["item"]["situation"], created["item"]["style"]), ("别人炫耀时", "笑死"))
+        self.assertTrue(created["item"]["checked"])
+        self.assertTrue(created["item"]["manual_checked"])
+        self.assertEqual(created["item"]["count"], 1.0)
+
+        again = await chat_routes.create_expression({"tenant": self.tenant, "situation": "别人炫耀时", "style": "笑死"})
+        self.assertEqual(again["item"]["id"], created["item"]["id"])
+
+        imported = await chat_routes.import_expressions(
+            {
+                "tenant": self.tenant,
+                "items": [
+                    {"situation": "被夸时", "style": "低调点"},
+                    {"situation": "被夸时", "style": "低调点"},
+                ],
+            }
+        )
+        self.assertEqual(imported["imported"], 1)
+        active = await chat_routes.list_expressions(self.tenant, "active")
+        self.assertEqual({item["style"] for item in active["items"]}, {"笑死", "低调点"})
+
+        with self.assertRaises(HTTPException) as invalid:
+            await chat_routes.import_expressions({"tenant": self.tenant, "items": [{"situation": "", "style": ""}]})
+        self.assertEqual(invalid.exception.status_code, 400)
+
+    async def test_prepare_text_reports_chunks(self) -> None:
+        prepared = await chat_routes.prepare_expression_learning({"text": "这是一段要学习的文本。"})
+        self.assertEqual(prepared["chunks"], ["这是一段要学习的文本。"])
+
+        with self.assertRaises(HTTPException) as empty:
+            await chat_routes.prepare_expression_learning({"text": "   "})
         self.assertEqual(empty.exception.status_code, 400)
 
     async def test_cross_tenant_delete_is_rejected(self) -> None:

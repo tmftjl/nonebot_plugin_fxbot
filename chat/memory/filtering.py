@@ -28,6 +28,11 @@ def _digest(text: str) -> str:
     return hashlib.sha1(text.encode("utf-8")).hexdigest()
 
 
+def text_hash(text: object) -> str:
+    """情境与说法的稳定指纹，学习与人工写入共用。"""
+    return _digest(str(text or "").strip())
+
+
 def _is_duplicate(tenant: str, text: str, now: float) -> bool:
     """十分钟内同租户相同内容只学一次。"""
     last = _recent_hashes.get((tenant, _digest(text)))

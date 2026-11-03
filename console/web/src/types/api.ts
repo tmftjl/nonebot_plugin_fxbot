@@ -340,6 +340,12 @@ export interface ChatExpression {
   updated_at: string | null
 }
 
+export interface ChatExpressionCandidate {
+  situation: string
+  style: string
+  evidence: string
+}
+
 export interface ChatPlannerSample {
   id: number
   turn_id: string

@@ -29,7 +29,7 @@ from .models import (
     ChatRecallTombstone,
     utc_now_naive,
 )
-from .filtering import sanitize_line
+from .filtering import text_hash, sanitize_line
 from ..message_context import message_metadata
 
 DIAGNOSTIC_RETENTION_HOURS = 72
@@ -979,6 +979,63 @@ class ChatRepository:
             session.add(ChatExpression(tenant=tenant, source_batch_id=source_batch_id, updated_at=now, **item))
         await self._upsert_cursor(session, tenant, "expression", int(cursor_seq))
         return True
+
+    @with_session
+    async def upsert_expressions(
+        self, session: AsyncSession, tenant: str, items: list[dict[str, Any]]
+    ) -> list[ChatExpression]:
+        """人工写入表达；同情境与说法复用原行并标记为人工确认。"""
+        now = utc_now_naive()
+        rows: list[ChatExpression] = []
+        seen: set[tuple[str, str]] = set()
+        for item in items:
+            situation = sanitize_line(item.get("situation"), 60)
+            style = sanitize_line(item.get("style"), 60)
+            if style.startswith("使用"):
+                style = style[2:].strip()
+            if not situation or not style:
+                raise ValueError("情境和说法都不能为空")
+            situation_hash = text_hash(situation)
+            style_hash = text_hash(style)
+            key = (situation_hash, style_hash)
+            if key in seen:
+                continue
+            seen.add(key)
+            existing = await ChatExpression.select_rows(
+                tenant=tenant,
+                situation_hash=situation_hash,
+                style_hash=style_hash,
+                session=session,
+            )
+            if existing:
+                row = existing[0]
+                row.situation = situation
+                row.style = style
+                row.checked = True
+                row.manual_checked = True
+                row.rejected = False
+                row.count = max(float(row.count or 0), 1.0)
+                row.updated_at = now
+            else:
+                row = ChatExpression(
+                    tenant=tenant,
+                    situation=situation,
+                    situation_hash=situation_hash,
+                    style=style,
+                    style_hash=style_hash,
+                    type="phrase",
+                    count=1.0,
+                    checked=True,
+                    manual_checked=True,
+                    rejected=False,
+                    source_batch_id="manual",
+                    learn_count=0,
+                    updated_at=now,
+                )
+                session.add(row)
+            rows.append(row)
+        await session.flush()
+        return rows
 
     @with_session
     async def review_expression(self, session: AsyncSession, tenant: str, expression_id: int, rejected: bool) -> bool:

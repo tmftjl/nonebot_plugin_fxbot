@@ -23,6 +23,12 @@ from ...chat.providers import provider_manager
 from ...chat.memory.state import is_ready, degraded_reason
 from ...chat.focus.manager import FAILURE_THRESHOLD, focus_mode_manager
 from ...chat.message_adapter import load_images
+from ...chat.memory.expression import (
+    CHUNK_LENGTH,
+    MAX_SOURCE_LENGTH,
+    split_learning_text,
+    extract_text_expressions,
+)
 from ...chat.memory.repository import chat_repository
 from ...chat.behavior.reply_gate import (
     ReplyGate,
@@ -394,6 +400,86 @@ async def list_expressions(
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail="聊天数据库尚未就绪") from exc
     return {"items": [_expression_payload(row) for row in rows], "total": total}
+
+
+@router.post("/expression")
+async def create_expression(payload: dict[str, Any]) -> dict[str, Any]:
+    """人工新增或覆盖一条表达。"""
+    tenant = _tenant(str(payload.get("tenant") or ""))
+    situation = payload.get("situation")
+    style = payload.get("style")
+    if not isinstance(situation, str) or not isinstance(style, str):
+        raise HTTPException(status_code=400, detail="situation 和 style 必须是字符串")
+    try:
+        rows = await chat_repository.upsert_expressions(tenant, [{"situation": situation, "style": style}])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail="聊天数据库尚未就绪") from exc
+    return {"item": _expression_payload(rows[0])}
+
+
+@router.post("/expression/learn/prepare")
+async def prepare_expression_learning(payload: dict[str, Any]) -> dict[str, Any]:
+    """把粘贴文本切成可逐段提取的文段。"""
+    text = payload.get("text")
+    if not isinstance(text, str):
+        raise HTTPException(status_code=400, detail="text 必须是字符串")
+    if len(text) > MAX_SOURCE_LENGTH:
+        raise HTTPException(status_code=400, detail=f"文段不能超过 {MAX_SOURCE_LENGTH:,} 字")
+    try:
+        chunks = split_learning_text(text)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"chunks": chunks}
+
+
+@router.post("/expression/learn/extract")
+async def extract_expression_learning(payload: dict[str, Any]) -> dict[str, Any]:
+    """调用 learner 模型从一段文本提取表达候选，不写入数据库。"""
+    tenant = _tenant(str(payload.get("tenant") or ""))
+    text = payload.get("text")
+    if not isinstance(text, str) or not text.strip():
+        raise HTTPException(status_code=400, detail="学习文段不能为空")
+    if len(text) > CHUNK_LENGTH:
+        raise HTTPException(status_code=400, detail="单段文段过长，请重新分段")
+    try:
+        candidates = await extract_text_expressions(text, tenant)
+    except Exception:
+        logger.opt(exception=True).warning(f"[ChatExpression] 文本学习失败 tenant={tenant}")
+        raise HTTPException(status_code=502, detail="提取失败，请重试该段")
+    return {
+        "candidates": [
+            {"situation": item.situation, "style": item.style, "evidence": item.evidence} for item in candidates
+        ]
+    }
+
+
+@router.post("/expression/import")
+async def import_expressions(payload: dict[str, Any]) -> dict[str, Any]:
+    """把用户确认的候选写成人工确认表达。"""
+    tenant = _tenant(str(payload.get("tenant") or ""))
+    items = payload.get("items")
+    if not isinstance(items, list) or not items:
+        raise HTTPException(status_code=400, detail="请选择要导入的候选")
+    if len(items) > 200:
+        raise HTTPException(status_code=400, detail="单次最多导入 200 条")
+    clean: list[dict[str, str]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            raise HTTPException(status_code=400, detail="候选格式不正确")
+        situation = item.get("situation")
+        style = item.get("style")
+        if not isinstance(situation, str) or not isinstance(style, str):
+            raise HTTPException(status_code=400, detail="候选格式不正确")
+        clean.append({"situation": situation, "style": style})
+    try:
+        rows = await chat_repository.upsert_expressions(tenant, clean)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail="聊天数据库尚未就绪") from exc
+    return {"imported": len(rows), "items": [_expression_payload(row) for row in rows]}
 
 
 @router.patch("/expression/{expression_id}")

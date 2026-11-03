@@ -10,6 +10,7 @@ def learning_prompt(name: str, **context: object) -> str:
     templates = {
         "learn_style",
         "learn_jargon",
+        "text_learning_expression",
         "expression_evaluation",
         "jargon_inference_with_context",
         "jargon_inference_content_only",

@@ -1,5 +1,5 @@
 // -*- coding: utf-8 -*-
-import axios, { type AxiosInstance, type AxiosResponse } from 'axios'
+import axios, { type AxiosInstance, type AxiosRequestConfig, type AxiosResponse } from 'axios'
 import type {
   ApiResponse,
   ProviderListData,
@@ -17,6 +17,7 @@ import type {
   ChatStyle,
   ChatJargon,
   ChatExpression,
+  ChatExpressionCandidate,
   ChatPlannerSample,
   ChatReplyGate,
   ChatEmoji,
@@ -92,8 +93,8 @@ class ApiClient {
     return response.data
   }
 
-  async post<T = any>(url: string, data?: any): Promise<T> {
-    const response: AxiosResponse<T> = await this.client.post(url, data)
+  async post<T = any>(url: string, data?: any, config?: AxiosRequestConfig): Promise<T> {
+    const response: AxiosResponse<T> = await this.client.post(url, data, config)
     return response.data
   }
 
@@ -194,6 +195,18 @@ export const chatApi = {
     if (options.offset != null) params.set('offset', String(options.offset))
     return api.get<{ items: ChatExpression[]; total: number }>(`/chat/expression?${params.toString()}`)
   },
+  createExpression: (tenant: string, situation: string, style: string) =>
+    api.post<{ item: ChatExpression }>('/chat/expression', { tenant, situation, style }),
+  prepareExpressionLearning: (text: string) =>
+    api.post<{ chunks: string[] }>('/chat/expression/learn/prepare', { text }),
+  extractExpressionLearning: (tenant: string, text: string) =>
+    api.post<{ candidates: ChatExpressionCandidate[] }>(
+      '/chat/expression/learn/extract',
+      { tenant, text },
+      { timeout: 120000 },
+    ),
+  importExpressions: (tenant: string, items: Array<{ situation: string; style: string }>) =>
+    api.post<{ imported: number; items: ChatExpression[] }>('/chat/expression/import', { tenant, items }),
   reviewExpression: (tenant: string, id: number, rejected: boolean) =>
     api.patch<{ rejected: boolean }>(
       `/chat/expression/${id}?tenant=${encodeURIComponent(tenant)}&rejected=${rejected}`,

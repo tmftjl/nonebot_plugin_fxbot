@@ -25,6 +25,7 @@ import type {
   ChatStyle,
   ChatJargon,
   ChatExpression,
+  ChatExpressionCandidate,
   ChatEmoji,
   ChatEmojiCounts,
 } from '@/types/api'
@@ -56,6 +57,17 @@ const expressionStatus = ref('all')
 const expressionSearch = ref('')
 const expressionLoading = ref(false)
 const expressionSelection = ref<number[]>([])
+const expressionDialogVisible = ref(false)
+const expressionSaving = ref(false)
+const expressionForm = ref({ situation: '', style: '' })
+const learnDialogVisible = ref(false)
+const learnText = ref('')
+const learnBusy = ref(false)
+const learnImporting = ref(false)
+const learnTotal = ref(0)
+const learnDone = ref(0)
+const learnCandidates = ref<Array<ChatExpressionCandidate & { selected: boolean }>>([])
+const learnFailed = ref<string[]>([])
 
 const jargon = ref<ChatJargon[]>([])
 const jargonStatus = ref('all')
@@ -477,6 +489,148 @@ const deleteExpression = async (row: ChatExpression) => {
   }
 }
 
+const selectedCandidateCount = computed(() => learnCandidates.value.filter((item) => item.selected).length)
+
+const openExpressionDialog = () => {
+  expressionForm.value = { situation: '', style: '' }
+  expressionDialogVisible.value = true
+}
+
+const saveExpression = async () => {
+  if (!tenant.value) {
+    ElMessage.warning('请先选择会话')
+    return
+  }
+  const situation = expressionForm.value.situation.trim()
+  const style = expressionForm.value.style.trim()
+  if (!situation || !style) {
+    ElMessage.warning('请填写情境和说法')
+    return
+  }
+  if (expressionSaving.value) return
+  expressionSaving.value = true
+  try {
+    await chatApi.createExpression(tenant.value, situation, style)
+    expressionDialogVisible.value = false
+    ElMessage.success('已保存表达方式')
+    await loadExpressions()
+  } catch (error: any) {
+    console.error('保存表达失败', error)
+    ElMessage.error(error?.response?.data?.detail || '保存表达失败，请重试')
+  } finally {
+    expressionSaving.value = false
+  }
+}
+
+const resetLearned = () => {
+  learnText.value = ''
+  learnCandidates.value = []
+  learnFailed.value = []
+  learnTotal.value = 0
+  learnDone.value = 0
+}
+
+const openLearnDialog = () => {
+  resetLearned()
+  learnDialogVisible.value = true
+}
+
+const extractChunks = async (chunks: string[]) => {
+  learnTotal.value = chunks.length
+  learnDone.value = 0
+  const seen = new Set(learnCandidates.value.map((item) => `${item.situation}\n${item.style}`))
+  for (let index = 0; index < chunks.length; index += 1) {
+    try {
+      const result = await chatApi.extractExpressionLearning(tenant.value, chunks[index])
+      for (const candidate of result.candidates || []) {
+        const key = `${candidate.situation}\n${candidate.style}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        learnCandidates.value.push({ ...candidate, selected: true })
+      }
+    } catch (error) {
+      console.error(`第 ${index + 1} 段提取失败`, error)
+      learnFailed.value.push(chunks[index])
+    } finally {
+      learnDone.value = index + 1
+    }
+  }
+}
+
+const learnFromText = async () => {
+  if (!tenant.value) {
+    ElMessage.warning('请先选择会话')
+    return
+  }
+  const text = learnText.value.trim()
+  if (!text) {
+    ElMessage.warning('请先粘贴要学习的文本')
+    return
+  }
+  if (learnBusy.value) return
+  learnBusy.value = true
+  learnCandidates.value = []
+  learnFailed.value = []
+  learnTotal.value = 0
+  learnDone.value = 0
+  try {
+    const prepared = await chatApi.prepareExpressionLearning(text)
+    await extractChunks(prepared.chunks || [])
+    if (learnCandidates.value.length) ElMessage.success(`已提取 ${learnCandidates.value.length} 条候选`)
+    else ElMessage.warning('没有提取到可用表达')
+  } catch (error: any) {
+    console.error('准备学习文段失败', error)
+    ElMessage.error(error?.response?.data?.detail || '文本学习失败，请重试')
+  } finally {
+    learnBusy.value = false
+  }
+}
+
+const retryFailedChunks = async () => {
+  if (learnBusy.value || !learnFailed.value.length) return
+  const chunks = [...learnFailed.value]
+  learnFailed.value = []
+  learnBusy.value = true
+  try {
+    await extractChunks(chunks)
+  } finally {
+    learnBusy.value = false
+  }
+}
+
+const importLearnedExpressions = async () => {
+  if (!tenant.value) {
+    ElMessage.warning('请先选择会话')
+    return
+  }
+  const selected = learnCandidates.value.filter((item) => item.selected)
+  if (!selected.length) {
+    ElMessage.warning('请选择要导入的候选')
+    return
+  }
+  const items = selected.map((item) => ({
+    situation: item.situation.trim(),
+    style: item.style.trim(),
+  }))
+  if (items.some((item) => !item.situation || !item.style)) {
+    ElMessage.warning('候选的情境和说法都不能为空')
+    return
+  }
+  if (learnImporting.value) return
+  learnImporting.value = true
+  try {
+    const result = await chatApi.importExpressions(tenant.value, items)
+    ElMessage.success(`已导入 ${result.imported} 条表达`)
+    learnDialogVisible.value = false
+    await loadExpressions()
+  } catch (error: any) {
+    console.error('导入表达失败', error)
+    ElMessage.error(error?.response?.data?.detail || '导入表达失败，请重试')
+  } finally {
+    learnImporting.value = false
+  }
+}
+
 const openJargonDialog = () => {
   jargonForm.value = { term: '', meaning: '' }
   jargonDialogVisible.value = true
@@ -795,6 +949,8 @@ onMounted(() => {
                   @input="onExpressionSearch"
                   @clear="reloadExpressions"
                 />
+                <el-button :icon="Plus" :disabled="!tenant" @click="openExpressionDialog">添加</el-button>
+                <el-button :disabled="!tenant" @click="openLearnDialog">从文本学习</el-button>
                 <el-button :icon="Refresh" :loading="expressionLoading" @click="loadExpressions">刷新</el-button>
               </div>
             </div>
@@ -877,6 +1033,101 @@ onMounted(() => {
               :total="expressionTotal"
               :page-size="EXPRESSION_PAGE_SIZE"
             />
+
+            <el-dialog v-model="expressionDialogVisible" title="添加表达方式" width="480" align-center>
+              <el-form label-width="56px" @submit.prevent>
+                <el-form-item label="情境">
+                  <el-input
+                    v-model="expressionForm.situation"
+                    maxlength="60"
+                    show-word-limit
+                    placeholder="例如：对某件事表示惊叹时"
+                  />
+                </el-form-item>
+                <el-form-item label="说法">
+                  <el-input
+                    v-model="expressionForm.style"
+                    maxlength="60"
+                    show-word-limit
+                    placeholder="例如：我嘞个豆"
+                  />
+                </el-form-item>
+              </el-form>
+              <template #footer>
+                <el-button @click="expressionDialogVisible = false">取消</el-button>
+                <el-button type="primary" :loading="expressionSaving" @click="saveExpression">保存</el-button>
+              </template>
+            </el-dialog>
+
+            <el-dialog v-model="learnDialogVisible" title="从文本学习表达" width="820" align-center>
+              <div class="learn-dialog">
+                <el-input
+                  v-model="learnText"
+                  type="textarea"
+                  :rows="8"
+                  maxlength="200000"
+                  show-word-limit
+                  placeholder="粘贴聊天记录或文本，模型会按情境和说法提取候选，确认后才写入"
+                />
+                <div class="learn-toolbar">
+                  <span v-if="learnBusy">正在提取 {{ learnDone }}/{{ learnTotal }} 段…</span>
+                  <span v-else-if="learnCandidates.length">已提取 {{ learnCandidates.length }} 条候选</span>
+                  <span v-else class="learn-hint">提取结果不会自动生效，请先检查并修改候选。</span>
+                  <div class="learn-actions">
+                    <el-button size="small" :disabled="learnBusy" @click="resetLearned">清空</el-button>
+                    <el-button
+                      size="small"
+                      type="primary"
+                      :loading="learnBusy"
+                      :disabled="!learnText.trim()"
+                      @click="learnFromText"
+                    >
+                      提取候选
+                    </el-button>
+                  </div>
+                </div>
+                <el-alert v-if="learnFailed.length" type="warning" :closable="false" show-icon>
+                  <template #title>有 {{ learnFailed.length }} 段提取失败</template>
+                  <el-button link type="primary" :disabled="learnBusy" @click="retryFailedChunks">
+                    重试失败段
+                  </el-button>
+                </el-alert>
+                <el-table v-if="learnCandidates.length" :data="learnCandidates" max-height="360">
+                  <el-table-column width="44">
+                    <template #default="{ row }">
+                      <el-checkbox v-model="row.selected" />
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="情境" min-width="200">
+                    <template #default="{ row }">
+                      <el-input v-model="row.situation" maxlength="60" />
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="说法" min-width="200">
+                    <template #default="{ row }">
+                      <el-input v-model="row.style" maxlength="60" />
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="原文依据" min-width="180" show-overflow-tooltip>
+                    <template #default="{ row }">{{ row.evidence || '—' }}</template>
+                  </el-table-column>
+                </el-table>
+              </div>
+              <template #footer>
+                <div class="learn-footer">
+                  <span class="learn-selected">已选 {{ selectedCandidateCount }} 条</span>
+                  <el-button @click="learnDialogVisible = false">取消</el-button>
+                  <el-button
+                    type="primary"
+                    :loading="learnImporting"
+                    :disabled="!selectedCandidateCount"
+                    @click="importLearnedExpressions"
+                  >
+                    导入选中
+                  </el-button>
+                </div>
+              </template>
+            </el-dialog>
           </div>
 
           <div v-if="activeTab === 'jargon'" class="panel">
@@ -1321,6 +1572,34 @@ onMounted(() => {
 .meaning-hint {
   color: var(--color-text-tertiary);
   font-size: 12px;
+}
+
+.learn-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.learn-toolbar,
+.learn-actions,
+.learn-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.learn-toolbar {
+  justify-content: space-between;
+}
+
+.learn-hint,
+.learn-selected {
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+}
+
+.learn-footer .learn-selected {
+  margin-right: auto;
 }
 
 .tenant-id {

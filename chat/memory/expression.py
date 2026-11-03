@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import re
 import json
 import random
-import hashlib
 from typing import Any
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -17,7 +17,7 @@ from .config import expression_config, tenant_learn_enabled, expression_vector_c
 from .models import ChatMessage, ChatExpression
 from .prompts import learning_prompt
 from .learning import tenant_target, learning_flags
-from .filtering import SENSITIVE, should_learn, sanitize_line
+from .filtering import SENSITIVE, text_hash, should_learn, sanitize_line
 from .repository import chat_repository
 from .expression_vector import select_by_vectors
 from ..providers.routing import routed_task, fallback_provider
@@ -29,6 +29,9 @@ _COUNT_STEP = 1.0
 # MaiBot `src/chat/replyer/maisaka_expression_selector.py` MAX_SELECTED_EXPRESSIONS
 _MAX_INJECTED = 5
 _EXPRESSION_TYPES = frozenset({"phrase", "tone", "structure", "emoji"})
+MAX_SOURCE_LENGTH = 200_000
+CHUNK_LENGTH = 4_500
+_MAX_TEXT_ITEMS = 30
 
 
 @dataclass(frozen=True)
@@ -41,14 +44,18 @@ class ExpressionItem:
     source_seq: int = 0
 
 
+@dataclass(frozen=True)
+class TextExpressionCandidate:
+    """从粘贴文本抽出的候选；evidence 只用于控制台预览。"""
+
+    situation: str
+    style: str
+    evidence: str = ""
+
+
 def normalize(text: object) -> str:
     """匹配与去重都使用同一份小写、空白归一化文本。"""
     return " ".join(str(text or "").casefold().split())
-
-
-def text_hash(text: object) -> str:
-    """情境与说法的稳定指纹。"""
-    return hashlib.sha1(str(text or "").strip().encode("utf-8")).hexdigest()
 
 
 def expression_batch_id(seq_start: int, seq_end: int) -> str:
@@ -234,6 +241,103 @@ async def _lease(tenant: str, provider: Any):
         return
     async with fallback_provider(routed_task("learner", "utils"), tenant) as leased:
         yield leased
+
+
+def split_learning_text(text: str) -> list[str]:
+    """按段落、换行和句末切成不超过 CHUNK_LENGTH 的文段。"""
+    if not text.strip():
+        raise ValueError("请先输入要学习的文段")
+    if len(text) > MAX_SOURCE_LENGTH:
+        raise ValueError(f"文段不能超过 {MAX_SOURCE_LENGTH:,} 字")
+    chunks: list[str] = []
+    while len(text) > CHUNK_LENGTH:
+        window = text[:CHUNK_LENGTH]
+        cut = CHUNK_LENGTH
+        for boundary in (r"\n\s*\n", r"\n", r"[。！？]|[.!?](?:[\s”’\"']|$)"):
+            matches = [match.end() for match in re.finditer(boundary, window) if match.end() >= CHUNK_LENGTH // 2]
+            if matches:
+                cut = matches[-1]
+                break
+        chunks.append(text[:cut])
+        text = text[cut:]
+    if text:
+        chunks.append(text)
+    return chunks
+
+
+def build_learning_sources(text: str) -> dict[int, str]:
+    """给原文片段编号，回到原文取依据，避免模型改写引文。"""
+    sources: dict[int, str] = {}
+    for line in text.splitlines():
+        remaining = line.strip()
+        while remaining:
+            cut = min(400, len(remaining))
+            if len(remaining) > 400:
+                boundaries = [
+                    match.end()
+                    for match in re.finditer(r"[。！？；;.!?]\s*|\s+", remaining[:400])
+                    if match.end() >= 200
+                ]
+                if boundaries:
+                    cut = boundaries[-1]
+            excerpt = remaining[:cut].strip()
+            if excerpt:
+                sources[len(sources) + 1] = excerpt
+            remaining = remaining[cut:].lstrip()
+    return sources
+
+
+def parse_text_expressions(response: str, sources: dict[int, str]) -> list[TextExpressionCandidate]:
+    """校验粘贴文本的提取结果，保留可选的原文依据。"""
+    payload = response.strip()
+    if not payload:
+        raise ValueError("提取模型没有返回内容")
+    try:
+        data = json.loads(repair_json(payload))
+    except Exception as exc:
+        raise ValueError("提取模型返回的 JSON 无法解析") from exc
+    raw_items = data.get("candidates") if isinstance(data, dict) else None
+    if not isinstance(raw_items, list):
+        raise ValueError("提取模型返回的候选格式不正确")
+    if len(raw_items) > _MAX_TEXT_ITEMS:
+        raise ValueError("单段返回的候选过多")
+    items: list[TextExpressionCandidate] = []
+    seen: set[tuple[str, str]] = set()
+    for raw in raw_items:
+        if not isinstance(raw, dict):
+            continue
+        situation = sanitize_line(raw.get("situation") or raw.get("title"), 60)
+        style = sanitize_line(raw.get("style") or raw.get("description"), 60)
+        if style.startswith("使用"):
+            style = style[2:].strip()
+        if not situation or not style or SENSITIVE.search(situation) or SENSITIVE.search(style):
+            continue
+        if any(marker in situation or marker in style for marker in ("SELF", "[图片", "[表情包")):
+            continue
+        key = (normalize(situation), normalize(style))
+        if key in seen:
+            continue
+        seen.add(key)
+        source_id = raw.get("source_id")
+        evidence = sources.get(source_id, "") if isinstance(source_id, int) else ""
+        items.append(TextExpressionCandidate(situation=situation, style=style, evidence=evidence[:500]))
+    return items
+
+
+async def extract_text_expressions(text: str, tenant: str, *, provider: Any = None) -> list[TextExpressionCandidate]:
+    """调用 learner 模型从一段粘贴文本中抽取表达候选。"""
+    sources = build_learning_sources(text)
+    payload = json.dumps(
+        [{"id": source_id, "text": excerpt} for source_id, excerpt in sources.items()],
+        ensure_ascii=False,
+    )
+    messages = [
+        {"role": "system", "content": learning_prompt("text_learning_expression")},
+        {"role": "user", "content": payload},
+    ]
+    async with _lease(tenant, provider) as model:
+        response = await model.chat(messages=messages, max_tokens=8192)
+    return parse_text_expressions(response.content, sources)
 
 
 async def learn_expressions(
