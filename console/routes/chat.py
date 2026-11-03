@@ -318,8 +318,8 @@ async def list_jargon(
 ) -> dict[str, Any]:
     """分页列出黑话条目，可按状态和关键字过滤。"""
     tenant = _tenant(tenant)
-    if status not in {"all", "active", "rejected"}:
-        raise HTTPException(status_code=400, detail="status 只能是 all/active/rejected")
+    if status not in {"all", "active", "pending", "rejected"}:
+        raise HTTPException(status_code=400, detail="status 只能是 all/active/pending/rejected")
     limit = max(1, min(200, int(limit)))
     offset = max(0, int(offset))
     selected = None if status == "all" else status
@@ -335,6 +335,23 @@ async def list_jargon(
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail="聊天数据库尚未就绪") from exc
     return {"items": [_jargon_payload(row) for row in rows], "total": total}
+
+
+@router.post("/jargon")
+async def create_jargon(payload: dict[str, Any]) -> dict[str, Any]:
+    """人工新增或覆盖一条黑话释义。"""
+    tenant = _tenant(str(payload.get("tenant") or ""))
+    term = payload.get("term")
+    meaning = payload.get("meaning")
+    if not isinstance(term, str) or not isinstance(meaning, str):
+        raise HTTPException(status_code=400, detail="term 和 meaning 必须是字符串")
+    try:
+        row = await chat_repository.upsert_jargon(tenant, term, meaning)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail="聊天数据库尚未就绪") from exc
+    return {"item": _jargon_payload(row)}
 
 
 @router.delete("/jargon/{jargon_id}")

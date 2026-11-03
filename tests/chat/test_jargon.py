@@ -74,6 +74,20 @@ class JargonTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((row.count, row.last_inference_count, row.status), (4, 4, "active"))
         self.assertEqual(row.meaning, "形容特别好")
 
+    async def test_manual_upsert_overwrites_and_activates(self) -> None:
+        row = await chat_repository.upsert_jargon(self.tenant, " 绝绝子 ", " 形容特别好 ")
+        self.assertEqual((row.term, row.meaning, row.status), ("绝绝子", "形容特别好", "active"))
+        self.assertEqual(row.source_batch_id, "manual")
+        again = await chat_repository.upsert_jargon(self.tenant, "绝绝子", "改过的释义")
+        self.assertEqual(again.id, row.id)
+        self.assertEqual(again.meaning, "改过的释义")
+        [stored] = await chat_repository.list_jargon(self.tenant, status="active")
+        self.assertEqual(stored.meaning, "改过的释义")
+        with self.assertRaises(ValueError):
+            await chat_repository.upsert_jargon(self.tenant, "x", "释义")
+        with self.assertRaises(ValueError):
+            await chat_repository.upsert_jargon(self.tenant, "词条", "  ")
+
     def test_thresholds_do_not_repeat(self) -> None:
         for count in (4, 8, 25, 100):
             self.assertTrue(jargon.inference_due(count, count - 1))

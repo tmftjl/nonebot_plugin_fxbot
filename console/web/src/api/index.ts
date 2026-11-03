@@ -180,6 +180,8 @@ export const chatApi = {
     if (options.offset != null) params.set('offset', String(options.offset))
     return api.get<{ items: ChatJargon[]; total: number }>(`/chat/jargon?${params.toString()}`)
   },
+  createJargon: (tenant: string, term: string, meaning: string) =>
+    api.post<{ item: ChatJargon }>('/chat/jargon', { tenant, term, meaning }),
   deleteJargon: (tenant: string, id: number) =>
     api.delete<{ deleted: boolean }>(`/chat/jargon/${id}?tenant=${encodeURIComponent(tenant)}`),
   listExpressions: (

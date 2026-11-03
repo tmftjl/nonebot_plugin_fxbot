@@ -29,6 +29,7 @@ from .models import (
     ChatRecallTombstone,
     utc_now_naive,
 )
+from .filtering import sanitize_line
 from ..message_context import message_metadata
 
 DIAGNOSTIC_RETENTION_HOURS = 72
@@ -836,6 +837,38 @@ class ChatRepository:
         session.add(style)
         await session.flush()
         return style
+
+    @with_session
+    async def upsert_jargon(self, session: AsyncSession, tenant: str, term: str, meaning: str) -> ChatJargon:
+        """人工写入一条黑话释义；同词条直接覆盖并生效。"""
+        name = sanitize_line(term, 30)
+        description = sanitize_line(meaning, 1000)
+        if len(name) < 2:
+            raise ValueError("词条至少需要 2 个字")
+        if not description:
+            raise ValueError("释义不能为空")
+        rows = await ChatJargon.select_rows(tenant=tenant, term=name, session=session)
+        if rows:
+            row = rows[0]
+            row.meaning = description
+            row.normalized = name.casefold()
+            row.status = "active"
+            row.source_batch_id = "manual"
+            return row
+        now = utc_now_naive()
+        row = ChatJargon(
+            tenant=tenant,
+            term=name,
+            normalized=name.casefold(),
+            meaning=description,
+            status="active",
+            source_batch_id="manual",
+            first_seen=now,
+            last_seen=now,
+        )
+        session.add(row)
+        await session.flush()
+        return row
 
     @with_session
     async def delete_jargon(self, session: AsyncSession, tenant: str, jargon_id: int) -> bool:

@@ -62,6 +62,9 @@ const jargonStatus = ref('all')
 const jargonSearch = ref('')
 const jargonLoading = ref(false)
 const jargonSelection = ref<number[]>([])
+const jargonDialogVisible = ref(false)
+const jargonSaving = ref(false)
+const jargonForm = ref({ term: '', meaning: '' })
 
 const emojis = ref<ChatEmoji[]>([])
 const emojiLoading = ref(false)
@@ -474,6 +477,41 @@ const deleteExpression = async (row: ChatExpression) => {
   }
 }
 
+const openJargonDialog = () => {
+  jargonForm.value = { term: '', meaning: '' }
+  jargonDialogVisible.value = true
+}
+
+const saveJargon = async () => {
+  if (!tenant.value) {
+    ElMessage.warning('请先选择会话')
+    return
+  }
+  const term = jargonForm.value.term.trim()
+  const meaning = jargonForm.value.meaning.trim()
+  if (term.length < 2) {
+    ElMessage.warning('词条至少需要 2 个字')
+    return
+  }
+  if (!meaning) {
+    ElMessage.warning('请填写释义')
+    return
+  }
+  if (jargonSaving.value) return
+  jargonSaving.value = true
+  try {
+    const result = await chatApi.createJargon(tenant.value, term, meaning)
+    jargonDialogVisible.value = false
+    ElMessage.success(`已保存黑话「${result.item.term}」`)
+    await loadJargon()
+  } catch (error: any) {
+    console.error('保存黑话失败', error)
+    ElMessage.error(error?.response?.data?.detail || '保存黑话失败，请重试')
+  } finally {
+    jargonSaving.value = false
+  }
+}
+
 const deleteJargon = async (row: ChatJargon) => {
   if (acting.value) return
   try {
@@ -863,6 +901,7 @@ onMounted(() => {
                   @input="onJargonSearch"
                   @clear="reloadJargon"
                 />
+                <el-button :icon="Plus" :disabled="!tenant" @click="openJargonDialog">添加</el-button>
                 <el-button :icon="Refresh" :loading="jargonLoading" @click="loadJargon">刷新</el-button>
               </div>
             </div>
@@ -921,6 +960,32 @@ onMounted(() => {
               :total="jargonTotal"
               :page-size="JARGON_PAGE_SIZE"
             />
+            <el-dialog v-model="jargonDialogVisible" title="添加黑话" width="480" align-center>
+              <el-form label-position="top">
+                <el-form-item label="黑话">
+                  <el-input
+                    v-model="jargonForm.term"
+                    maxlength="30"
+                    show-word-limit
+                    placeholder="例如：绝绝子"
+                  />
+                </el-form-item>
+                <el-form-item label="释义">
+                  <el-input
+                    v-model="jargonForm.meaning"
+                    type="textarea"
+                    :rows="3"
+                    maxlength="1000"
+                    show-word-limit
+                    placeholder="例如：形容特别好"
+                  />
+                </el-form-item>
+              </el-form>
+              <template #footer>
+                <el-button @click="jargonDialogVisible = false">取消</el-button>
+                <el-button type="primary" :loading="jargonSaving" @click="saveJargon">保存</el-button>
+              </template>
+            </el-dialog>
           </div>
 
           <div v-if="activeTab === 'emoji'" class="panel">
