@@ -18,6 +18,7 @@ import {
 import PageHeader from '@/components/PageHeader.vue'
 import PillTabs from '@/components/PillTabs.vue'
 import ChatScopeList from '@/components/ChatScopeList.vue'
+import ListPager from '@/components/ListPager.vue'
 import { chatApi } from '@/api'
 import type {
   ChatTenant,
@@ -116,21 +117,53 @@ const jargonMeaning = (row: ChatJargon): string => {
   return threshold ? `出现 ${threshold} 次后推断释义（当前 ${row.count} 次）` : '重复出现后推断释义'
 }
 
-const filteredExpressions = computed(() => {
-  const keyword = expressionSearch.value.trim().toLowerCase()
-  if (!keyword) return expressions.value
-  return expressions.value.filter((row) =>
-    [row.situation, row.style, row.type].some((value) => String(value || '').toLowerCase().includes(keyword)),
-  )
-})
+const EXPRESSION_PAGE_SIZE = 20
+const JARGON_PAGE_SIZE = 20
+const EMOJI_PAGE_SIZE = 24
+const expressionPage = ref(1)
+const expressionTotal = ref(0)
+const jargonPage = ref(1)
+const jargonTotal = ref(0)
+const emojiPage = ref(1)
+const emojiTotal = ref(0)
 
-const filteredJargon = computed(() => {
-  const keyword = jargonSearch.value.trim().toLowerCase()
-  if (!keyword) return jargon.value
-  return jargon.value.filter((row) =>
-    [row.term, row.meaning].some((value) => String(value || '').toLowerCase().includes(keyword)),
-  )
-})
+let expressionSearchTimer: number | null = null
+let jargonSearchTimer: number | null = null
+
+const reloadExpressions = () => {
+  if (expressionPage.value === 1) void loadExpressions()
+  else expressionPage.value = 1
+}
+
+const reloadJargon = () => {
+  if (jargonPage.value === 1) void loadJargon()
+  else jargonPage.value = 1
+}
+
+const reloadEmoji = () => {
+  if (emojiPage.value === 1) void loadEmoji()
+  else emojiPage.value = 1
+}
+
+const onExpressionSearch = () => {
+  if (expressionSearchTimer !== null) window.clearTimeout(expressionSearchTimer)
+  expressionSearchTimer = window.setTimeout(() => {
+    expressionSearchTimer = null
+    reloadExpressions()
+  }, 300)
+}
+
+const onJargonSearch = () => {
+  if (jargonSearchTimer !== null) window.clearTimeout(jargonSearchTimer)
+  jargonSearchTimer = window.setTimeout(() => {
+    jargonSearchTimer = null
+    reloadJargon()
+  }, 300)
+}
+
+watch(expressionPage, () => void loadExpressions())
+watch(jargonPage, () => void loadJargon())
+watch(emojiPage, () => void loadEmoji())
 
 const emojiFilters = computed(() => [
   { key: '', label: '全部', count: emojiCounts.value.all },
@@ -202,16 +235,27 @@ const loadTenants = async () => {
 }
 
 const loadExpressions = async () => {
+  expressionSelection.value = []
   if (!tenant.value) {
     expressions.value = []
-    expressionSelection.value = []
+    expressionTotal.value = 0
     return
   }
   expressionLoading.value = true
   try {
-    const result = await chatApi.listExpressions(tenant.value, expressionStatus.value)
+    const result = await chatApi.listExpressions(tenant.value, {
+      status: expressionStatus.value,
+      search: expressionSearch.value.trim() || undefined,
+      limit: EXPRESSION_PAGE_SIZE,
+      offset: (expressionPage.value - 1) * EXPRESSION_PAGE_SIZE,
+    })
     expressions.value = result.items || []
-    expressionSelection.value = []
+    expressionTotal.value = result.total || 0
+    const pages = Math.max(1, Math.ceil(expressionTotal.value / EXPRESSION_PAGE_SIZE))
+    if (expressionPage.value > pages) {
+      expressionPage.value = pages
+      return
+    }
   } catch (error) {
     console.error('加载群表达失败', error)
     ElMessage.error('加载群表达失败，请重试')
@@ -221,16 +265,27 @@ const loadExpressions = async () => {
 }
 
 const loadJargon = async () => {
+  jargonSelection.value = []
   if (!tenant.value) {
     jargon.value = []
-    jargonSelection.value = []
+    jargonTotal.value = 0
     return
   }
   jargonLoading.value = true
   try {
-    const result = await chatApi.listJargon(tenant.value, jargonStatus.value)
+    const result = await chatApi.listJargon(tenant.value, {
+      status: jargonStatus.value,
+      search: jargonSearch.value.trim() || undefined,
+      limit: JARGON_PAGE_SIZE,
+      offset: (jargonPage.value - 1) * JARGON_PAGE_SIZE,
+    })
     jargon.value = result.items || []
-    jargonSelection.value = []
+    jargonTotal.value = result.total || 0
+    const pages = Math.max(1, Math.ceil(jargonTotal.value / JARGON_PAGE_SIZE))
+    if (jargonPage.value > pages) {
+      jargonPage.value = pages
+      return
+    }
   } catch (error) {
     console.error('加载黑话失败', error)
     ElMessage.error('加载黑话失败，请重试')
@@ -243,6 +298,7 @@ const loadEmoji = async () => {
   emojiSelection.value = []
   if (!tenant.value) {
     emojis.value = []
+    emojiTotal.value = 0
     return
   }
   emojiLoading.value = true
@@ -254,8 +310,16 @@ const loadEmoji = async () => {
       format: emojiFormat.value || undefined,
       sort: ordering.sort,
       order: ordering.order,
+      limit: EMOJI_PAGE_SIZE,
+      offset: (emojiPage.value - 1) * EMOJI_PAGE_SIZE,
     })
     emojis.value = result.items || []
+    emojiTotal.value = result.total || 0
+    const pages = Math.max(1, Math.ceil(emojiTotal.value / EMOJI_PAGE_SIZE))
+    if (emojiPage.value > pages) {
+      emojiPage.value = pages
+      return
+    }
     emojiCounts.value = result.counts || emojiCounts.value
     if (emojiDetailVisible.value && emojiDetailRow.value) {
       const fresh = emojis.value.find((row) => row.hash === emojiDetailRow.value?.hash)
@@ -300,6 +364,9 @@ const loadAll = async () => {
 const onTenantChange = async () => {
   expressionSelection.value = []
   jargonSelection.value = []
+  expressionPage.value = 1
+  jargonPage.value = 1
+  emojiPage.value = 1
   await loadAll()
 }
 
@@ -433,12 +500,12 @@ const deleteJargon = async (row: ChatJargon) => {
 
 const setEmojiStatus = async (status: string) => {
   emojiStatus.value = status
-  await loadEmoji()
+  reloadEmoji()
 }
 
 const setEmojiFormat = async (format: string) => {
   emojiFormat.value = format
-  await loadEmoji()
+  reloadEmoji()
 }
 
 const readBase64 = (file: File) =>
@@ -672,10 +739,10 @@ onMounted(() => {
             <div class="panel-header">
               <div class="panel-heading">
                 <h3 class="panel-title">表达方式</h3>
-                <span class="panel-count">{{ filteredExpressions.length }} 条</span>
+                <span class="panel-count">{{ expressionTotal }} 条</span>
               </div>
               <div class="filters">
-                <el-select v-model="expressionStatus" class="status-select" @change="loadExpressions">
+                <el-select v-model="expressionStatus" class="status-select" @change="reloadExpressions">
                   <el-option label="全部" value="all" />
                   <el-option label="生效中" value="active" />
                   <el-option label="待复审" value="unchecked" />
@@ -687,6 +754,8 @@ onMounted(() => {
                   clearable
                   placeholder="搜索情境、说法或类型"
                   :prefix-icon="Search"
+                  @input="onExpressionSearch"
+                  @clear="reloadExpressions"
                 />
                 <el-button :icon="Refresh" :loading="expressionLoading" @click="loadExpressions">刷新</el-button>
               </div>
@@ -721,7 +790,7 @@ onMounted(() => {
               </div>
             </div>
             <el-table
-              :data="filteredExpressions"
+              :data="expressions"
               row-key="id"
               empty-text="暂无表达方式"
               @selection-change="onExpressionSelection"
@@ -765,16 +834,21 @@ onMounted(() => {
                 </template>
               </el-table-column>
             </el-table>
+            <ListPager
+              v-model:page="expressionPage"
+              :total="expressionTotal"
+              :page-size="EXPRESSION_PAGE_SIZE"
+            />
           </div>
 
           <div v-if="activeTab === 'jargon'" class="panel">
             <div class="panel-header">
               <div class="panel-heading">
                 <h3 class="panel-title">黑话</h3>
-                <span class="panel-count">{{ filteredJargon.length }} 条</span>
+                <span class="panel-count">{{ jargonTotal }} 条</span>
               </div>
               <div class="filters">
-                <el-select v-model="jargonStatus" class="status-select" @change="loadJargon">
+                <el-select v-model="jargonStatus" class="status-select" @change="reloadJargon">
                   <el-option label="全部" value="all" />
                   <el-option label="生效中" value="active" />
                   <el-option label="待推断" value="pending" />
@@ -786,6 +860,8 @@ onMounted(() => {
                   clearable
                   placeholder="搜索词条或释义"
                   :prefix-icon="Search"
+                  @input="onJargonSearch"
+                  @clear="reloadJargon"
                 />
                 <el-button :icon="Refresh" :loading="jargonLoading" @click="loadJargon">刷新</el-button>
               </div>
@@ -806,7 +882,7 @@ onMounted(() => {
               </div>
             </div>
             <el-table
-              :data="filteredJargon"
+              :data="jargon"
               row-key="id"
               empty-text="暂无黑话条目"
               @selection-change="onJargonSelection"
@@ -840,6 +916,11 @@ onMounted(() => {
                 </template>
               </el-table-column>
             </el-table>
+            <ListPager
+              v-model:page="jargonPage"
+              :total="jargonTotal"
+              :page-size="JARGON_PAGE_SIZE"
+            />
           </div>
 
           <div v-if="activeTab === 'emoji'" class="panel">
@@ -870,7 +951,7 @@ onMounted(() => {
                   {{ format.label }}
                 </button>
               </div>
-              <el-select v-model="emojiSort" class="filter-sort" @change="loadEmoji">
+              <el-select v-model="emojiSort" class="filter-sort" @change="reloadEmoji">
                 <el-option label="最近加入" value="newest" />
                 <el-option label="最早加入" value="oldest" />
                 <el-option label="发送最多" value="count" />
@@ -890,8 +971,8 @@ onMounted(() => {
                   clearable
                   placeholder="搜索描述或标签"
                   :prefix-icon="Search"
-                  @keyup.enter="loadEmoji"
-                  @clear="loadEmoji"
+                  @keyup.enter="reloadEmoji"
+                  @clear="reloadEmoji"
                 />
                 <div class="toolbar-right">
                   <div class="card-size-group" role="group" aria-label="卡片大小">
@@ -989,6 +1070,7 @@ onMounted(() => {
                   </p>
                 </article>
               </div>
+              <ListPager v-model:page="emojiPage" :total="emojiTotal" :page-size="EMOJI_PAGE_SIZE" />
               <el-empty v-if="!emojiLoading && !emojis.length" description="暂无表情" />
             </div>
           </div>

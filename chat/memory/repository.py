@@ -643,16 +643,42 @@ class ChatRepository:
         tenant: str,
         *,
         status: str | None = None,
+        search: str = "",
         limit: int = 500,
+        offset: int = 0,
         tenants: list[str] | None = None,
     ) -> list[ChatJargon]:
         """按出现次数读取黑话条目；传入 tenants 时合并共享租户。"""
+        statement = self._jargon_statement(tenant, status=status, search=search, tenants=tenants)
+        statement = statement.order_by(ChatJargon.count.desc(), ChatJargon.last_seen.desc())
+        statement = statement.limit(limit).offset(max(0, offset))
+        return list((await session.execute(statement)).scalars().all())
+
+    @with_session
+    async def count_jargon(
+        self,
+        session: AsyncSession,
+        tenant: str,
+        *,
+        status: str | None = None,
+        search: str = "",
+        tenants: list[str] | None = None,
+    ) -> int:
+        """统计黑话条目总数，筛选条件与列表保持一致。"""
+        statement = self._jargon_statement(tenant, status=status, search=search, tenants=tenants)
+        total = select(func.count()).select_from(statement.subquery())
+        return int((await session.execute(total)).scalar_one())
+
+    @staticmethod
+    def _jargon_statement(tenant: str, *, status: str | None, search: str, tenants: list[str] | None) -> Any:
         scope = list(dict.fromkeys(tenants or [tenant]))
         statement = select(ChatJargon).where(ChatJargon.tenant.in_(scope))
         if status:
             statement = statement.where(ChatJargon.status == status)
-        statement = statement.order_by(ChatJargon.count.desc(), ChatJargon.last_seen.desc()).limit(limit)
-        return list((await session.execute(statement)).scalars().all())
+        keyword = str(search or "").strip()
+        if keyword:
+            statement = statement.where(ChatJargon.term.contains(keyword) | ChatJargon.meaning.contains(keyword))
+        return statement
 
     @with_session
     async def save_jargon_batch(
@@ -826,11 +852,47 @@ class ChatRepository:
         tenant: str,
         *,
         status: str | None = None,
+        search: str = "",
         limit: int = 500,
+        offset: int = 0,
         tenants: list[str] | None = None,
         manual_only: bool = False,
     ) -> list[ChatExpression]:
         """按出现次数读取表达；tenants 合并共享租户，manual_only 只留人工确认项。"""
+        statement = self._expression_statement(
+            tenant, status=status, search=search, tenants=tenants, manual_only=manual_only
+        )
+        statement = statement.order_by(ChatExpression.count.desc(), ChatExpression.updated_at.desc())
+        statement = statement.limit(limit).offset(max(0, offset))
+        return list((await session.execute(statement)).scalars().all())
+
+    @with_session
+    async def count_expressions(
+        self,
+        session: AsyncSession,
+        tenant: str,
+        *,
+        status: str | None = None,
+        search: str = "",
+        tenants: list[str] | None = None,
+        manual_only: bool = False,
+    ) -> int:
+        """统计表达条目总数，筛选条件与列表保持一致。"""
+        statement = self._expression_statement(
+            tenant, status=status, search=search, tenants=tenants, manual_only=manual_only
+        )
+        total = select(func.count()).select_from(statement.subquery())
+        return int((await session.execute(total)).scalar_one())
+
+    @staticmethod
+    def _expression_statement(
+        tenant: str,
+        *,
+        status: str | None,
+        search: str,
+        tenants: list[str] | None,
+        manual_only: bool,
+    ) -> Any:
         scope = list(dict.fromkeys(tenants or [tenant]))
         statement = select(ChatExpression).where(ChatExpression.tenant.in_(scope))
         if status == "active":
@@ -841,8 +903,14 @@ class ChatRepository:
             statement = statement.where(ChatExpression.checked.is_(False))
         if manual_only:
             statement = statement.where(ChatExpression.manual_checked.is_(True))
-        statement = statement.order_by(ChatExpression.count.desc(), ChatExpression.updated_at.desc()).limit(limit)
-        return list((await session.execute(statement)).scalars().all())
+        keyword = str(search or "").strip()
+        if keyword:
+            statement = statement.where(
+                ChatExpression.situation.contains(keyword)
+                | ChatExpression.style.contains(keyword)
+                | ChatExpression.type.contains(keyword)
+            )
+        return statement
 
     @with_session
     async def save_expressions(
@@ -958,8 +1026,63 @@ class ChatRepository:
         file_format: str = "",
         sort: str = "created_at",
         descending: bool = True,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> list[ChatEmoji]:
         """读取租户的表情包索引，可按状态、关键字筛选。"""
+        statement = self._emoji_statement(
+            tenant,
+            enabled_only=enabled_only,
+            registered_only=registered_only,
+            status=status,
+            search=search,
+            file_format=file_format,
+        )
+        columns = {
+            "count": ChatEmoji.count,
+            "last_used": ChatEmoji.last_used,
+            "register_time": ChatEmoji.register_time,
+        }
+        column = columns.get(sort, ChatEmoji.created_at)
+        statement = statement.order_by(column.desc() if descending else column.asc())
+        if limit is not None:
+            statement = statement.limit(limit).offset(max(0, offset))
+        return list((await session.execute(statement)).scalars().all())
+
+    @with_session
+    async def count_emoji_filtered(
+        self,
+        session: AsyncSession,
+        tenant: str,
+        *,
+        enabled_only: bool = False,
+        registered_only: bool = False,
+        status: str = "",
+        search: str = "",
+        file_format: str = "",
+    ) -> int:
+        """统计当前筛选条件下的表情数量。"""
+        statement = self._emoji_statement(
+            tenant,
+            enabled_only=enabled_only,
+            registered_only=registered_only,
+            status=status,
+            search=search,
+            file_format=file_format,
+        )
+        total = select(func.count()).select_from(statement.subquery())
+        return int((await session.execute(total)).scalar_one())
+
+    @staticmethod
+    def _emoji_statement(
+        tenant: str,
+        *,
+        enabled_only: bool,
+        registered_only: bool,
+        status: str,
+        search: str,
+        file_format: str,
+    ) -> Any:
         statement = select(ChatEmoji).where(ChatEmoji.tenant == tenant)
         if enabled_only:
             statement = statement.where(ChatEmoji.enabled.is_(True))
@@ -987,14 +1110,7 @@ class ChatRepository:
         image_format = str(file_format or "").strip().lower().lstrip(".")
         if image_format:
             statement = statement.where(ChatEmoji.path.like(f"%.{image_format}"))
-        columns = {
-            "count": ChatEmoji.count,
-            "last_used": ChatEmoji.last_used,
-            "register_time": ChatEmoji.register_time,
-        }
-        column = columns.get(sort, ChatEmoji.created_at)
-        statement = statement.order_by(column.desc() if descending else column.asc())
-        return list((await session.execute(statement)).scalars().all())
+        return statement
 
     @with_session
     async def get_emoji(self, session: AsyncSession, tenant: str, emoji_hash: str) -> ChatEmoji | None:

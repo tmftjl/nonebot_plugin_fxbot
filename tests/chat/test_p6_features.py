@@ -265,12 +265,14 @@ class ConsoleP6Tests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(chat_routes.chat_repository, "list_emoji", new=AsyncMock(return_value=[row])) as listed,
             patch.object(chat_routes.chat_repository, "count_emoji", new=AsyncMock(return_value=counts)),
+            patch.object(chat_routes.chat_repository, "count_emoji_filtered", new=AsyncMock(return_value=1)),
         ):
             result = await chat_routes.list_emoji(
                 "t", status="registered", search="开心", format="PNG", sort="count", order="asc"
             )
         self.assertEqual(result["counts"], counts)
         self.assertEqual(result["items"][0]["status"], "registered")
+        self.assertEqual(result["total"], 1)
         listed.assert_awaited_once_with(
             "t",
             status="registered",
@@ -278,6 +280,8 @@ class ConsoleP6Tests(unittest.IsolatedAsyncioTestCase):
             file_format="png",
             sort="count",
             descending=False,
+            limit=24,
+            offset=0,
         )
 
         with (

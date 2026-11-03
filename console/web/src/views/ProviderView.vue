@@ -4,6 +4,8 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Refresh, Search } from '@element-plus/icons-vue'
 import PageHeader from '@/components/PageHeader.vue'
+import ListPager from '@/components/ListPager.vue'
+import { usePagination } from '@/composables/usePagination'
 import PillTabs from '@/components/PillTabs.vue'
 import { configApi, providerApi } from '@/api'
 import type {
@@ -137,6 +139,13 @@ const visibleProviders = computed(() => {
   }
   return list
 })
+
+const PROVIDER_PAGE_SIZE = 15
+const {
+  page: providerPage,
+  total: providerTotal,
+  paged: pagedProviders,
+} = usePagination(visibleProviders, PROVIDER_PAGE_SIZE)
 
 const currentTask = computed<ModelRoutingTask | null>(
   () => routing.value?.tasks.find((item) => item.task === selectedTask.value) || null,
@@ -658,7 +667,7 @@ onMounted(() => {
             <span class="toolbar-hint">{{ visibleProviders.length }} 个模型</span>
           </div>
 
-          <el-table v-if="loaded && (visibleProviders.length || providerQuery)" :data="visibleProviders" row-key="name">
+          <el-table v-if="loaded && (visibleProviders.length || providerQuery)" :data="pagedProviders" row-key="name">
             <el-table-column label="模型名称" min-width="220">
               <template #default="{ row }">
                 <div class="model-name">
@@ -719,6 +728,7 @@ onMounted(() => {
             </p>
             <el-button v-if="typeOptions.length" type="primary" @click="openCreateDialog">添加第一个 Provider</el-button>
           </div>
+          <ListPager v-model:page="providerPage" :total="providerTotal" :page-size="PROVIDER_PAGE_SIZE" />
         </section>
       </div>
 

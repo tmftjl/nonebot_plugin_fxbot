@@ -6,6 +6,8 @@ import { Delete, Download, Refresh, Search, Upload } from '@element-plus/icons-v
 import PageHeader from '@/components/PageHeader.vue'
 import PillTabs from '@/components/PillTabs.vue'
 import ChatScopeList from '@/components/ChatScopeList.vue'
+import ListPager from '@/components/ListPager.vue'
+import { usePagination } from '@/composables/usePagination'
 import { amemorixApi, chatApi } from '@/api'
 import type {
   AmemorixBundle,
@@ -223,6 +225,41 @@ const imageDetailVisible = ref(false)
 const imageDetailLoading = ref(false)
 const imageDetail = ref<AmemorixImageDetail | null>(null)
 const imageDetailRow = ref<AmemorixImage | null>(null)
+
+const RECORD_PAGE_SIZE = 20
+const PROFILE_PAGE_SIZE = 20
+const TIMELINE_PAGE_SIZE = 20
+const TASK_PAGE_SIZE = 10
+const {
+  page: recordPage,
+  total: recordTotal,
+  paged: pagedRecords,
+} = usePagination(records, RECORD_PAGE_SIZE)
+const {
+  page: profilePage,
+  total: profileTotal,
+  paged: pagedProfiles,
+} = usePagination(profiles, PROFILE_PAGE_SIZE)
+const {
+  page: timelinePage,
+  total: timelineTotal,
+  paged: pagedTimeline,
+} = usePagination(timelineItems, TIMELINE_PAGE_SIZE)
+const {
+  page: bundlePage,
+  total: bundleTotal,
+  paged: pagedBundles,
+} = usePagination(bundles, TASK_PAGE_SIZE)
+const {
+  page: importPage,
+  total: importTotal,
+  paged: pagedImports,
+} = usePagination(importTasks, TASK_PAGE_SIZE)
+const {
+  page: correctionPage,
+  total: correctionTotal,
+  paged: pagedCorrections,
+} = usePagination(correctionItems, TASK_PAGE_SIZE)
 
 const fileToBase64 = (file: File) =>
   new Promise<string>((resolve, reject) => {
@@ -1090,7 +1127,7 @@ onMounted(async () => {
 
                 <div class="record-list">
                   <div
-                    v-for="row in records"
+                    v-for="row in pagedRecords"
                     :key="recordKey(row)"
                     class="record-row"
                     :class="{ selected: selectedKeys.includes(recordKey(row)) }"
@@ -1119,12 +1156,13 @@ onMounted(async () => {
                   </div>
                   <el-empty v-if="!recordLoading && !records.length" description="没有记忆记录" />
                 </div>
+                <ListPager v-model:page="recordPage" :total="recordTotal" :page-size="RECORD_PAGE_SIZE" />
                 <div class="query-hint">批量修正只支持段落与关系；其他类型请在详情中单独处理。</div>
               </template>
 
               <template v-else>
                 <el-table
-                  :data="profiles"
+                  :data="pagedProfiles"
                   empty-text="还没有生成画像"
                   @row-click="openProfile"
                 >
@@ -1145,6 +1183,7 @@ onMounted(async () => {
                     <template #default="{ row }">{{ row.updated_at || '—' }}</template>
                   </el-table-column>
                 </el-table>
+                <ListPager v-model:page="profilePage" :total="profileTotal" :page-size="PROFILE_PAGE_SIZE" />
               </template>
             </div>
 
@@ -1222,7 +1261,7 @@ onMounted(async () => {
                 <h3 class="panel-title">记忆流</h3>
                 <el-button :icon="Refresh" :loading="timelineLoading" @click="loadTimeline">刷新</el-button>
               </div>
-              <el-table :data="timelineItems" empty-text="没有记忆变更">
+              <el-table :data="pagedTimeline" empty-text="没有记忆变更">
                 <el-table-column label="时间" width="170">
                   <template #default="{ row }">{{ formatTime(row.timestamp) }}</template>
                 </el-table-column>
@@ -1243,6 +1282,7 @@ onMounted(async () => {
                   </template>
                 </el-table-column>
               </el-table>
+              <ListPager v-model:page="timelinePage" :total="timelineTotal" :page-size="TIMELINE_PAGE_SIZE" />
             </div>
 
             <div v-if="activeTab === 'transfer'" class="panel">
@@ -1265,7 +1305,7 @@ onMounted(async () => {
                   已生成
                   <a :href="bundleDownload.url" target="_blank" rel="noopener">{{ bundleDownload.name }}</a>
                 </div>
-                <el-table :data="bundles" empty-text="没有已安装的记忆包">
+                <el-table :data="pagedBundles" empty-text="没有已安装的记忆包">
                   <el-table-column label="名称" min-width="220">
                     <template #default="{ row }">
                       <div class="record-title">{{ row.name || row.package_id }}</div>
@@ -1289,6 +1329,7 @@ onMounted(async () => {
                     </template>
                   </el-table-column>
                 </el-table>
+                <ListPager v-model:page="bundlePage" :total="bundleTotal" :page-size="TASK_PAGE_SIZE" />
               </template>
 
               <template v-else>
@@ -1321,7 +1362,7 @@ onMounted(async () => {
                   </el-button>
                 </div>
                 <h4 class="sub-title">导入任务</h4>
-                <el-table :data="importTasks" empty-text="没有导入任务">
+                <el-table :data="pagedImports" empty-text="没有导入任务">
                   <el-table-column label="任务" min-width="220">
                     <template #default="{ row }">
                       <div class="record-title">{{ row.task_id }}</div>
@@ -1337,6 +1378,7 @@ onMounted(async () => {
                     </template>
                   </el-table-column>
                 </el-table>
+                <ListPager v-model:page="importPage" :total="importTotal" :page-size="TASK_PAGE_SIZE" />
               </template>
             </div>
 
@@ -1360,7 +1402,7 @@ onMounted(async () => {
                     <el-button :icon="Refresh" :loading="correctionLoading" @click="loadCorrections">刷新</el-button>
                   </div>
                 </div>
-                <el-table :data="correctionItems" empty-text="没有纠正记录">
+                <el-table :data="pagedCorrections" empty-text="没有纠正记录">
                   <el-table-column type="expand">
                     <template #default="{ row }">
                       <pre class="json-block">{{ JSON.stringify(row.detail, null, 2) }}</pre>
@@ -1388,6 +1430,7 @@ onMounted(async () => {
                     </template>
                   </el-table-column>
                 </el-table>
+                <ListPager v-model:page="correctionPage" :total="correctionTotal" :page-size="TASK_PAGE_SIZE" />
               </template>
 
               <template v-else-if="inspectMode === 'runtime'">

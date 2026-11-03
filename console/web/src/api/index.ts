@@ -170,16 +170,28 @@ export const chatApi = {
     api.put<{ style: ChatStyle }>('/chat/style', { tenant, manual_override: manualOverride }),
   deleteStyle: (tenant: string) =>
     api.delete<{ deleted: boolean }>(`/chat/style?tenant=${encodeURIComponent(tenant)}`),
-  listJargon: (tenant: string, status = 'all') =>
-    api.get<{ items: ChatJargon[] }>(
-      `/chat/jargon?tenant=${encodeURIComponent(tenant)}&status=${encodeURIComponent(status)}`,
-    ),
+  listJargon: (
+    tenant: string,
+    options: { status?: string; search?: string; limit?: number; offset?: number } = {},
+  ) => {
+    const params = new URLSearchParams({ tenant, status: options.status || 'all' })
+    if (options.search) params.set('search', options.search)
+    if (options.limit != null) params.set('limit', String(options.limit))
+    if (options.offset != null) params.set('offset', String(options.offset))
+    return api.get<{ items: ChatJargon[]; total: number }>(`/chat/jargon?${params.toString()}`)
+  },
   deleteJargon: (tenant: string, id: number) =>
     api.delete<{ deleted: boolean }>(`/chat/jargon/${id}?tenant=${encodeURIComponent(tenant)}`),
-  listExpressions: (tenant: string, status = 'all') =>
-    api.get<{ items: ChatExpression[] }>(
-      `/chat/expression?tenant=${encodeURIComponent(tenant)}&status=${encodeURIComponent(status)}`,
-    ),
+  listExpressions: (
+    tenant: string,
+    options: { status?: string; search?: string; limit?: number; offset?: number } = {},
+  ) => {
+    const params = new URLSearchParams({ tenant, status: options.status || 'all' })
+    if (options.search) params.set('search', options.search)
+    if (options.limit != null) params.set('limit', String(options.limit))
+    if (options.offset != null) params.set('offset', String(options.offset))
+    return api.get<{ items: ChatExpression[]; total: number }>(`/chat/expression?${params.toString()}`)
+  },
   reviewExpression: (tenant: string, id: number, rejected: boolean) =>
     api.patch<{ rejected: boolean }>(
       `/chat/expression/${id}?tenant=${encodeURIComponent(tenant)}&rejected=${rejected}`,
@@ -194,7 +206,15 @@ export const chatApi = {
     api.get<ChatReplyGate>(`/chat/gate?tenant=${encodeURIComponent(tenant)}&limit=${limit}`),
   listEmoji: (
     tenant: string,
-    options: { status?: string; search?: string; format?: string; sort?: string; order?: string } = {},
+    options: {
+      status?: string
+      search?: string
+      format?: string
+      sort?: string
+      order?: string
+      limit?: number
+      offset?: number
+    } = {},
   ) => {
     const params = new URLSearchParams({ tenant })
     if (options.status) params.set('status', options.status)
@@ -202,7 +222,11 @@ export const chatApi = {
     if (options.format) params.set('format', options.format)
     if (options.sort) params.set('sort', options.sort)
     if (options.order) params.set('order', options.order)
-    return api.get<{ items: ChatEmoji[]; counts: ChatEmojiCounts }>(`/chat/emoji?${params.toString()}`)
+    if (options.limit != null) params.set('limit', String(options.limit))
+    if (options.offset != null) params.set('offset', String(options.offset))
+    return api.get<{ items: ChatEmoji[]; counts: ChatEmojiCounts; total: number }>(
+      `/chat/emoji?${params.toString()}`,
+    )
   },
   uploadEmoji: (tenant: string, content: string, description = '', tags: string[] = []) =>
     api.post<{ item: ChatEmoji; warning?: string }>('/chat/emoji', { tenant, content, description, tags }),

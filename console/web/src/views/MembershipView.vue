@@ -4,6 +4,8 @@ import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus as UploadIcon } from '@element-plus/icons-vue'
 import PageHeader from '@/components/PageHeader.vue'
+import ListPager from '@/components/ListPager.vue'
+import { usePagination } from '@/composables/usePagination'
 import { dataApi, configApi, renewalApi, metaApi } from '@/api'
 import type { GroupRecord, RenewalCode } from '@/types/api'
 import type { UploadFile } from 'element-plus'
@@ -150,6 +152,13 @@ const pagedGroups = computed(() => {
 })
 
 const totalPages = computed(() => Math.ceil(filteredGroups.value.length / pageSize.value))
+
+const CODE_PAGE_SIZE = 12
+const {
+  page: codePage,
+  total: codeTotal,
+  paged: pagedCodes,
+} = usePagination(codes, CODE_PAGE_SIZE)
 
 const loadData = async () => {
   try {
@@ -649,7 +658,7 @@ onMounted(() => {
           <h4 class="section-subtitle">待使用的续费码</h4>
           <div class="codes-grid">
             <div v-if="codes.length === 0" class="empty-state">暂无待使用的续费码</div>
-            <div v-for="c in codes" :key="c.code" class="code-card">
+            <div v-for="c in pagedCodes" :key="c.code" class="code-card">
               <div class="code-info">
                 <div class="code-value">{{ c.code }}</div>
                 <div class="code-meta">{{ c.length }}{{ c.unit }}</div>
@@ -657,6 +666,7 @@ onMounted(() => {
               <button class="btn-copy" @click="copyCode(c.code)">复制</button>
             </div>
           </div>
+          <ListPager v-model:page="codePage" :total="codeTotal" :page-size="CODE_PAGE_SIZE" />
         </div>
       </div>
     </div>

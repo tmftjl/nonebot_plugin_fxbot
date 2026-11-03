@@ -3,6 +3,8 @@
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import PageHeader from '@/components/PageHeader.vue'
+import ListPager from '@/components/ListPager.vue'
+import { usePagination } from '@/composables/usePagination'
 import { metaApi } from '@/api'
 
 interface PersonaItem {
@@ -82,6 +84,13 @@ const loadingKnowledge = ref(false)
 const importText = ref('')
 
 const form = ref<PersonaForm>(emptyForm())
+
+const PERSONA_PAGE_SIZE = 12
+const {
+  page: personaPage,
+  total: personaTotal,
+  paged: pagedPersonas,
+} = usePagination(personas, PERSONA_PAGE_SIZE)
 
 const initial = (key: string): string => (key ? key.slice(0, 1).toUpperCase() : '?')
 
@@ -267,7 +276,7 @@ onMounted(() => {
     </div>
 
     <div v-else class="persona-grid">
-      <article v-for="item in personas" :key="item.key" class="persona-card">
+      <article v-for="item in pagedPersonas" :key="item.key" class="persona-card">
         <div class="persona-top">
           <div class="persona-avatar" :class="{ primary: item.key === defaultPersona }">
             {{ initial(item.key) }}
@@ -295,6 +304,7 @@ onMounted(() => {
         </div>
       </article>
     </div>
+    <ListPager v-model:page="personaPage" :total="personaTotal" :page-size="PERSONA_PAGE_SIZE" />
 
     <el-dialog
       v-model="dialogVisible"

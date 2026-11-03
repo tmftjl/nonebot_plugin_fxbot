@@ -309,20 +309,32 @@ async def delete_style(tenant: str) -> dict[str, bool]:
 
 
 @router.get("/jargon")
-async def list_jargon(tenant: str, status: str = "all") -> dict[str, Any]:
-    """列出黑话条目，可按 active/rejected 过滤。"""
+async def list_jargon(
+    tenant: str,
+    status: str = "all",
+    search: str = "",
+    limit: int = 20,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """分页列出黑话条目，可按状态和关键字过滤。"""
     tenant = _tenant(tenant)
     if status not in {"all", "active", "rejected"}:
         raise HTTPException(status_code=400, detail="status 只能是 all/active/rejected")
+    limit = max(1, min(200, int(limit)))
+    offset = max(0, int(offset))
+    selected = None if status == "all" else status
     try:
         rows = await chat_repository.list_jargon(
             tenant,
-            status=None if status == "all" else status,
-            limit=1000,
+            status=selected,
+            search=search,
+            limit=limit,
+            offset=offset,
         )
+        total = await chat_repository.count_jargon(tenant, status=selected, search=search)
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail="聊天数据库尚未就绪") from exc
-    return {"items": [_jargon_payload(row) for row in rows]}
+    return {"items": [_jargon_payload(row) for row in rows], "total": total}
 
 
 @router.delete("/jargon/{jargon_id}")
@@ -339,20 +351,32 @@ async def delete_jargon(jargon_id: int, tenant: str) -> dict[str, bool]:
 
 
 @router.get("/expression")
-async def list_expressions(tenant: str, status: str = "all") -> dict[str, Any]:
-    """列出表达条目，可按 active/rejected/unchecked 过滤。"""
+async def list_expressions(
+    tenant: str,
+    status: str = "all",
+    search: str = "",
+    limit: int = 20,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """分页列出表达条目，可按状态和关键字过滤。"""
     tenant = _tenant(tenant)
     if status not in {"all", "active", "rejected", "unchecked"}:
         raise HTTPException(status_code=400, detail="status 只能是 all/active/rejected/unchecked")
+    limit = max(1, min(200, int(limit)))
+    offset = max(0, int(offset))
+    selected = None if status == "all" else status
     try:
         rows = await chat_repository.list_expressions(
             tenant,
-            status=None if status == "all" else status,
-            limit=1000,
+            status=selected,
+            search=search,
+            limit=limit,
+            offset=offset,
         )
+        total = await chat_repository.count_expressions(tenant, status=selected, search=search)
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail="聊天数据库尚未就绪") from exc
-    return {"items": [_expression_payload(row) for row in rows]}
+    return {"items": [_expression_payload(row) for row in rows], "total": total}
 
 
 @router.patch("/expression/{expression_id}")
@@ -394,22 +418,36 @@ async def list_emoji(
     format: str = "",
     sort: str = "created_at",
     order: str = "desc",
+    limit: int = 24,
+    offset: int = 0,
 ) -> dict[str, Any]:
-    """列出租户的表情包索引，可按状态、格式、关键字筛选并统计。"""
+    """分页列出租户的表情包索引，可按状态、格式、关键字筛选并统计。"""
     tenant = _tenant(tenant)
+    limit = max(1, min(200, int(limit)))
+    offset = max(0, int(offset))
+    selected_status = status if status in _EMOJI_STATUSES else ""
+    selected_format = format.lower().lstrip(".") if format.lower().lstrip(".") in _EMOJI_FORMATS else ""
     try:
         rows = await chat_repository.list_emoji(
             tenant,
-            status=status if status in _EMOJI_STATUSES else "",
+            status=selected_status,
             search=search,
-            file_format=format.lower().lstrip(".") if format.lower().lstrip(".") in _EMOJI_FORMATS else "",
+            file_format=selected_format,
             sort=sort if sort in _EMOJI_SORTS else "created_at",
             descending=order != "asc",
+            limit=limit,
+            offset=offset,
         )
         counts = await chat_repository.count_emoji(tenant)
+        total = await chat_repository.count_emoji_filtered(
+            tenant,
+            status=selected_status,
+            search=search,
+            file_format=selected_format,
+        )
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail="聊天数据库尚未就绪") from exc
-    return {"items": [_emoji_payload(row) for row in rows], "counts": counts}
+    return {"items": [_emoji_payload(row) for row in rows], "counts": counts, "total": total}
 
 
 @router.post("/emoji")
