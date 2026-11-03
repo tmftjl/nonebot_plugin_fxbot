@@ -88,6 +88,18 @@ def can_reply(chat: dict[str, Any] | None = None) -> bool:
     return bool(chat.get("enabled", True)) and bool(schedule_status(chat)["allowed"])
 
 
+def work_life_prompt(chat: dict[str, Any]) -> str:
+    """作息开关启用时为 Planner 和回复器提供一致的生活背景。"""
+    if not chat.get("rest_time_no_reply", False):
+        return ""
+    work_time = str(chat.get("work_time", "08:30-17:30"))
+    return (
+        "[日常作息]\n"
+        f"北京时间 {work_time}，仅法定工作日（含调休补班）上班时水群；"
+        "休息时忙着打游戏、看电视、出去玩，不上线回复。被问时自然解释，不反复强调或编造具体经历。"
+    )
+
+
 async def refresh_calendar() -> None:
     """启动、启用及每日更新相邻年度，失败保留最近一次有效文件。"""
     if not get_config_manager().get_system()["chat"].get("rest_time_no_reply", False):

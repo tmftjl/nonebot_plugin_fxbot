@@ -101,6 +101,53 @@ class ConversationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("你刚刚已经回复过这条消息", guidance)
         self.assertIn("之前的回答", guidance)
 
+    async def test_reply_target_keeps_its_own_sender_role(self) -> None:
+        self.request.metadata["sender_role"] = "owner"
+        self.store.get("tenant-a")[0]["_sender_role"] = "member"
+        self.provider.chat.side_effect = [
+            LLMResponse(tool_calls=[call("reply", msg_id="m1", reply_reference="回答这条消息")]),
+            LLMResponse(tool_calls=[call("stop")]),
+        ]
+        await conversation.run(self.service, self.context)
+        self.assertEqual(self.service._process_locked.await_args.args[0].metadata["sender_role"], "member")
+
+    async def test_reply_to_a_quoted_message_does_not_target_its_quote_author(self) -> None:
+        snapshot = {"message_id": "quoted", "sender_id": "other", "sender_name": "张三", "text": "原文"}
+        self.store.get("tenant-a")[0].update({"_quote_snapshot": snapshot, "_quote_ids": ["quoted"]})
+        self.provider.chat.side_effect = [
+            LLMResponse(tool_calls=[call("reply", msg_id="m1", reply_reference="回答当前用户的引用问题")]),
+            LLMResponse(tool_calls=[call("stop")]),
+        ]
+        await conversation.run(self.service, self.context)
+        child = self.service._process_locked.await_args.args[0]
+        self.assertEqual((child.user_id, child.message_id, child.reply_to_message_id), ("user", "m1", "m1"))
+        self.assertEqual(child.metadata["target_quote_ids"], ["quoted"])
+        self.assertEqual(child.metadata["quote_snapshot"], snapshot)
+
+    async def test_selected_history_does_not_inherit_trigger_message_quote(self) -> None:
+        self.request.metadata["quote_snapshot"] = {"message_id": "wrong", "sender_name": "不是目标引用的人"}
+        snapshot = {"message_id": "quoted", "sender_name": "原作者", "text": "目标引用原文"}
+        self.store.append(
+            "tenant-a",
+            {
+                "role": "user",
+                "content": "旧用户的问题",
+                "_source_ids": ["old"],
+                "_sender_id": "old-user",
+                "_quote_ids": ["quoted"],
+                "_quote_snapshot": snapshot,
+            },
+        )
+        self.provider.chat.side_effect = [
+            LLMResponse(tool_calls=[call("reply", msg_id="old", reply_reference="回答旧问题")]),
+            LLMResponse(tool_calls=[call("stop")]),
+        ]
+        with patch.object(conversation.chat_repository, "message_by_identity", AsyncMock(return_value=None)):
+            await conversation.run(self.service, self.context)
+        child = self.service._process_locked.await_args.args[0]
+        self.assertEqual(child.metadata["quote_snapshot"], snapshot)
+        self.assertEqual(child.user_id, "old-user")
+
     async def test_passive_reply_target_is_frozen_before_model_request(self) -> None:
         async def generate(**kwargs):
             self.store.append("tenant-a", {"role": "user", "content": "后来到的消息", "_source_ids": ["later"]})

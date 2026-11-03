@@ -23,6 +23,7 @@ from .vision import describe_images, vision_configured
 from ..config import get_manager as get_config_manager
 from .replyer import prompt, generator
 from .session import ChatSessionStore, history_limit, default_session_store
+from ..adapter import get_bot_group_role
 from ..utils.tz import now
 from .providers import LLMResponse
 from .heart_flow import plan_flow, conversation
@@ -145,6 +146,8 @@ class ChatService:
             reply_to_message_id=request.reply_to_message_id,
             occurred_at=request.occurred_at,
             has_at_bot=bool(request.metadata.get("has_at_bot")),
+            sender_role=request.metadata.get("sender_role"),
+            quote_snapshot=request.metadata.get("quote_snapshot"),
         )
         request.metadata["history_recorded"] = True
         request.metadata["history_appended"] = True
@@ -465,6 +468,8 @@ class ChatService:
         occurred_at: datetime | None = None,
         memory_images: list[tuple[str, str | bytes]] | None = None,
         has_at_bot: bool = False,
+        sender_role: str | None = None,
+        quote_snapshot: dict[str, str] | None = None,
     ) -> None:
         """记录群聊或私聊的上下文消息，图片同样转成文字描述写入历史。"""
         images = list(images or [])
@@ -494,6 +499,8 @@ class ChatService:
             occurred_at=occurred_at,
             memory_images=memory_images,
             has_at_bot=has_at_bot,
+            sender_role=sender_role if is_group else None,
+            quote_snapshot=quote_snapshot,
         )
         if active := self._active_requests.get(session_id):
             active.metadata["planner_pending"] = True
@@ -566,6 +573,7 @@ class ChatService:
         proactive = is_proactive(request) and focus_instruction is None
         user_content = prompt.build_user_content(request)
         current_content = prompt.truncate_content(user_content)
+        request.metadata["bot_group_role"] = await get_bot_group_role(getattr(runtime, "bot", None), request.group_id)
         effective_persona, persona_text = prompt.build_persona_text(request, chat_cfg, behavior)
         request.metadata["bot_name"] = effective_persona
         request.metadata["bot_id"] = str(getattr(getattr(runtime, "bot", None), "self_id", "") or "")
@@ -591,6 +599,8 @@ class ChatService:
                         sender_name=request.user_name,
                         quote_id=request.reply_to_message_id or "",
                         at_bot=bool(request.metadata.get("has_at_bot")),
+                        sender_role=request.metadata.get("sender_role") if request.is_group else None,
+                        quote_snapshot=request.metadata.get("quote_snapshot"),
                     )
                 )
                 source_ids = request.source_message_ids or ([request.message_id] if request.message_id else [])

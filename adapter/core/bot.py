@@ -207,6 +207,14 @@ class PlatformAdapter(ABC):
     async def get_group_member(self, bot: Any, group_id: str, user_id: str) -> Any:
         return await self._unsupported("获取成员信息")
 
+    async def get_bot_group_role(self, bot: Any, group_id: str) -> str | None:
+        """读取机器人自身群身份，未实现的平台不假定任何角色。"""
+        return await self._unsupported("获取机器人群身份")
+
+    def event_sender_role(self, event: Any) -> str | None:
+        """读取事件自带的发言人群身份，未实现的平台返回未知。"""
+        return None
+
     async def get_group_member_name(self, bot: Any, group_id: str, user_id: str, event: Any = None) -> str:
         """获取群成员昵称。"""
         member = await self.get_group_member(bot, group_id, user_id)

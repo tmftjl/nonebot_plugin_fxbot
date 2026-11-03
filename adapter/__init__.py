@@ -1,5 +1,11 @@
 """适配器抽象层。"""
 
+from __future__ import annotations
+
+import asyncio
+
+from nonebot import logger
+
 from .uninfo import (
     Role,
     User,
@@ -47,6 +53,7 @@ from .core.bot import (
     event_message_type,
     extract_message_target,
 )
+from ..utils.cache import cache
 from .platforms.qq import QQOfficialMessageAdapter
 from .core.registry import register_adapter, get_platform_adapter
 from .platforms.onebot11 import OneBotV11MessageAdapter
@@ -58,6 +65,39 @@ register_message_adapter = register_adapter
 
 def get_message_adapter(bot):
     return get_platform_adapter(bot)
+
+
+def event_sender_role(bot, event) -> str | None:
+    """仅提取当前事件自带的群角色，业务层无需识别平台字段。"""
+    try:
+        return get_platform_adapter(bot).event_sender_role(event)
+    except Exception:
+        logger.opt(exception=True).debug("[adapter] 读取发言人群身份失败，省略该信息")
+        return None
+
+
+async def get_bot_group_role(bot, group_id: str | None) -> str | None:
+    """读取机器人自身群角色，成功缓存五分钟，失败缓存三十秒。"""
+    self_id = str(getattr(bot, "self_id", "") or "")
+    if not self_id or not group_id:
+        return None
+    adapter = getattr(bot, "adapter", None)
+    key = ("adapter_bot_group_role", type(adapter).__module__, type(adapter).__qualname__, self_id, str(group_id))
+    saved = cache.get(key)
+    if saved is not None:
+        return saved["role"]
+    try:
+        role = await asyncio.wait_for(get_platform_adapter(bot).get_bot_group_role(bot, str(group_id)), timeout=2)
+    except UnsupportedCapability:
+        logger.debug("[adapter] 平台不支持读取机器人群身份，省略该信息")
+        role = None
+    except Exception:
+        logger.opt(exception=True).debug("[adapter] 读取机器人群身份失败，省略该信息")
+        role = None
+    if not isinstance(role, str) or role not in {"owner", "admin", "member"}:
+        role = None
+    cache.set(key, {"role": role}, ttl=300 if role else 30)
+    return role
 
 
 def build_message_segment(bot, segment_type, data=None):

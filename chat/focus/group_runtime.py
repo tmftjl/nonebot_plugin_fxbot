@@ -22,10 +22,11 @@ from ..types import ChatRequest, speaker_label
 from .context import FocusEntry, FocusCheckpointStore, closed_entry, restore_entries
 from ...config import get_manager as get_config_manager
 from ..service import chat_service, _memory_block
+from ...adapter import get_bot_group_role
 from ..personas import DEFAULT_PERSONA, effective_persona_name
 from ...utils.tz import now
 from ..memory.models import ChatPlannerSample
-from ..work_schedule import can_reply
+from ..work_schedule import can_reply, work_life_prompt
 from ..replyer.prompt import recall_query, strip_images, build_persona_text, build_user_content
 from ..context_summary import SUMMARY_HEADER, clear_summary, compact_messages, planner_snapshot
 from ..message_context import render_message, message_metadata
@@ -274,6 +275,8 @@ class FocusGroupRuntime:
                     sender_name=request.user_name,
                     quote_id=request.reply_to_message_id or "",
                     at_bot=bool(request.metadata.get("has_at_bot")),
+                    sender_role=request.metadata.get("sender_role") if request.is_group else None,
+                    quote_snapshot=request.metadata.get("quote_snapshot"),
                 ),
             },
             bot_name=effective_persona_name(session_id),
@@ -341,6 +344,7 @@ class FocusGroupRuntime:
                 row = await chat_repository.message_by_identity(member.session_id, target)
                 if row is None:
                     raise ValueError("回复目标不属于当前会话")
+                source_context = json.loads(row.payload or "{}").get("context", {})
                 request = replace(
                     request,
                     user_id=row.sender_id,
@@ -350,6 +354,13 @@ class FocusGroupRuntime:
                     images=[],
                     source_message_ids=[target],
                     source_author_ids=[row.sender_id],
+                    metadata={
+                        **request.metadata,
+                        "sender_role": source_context.get("_sender_role"),
+                        "quote_snapshot": source_context.get("_quote_snapshot"),
+                        "target_quote_ids": source_context.get("_quote_ids")
+                        or ([row.reply_to_message_id] if row.reply_to_message_id else []),
+                    },
                 )
             request.metadata["reply_target_id"] = target
             if style := options.get("reply_style"):
@@ -640,6 +651,8 @@ class FocusGroupRuntime:
             kind = "群聊" if member.is_group else "私聊"
             name = member.request.user_name or member.request.user_id
             lines.append(f"- {session_id}（{kind}，最近发言者：{name}）")
+        if routine := work_life_prompt(chat):
+            lines.extend(["", routine])
         return "\n".join(lines)
 
     async def _build_references(self) -> list[str]:
@@ -655,6 +668,7 @@ class FocusGroupRuntime:
                 continue
             request = member.request
             try:
+                request.metadata["bot_group_role"] = await get_bot_group_role(member.bot, request.group_id)
                 _, persona_text = build_persona_text(request, chat_cfg, behavior)
                 memory = await _memory_block(request, recall_query(request, []))
             except Exception:

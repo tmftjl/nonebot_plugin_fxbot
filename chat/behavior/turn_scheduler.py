@@ -143,6 +143,8 @@ class NormalChatScheduler:
                         "user_id": request.user_id,
                         "user_name": request.user_name,
                         "text": request.text,
+                        "role": request.metadata.get("sender_role"),
+                        "quote_snapshot": request.metadata.get("quote_snapshot"),
                     }
                     for request in snapshot
                 }

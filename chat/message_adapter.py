@@ -27,6 +27,7 @@ from ..adapter import (
     event_group_id,
     event_user_name,
     event_plain_text,
+    event_sender_role,
     extract_forward_ids,
     get_platform_adapter,
     extract_raw_emoji_sources,
@@ -34,6 +35,8 @@ from ..adapter import (
 )
 from ..utils.tz import now, to_naive_utc
 from ..utils.http import ResponseTooLargeError, read_limited, ensure_public_http_url, get_shared_async_client
+from ..utils.cache import cache
+from .message_context import quote_preview
 
 _MAX_IMAGE_COUNT = 64
 _MAX_IMAGE_BYTES = 16 * 1024 * 1024
@@ -274,31 +277,50 @@ async def load_images(sources: list[str | bytes]) -> list[str]:
     return images
 
 
-def _quoted_sender(reply: ReplyInfo) -> str:
-    """引用消息的发言人标识，拿不到昵称时只显示 ID。"""
-    name = " ".join(str(reply.sender_name or "").split())[:32]
-    if name and reply.sender_id:
-        return f"{name}({reply.sender_id})"
-    return name or str(reply.sender_id or "")
+def _quote_snapshot(reply: ReplyInfo | None) -> dict[str, str] | None:
+    """把适配器的引用结果压成可持久化的短预览。"""
+    if reply is None:
+        return None
+    return {
+        "message_id": str(reply.message_id) if reply.message_id is not None else "",
+        "sender_id": str(reply.sender_id or ""),
+        "sender_name": " ".join(str(reply.sender_name or "").split())[:32],
+        "text": " ".join(" ".join(str(part) for part in reply.texts).split())[:_MAX_QUOTED_CHARS],
+    }
 
 
 def _quoted_text(reply: ReplyInfo | None) -> str:
     """提取引用消息正文和发言人；压成单行并限长，避免被用来伪造多段消息。"""
-    if reply is None:
-        return ""
-    text = " ".join(" ".join(str(part) for part in reply.texts).split())[:_MAX_QUOTED_CHARS]
-    sender = _quoted_sender(reply)
-    label = f"[引用 {sender}]" if sender else "[引用]"
-    return f"{label} {text}" if text else label
+    return quote_preview(_quote_snapshot(reply))
 
 
 async def _reply_info(bot: Any, event: Any) -> ReplyInfo | None:
     """读取引用消息信息，失败时按无引用处理。"""
     try:
-        return await get_platform_adapter(bot).get_reply_info(bot, event)
+        adapter = get_platform_adapter(bot)
+        _, target = adapter.reply_target(event)
+        if target is None and not adapter.has_reply_reference(event):
+            return None
+        key = (
+            "chat_reply_info",
+            session_id_for_event(bot, event),
+            adapter.event_message_id(event) or id(event),
+            str(target),
+        )
+        saved = cache.get(key)
+        if saved is not None:
+            return saved["info"]
+        info = await adapter.get_reply_info(bot, event)
+        cache.set(key, {"info": info}, ttl=60)
+        return info
     except Exception:
         logger.opt(exception=True).warning("[Chat] 读取引用消息失败")
         return None
+
+
+async def read_quote_snapshot(bot: Any, event: Any) -> dict[str, str] | None:
+    """普通上下文和 Focus 共用同一次引用读取。"""
+    return _quote_snapshot(await _reply_info(bot, event))
 
 
 def _segment_name(segment: Any) -> str:
@@ -511,6 +533,8 @@ async def adapt_message_event(bot: Any, event: Any, *, trigger_kind: TriggerKind
         metadata={
             "event": event,
             "received_at": received_at.isoformat(),
+            "sender_role": event_sender_role(bot, event),
+            "quote_snapshot": _quote_snapshot(reply),
             "raw_images": [source for _, source in memory_image_sources(event)],
             "raw_image_paths": [path for path, _ in memory_image_sources(event)],
         },

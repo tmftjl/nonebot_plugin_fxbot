@@ -79,6 +79,8 @@ async def rebuild_messages(service: Any, context: PlanContext) -> list[dict[str,
             setattr(request, key, getattr(latest, key))
         for key in ("has_at_bot", "at_other"):
             request.metadata[key] = latest.metadata.get(key, False)
+        request.metadata["sender_role"] = latest.metadata.get("sender_role")
+        request.metadata["quote_snapshot"] = latest.metadata.get("quote_snapshot")
         context.current_content = build_user_content(latest)
     if runtime := context.request.metadata.pop("planner_latest_runtime", None):
         context.runtime = runtime

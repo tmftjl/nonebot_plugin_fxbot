@@ -104,6 +104,60 @@ class WorkTimeTests(unittest.TestCase):
         self.assertEqual(fields["rest_time_no_reply"]["component"], "Switch")
 
 
+class WorkLifePromptTests(unittest.TestCase):
+    """日常作息设定只在已有开关开启时注入各模型入口。"""
+
+    def test_disabled_switch_adds_no_persona_setting(self) -> None:
+        self.assertEqual(schedule.work_life_prompt(config(rest_time_no_reply=False)), "")
+        self.assertEqual(schedule.work_life_prompt({}), "")
+
+    def test_setting_uses_configured_hours_without_inventing_specific_events(self) -> None:
+        prompt = schedule.work_life_prompt(config(work_time="09:15-18:45"))
+        for text in ("09:15-18:45", "调休补班", "打游戏", "看电视", "出去玩", "不反复强调或编造具体经历"):
+            self.assertIn(text, prompt)
+        self.assertNotIn("08:30-17:30", prompt)
+        self.assertLess(len(prompt), 120)
+
+    def test_normal_planner_and_replyer_follow_switch_and_hot_reload(self) -> None:
+        from src.plugins.nonebot_plugin_fxbot.chat.replyer.prompt import build_persona_text
+
+        for group_id in ("group", None):
+            for metadata in ({"planner_loop": True}, {"planner_loop": True, "planner_reply": True}):
+                with self.subTest(group_id=group_id, metadata=metadata):
+                    request = ChatRequest(
+                        "work-life-test",
+                        "user",
+                        group_id,
+                        "昨天下班干嘛去了",
+                        "turn",
+                        "msg",
+                        "mention",
+                        metadata=metadata,
+                    )
+                    chat = {**config(), "persona": "小鱼"}
+                    _, prompt = build_persona_text(request, chat, {})
+                    self.assertEqual(prompt.count("[日常作息]"), 1)
+                    self.assertIn("08:30-17:30", prompt)
+                    chat["work_time"] = "09:00-18:00"
+                    _, updated = build_persona_text(request, chat, {})
+                    self.assertIn("09:00-18:00", updated)
+                    chat["rest_time_no_reply"] = False
+                    _, disabled = build_persona_text(request, chat, {})
+                    self.assertNotIn("[日常作息]", disabled)
+
+    def test_focus_planner_follows_same_switch(self) -> None:
+        from src.plugins.nonebot_plugin_fxbot.chat.focus import group_runtime
+
+        chat = {**config(), "persona": "小鱼"}
+        manager = SimpleNamespace(get_system=lambda: {"chat": chat})
+        group = FocusGroupRuntime("work-life-test")
+        with patch.object(group_runtime, "get_config_manager", return_value=manager):
+            self.assertEqual(group._system_prompt().count("[日常作息]"), 1)
+            self.assertIn("打游戏", group._system_prompt())
+            chat["rest_time_no_reply"] = False
+            self.assertNotIn("[日常作息]", group._system_prompt())
+
+
 class CalendarRefreshTests(unittest.IsolatedAsyncioTestCase):
     """校验下载成功持久化、断网续用及坏数据不覆盖。"""
 

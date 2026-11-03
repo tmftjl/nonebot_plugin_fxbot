@@ -24,6 +24,7 @@ from ..adapter import (
     event_group_id,
     event_user_name,
     event_plain_text,
+    event_sender_role,
     extract_message_target,
     extract_raw_image_sources,
 )
@@ -38,6 +39,7 @@ from .message_adapter import (
     collect_mentions,
     adapt_message_event,
     message_occurred_at,
+    read_quote_snapshot,
     memory_image_sources,
     session_id_for_event,
     image_sources_for_event,
@@ -263,6 +265,8 @@ async def _handle_context(bot: Bot, event: Event) -> None:
         memory_images=memory_image_sources(event),
         has_at_bot=mention_flags(bot, event)[0],
         occurred_at=message_occurred_at(event),
+        sender_role=event_sender_role(bot, event),
+        quote_snapshot=await read_quote_snapshot(bot, event),
     )
     if not can_reply(_chat_cfg()):
         return
@@ -357,6 +361,8 @@ async def _handle_ai_fallback(bot: Bot, event: Event, matcher: Matcher) -> None:
         occurred_at=request.occurred_at,
         memory_images=list(zip(request.metadata.get("raw_image_paths", []), request.metadata.get("raw_images", []))),
         has_at_bot=mention_flags(bot, event)[0],
+        sender_role=request.metadata.get("sender_role"),
+        quote_snapshot=request.metadata.get("quote_snapshot"),
     )
     request.metadata.update({"history_recorded": True, "history_appended": True})
     has_at_bot, at_other = mention_flags(bot, event)

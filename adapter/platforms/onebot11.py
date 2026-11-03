@@ -3,13 +3,25 @@
 from __future__ import annotations
 
 import time
+import asyncio
 from typing import Any
 from pathlib import Path
 
+from nonebot import logger
 from nonebot.adapters import Bot
 from nonebot.adapters.onebot.v11 import Bot as OneBotV11Bot
 
-from ..core.bot import RecallInfo, PlatformAdapter, _image_bytes
+from ..core.bot import ReplyInfo, RecallInfo, PlatformAdapter, UnsupportedCapability, _image_bytes
+
+
+def _member_role(member: Any, user_id: str) -> str | None:
+    """规范化接口字典或事件发送者对象，缺失身份时不推测。"""
+    value = member.get if isinstance(member, dict) else lambda key: getattr(member, key, None)
+    member_id = value("user_id")
+    if member_id is not None and str(member_id) != str(user_id):
+        return None
+    role = str(value("role") or "")
+    return role if role in {"owner", "admin", "member"} else None
 
 
 class OneBotV11MessageAdapter(PlatformAdapter):
@@ -18,6 +30,12 @@ class OneBotV11MessageAdapter(PlatformAdapter):
     def event_id(self, event: Any) -> str | None:
         """OneBot V11 不提供事件 ID。"""
         return None
+
+    def event_sender_role(self, event: Any) -> str | None:
+        """直接读取群消息发送者身份，不调用任何成员查询接口。"""
+        if not self.event_group_id(event):
+            return None
+        return _member_role(getattr(event, "sender", None), self.event_user_id(event))
 
     def event_message_id(self, event: Any) -> str | None:
         """读取 OneBot V11 消息 ID。"""
@@ -145,8 +163,59 @@ class OneBotV11MessageAdapter(PlatformAdapter):
     def reply_sender_id(self, event: Any) -> str | None:
         """读取被引用消息的发送者 QQ 号。"""
         sender = getattr(getattr(event, "reply", None), "sender", None)
-        user_id = getattr(sender, "user_id", None)
+        user_id = sender.get("user_id") if isinstance(sender, dict) else getattr(sender, "user_id", None)
         return str(user_id) if user_id is not None else None
+
+    async def get_reply_info(self, bot: Any, event: Any) -> ReplyInfo | None:
+        """优先使用事件引用，缺失时一次获取原文和作者，避免只拿到正文。"""
+        reply, message_id = self.reply_target(event)
+        if message_id is None and not self.has_reply_reference(event):
+            return None
+        message = getattr(reply, "message", None)
+        sender_id = self.reply_sender_id(event)
+        sender_name = self.reply_sender_name(event)
+        if message_id is not None and (message is None or not sender_id or not sender_name):
+            try:
+                result = await asyncio.wait_for(self.get_message(bot, message_id), timeout=2)
+            except UnsupportedCapability:
+                result = None
+            except Exception:
+                logger.opt(exception=True).warning("[adapter] 获取引用原文和作者失败")
+                result = None
+            if isinstance(result, dict):
+                group_id = self.event_group_id(event)
+                result_group = result.get("group_id")
+                same_message = str(result.get("message_id", message_id)) == str(message_id)
+                same_group = result_group is None or str(result_group) == str(group_id)
+                same_kind = result.get("message_type") not in {"group", "private"} or result["message_type"] == (
+                    "group" if group_id else "private"
+                )
+                if same_message and same_group and same_kind:
+                    sender = result.get("sender") or {}
+                    if isinstance(sender, dict):
+                        sender_id = sender_id or str(sender.get("user_id") or "") or None
+                        sender_name = sender_name or str(sender.get("card") or sender.get("nickname") or "")
+                    if message is None:
+                        from nonebot.adapters.onebot.v11 import MessageSegment
+
+                        raw_message = result.get("message") or []
+                        if isinstance(raw_message, list):
+                            raw_message = [
+                                MessageSegment(type=str(segment["type"]), data=dict(segment.get("data") or {}))
+                                if isinstance(segment, dict)
+                                else segment
+                                for segment in raw_message
+                            ]
+                        message = self.build_message(bot, raw_message)
+                else:
+                    logger.debug("[adapter] 引用查询结果不属于目标消息或会话，忽略该结果")
+        return ReplyInfo(
+            message_id=message_id,
+            sender_id=sender_id,
+            sender_name=sender_name,
+            image_sources=self.extract_raw_image_sources(message),
+            texts=self.extract_raw_texts(message),
+        )
 
     async def get_group_info(self, bot, group_id):
         return await self._api(bot, "get_group_info", group_id=int(group_id))
@@ -162,8 +231,15 @@ class OneBotV11MessageAdapter(PlatformAdapter):
         return name
 
     async def get_group_member_role(self, bot, group_id, user_id):
+        """严格读取目标成员的真实身份，不把缺失身份当作普通成员。"""
         member = await self.get_group_member(bot, group_id, user_id)
-        return str(member.get("role") or "member")
+        if not isinstance(member, dict):
+            return None
+        return _member_role(member, user_id)
+
+    async def get_bot_group_role(self, bot, group_id):
+        """查询机器人自己，不能拿当前发言人的角色代替。"""
+        return await self.get_group_member_role(bot, group_id, str(bot.self_id))
 
     async def get_group_members(self, bot, group_id):
         return await self._api(bot, "get_group_member_list", group_id=int(group_id))

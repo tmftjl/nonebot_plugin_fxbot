@@ -228,6 +228,20 @@ async def run(service: Any, context: Any) -> ChatResponse:
         )
         selected_text = str(selected.get("text") or request.text)
         selected_time = request.occurred_at
+        selected_quote = (
+            selected.get("quote_snapshot")
+            if selected
+            else request.metadata.get("quote_snapshot")
+            if target == request.message_id
+            else None
+        )
+        selected_role = (
+            selected.get("role")
+            if selected
+            else request.metadata.get("sender_role")
+            if target == request.message_id
+            else None
+        )
         target_quotes: list[str] = []
         target_at_bot = bool(request.metadata.get("has_at_bot")) if target == request.message_id else False
         for message in service.session_store.get(request.session_id):
@@ -238,6 +252,8 @@ async def run(service: Any, context: Any) -> ChatResponse:
                 selected_text = str(message.get("content") or "").removeprefix(prefix)
                 target_quotes = list(message.get("_quote_ids", []))
                 target_at_bot = bool(message.get("_at_bot"))
+                selected_role = message.get("_sender_role")
+                selected_quote = message.get("_quote_snapshot")
                 if timestamp := message.get("_timestamp"):
                     selected_time = datetime.fromisoformat(timestamp)
         if target != (request.message_id or request.dedupe_key):
@@ -247,6 +263,12 @@ async def run(service: Any, context: Any) -> ChatResponse:
                 prefix = f"{speaker_label(sender_id, sender_name)}: "
                 selected_text = row.content.removeprefix(prefix)
                 selected_time = row.occurred_at or row.ingested_at
+                source_context = json.loads(row.payload or "{}").get("context", {})
+                selected_role = source_context.get("_sender_role")
+                selected_quote = source_context.get("_quote_snapshot")
+                target_quotes = source_context.get("_quote_ids") or (
+                    [row.reply_to_message_id] if row.reply_to_message_id else []
+                )
         previous_reply = next(
             (
                 str(message.get("content") or "")
@@ -282,6 +304,8 @@ async def run(service: Any, context: Any) -> ChatResponse:
                 "reply_target_id": target,
                 "target_quote_ids": target_quotes,
                 "has_at_bot": target_at_bot,
+                "sender_role": selected_role,
+                "quote_snapshot": selected_quote,
                 "requested_reply_style": str(arguments.get("reply_style") or ""),
                 "planner_trace": [],
                 "reply_at_users": list(dict.fromkeys(authors[str(message_id)] for message_id in attached)),

@@ -59,13 +59,16 @@ async def hydrate(service: Any, session_id: str, limit: int) -> None:
 
 def _message_row(request: ChatRequest, content: str) -> ChatMessage:
     """构造原始消息行；合并批次里的每条消息都先按原样落库。"""
+    quote_id = str(
+        (request.metadata.get("quote_snapshot") or {}).get("message_id") or request.reply_to_message_id or ""
+    )
     return ChatMessage(
         tenant=request.session_id,
         kind="user",
         platform=request.platform,
         platform_event_id=request.event_id,
         platform_message_id=request.message_id,
-        reply_to_message_id=request.reply_to_message_id,
+        reply_to_message_id=quote_id or None,
         sender_id=request.user_id,
         sender_name=request.user_name,
         content=content,
@@ -77,8 +80,10 @@ def _message_row(request: ChatRequest, content: str) -> ChatMessage:
                     timestamp=request.occurred_at,
                     sender_id=request.user_id,
                     sender_name=request.user_name,
-                    quote_id=request.reply_to_message_id or "",
+                    quote_id=quote_id,
                     at_bot=bool(request.metadata.get("has_at_bot")),
+                    sender_role=request.metadata.get("sender_role") if request.is_group else None,
+                    quote_snapshot=request.metadata.get("quote_snapshot"),
                 ),
             },
             ensure_ascii=False,
@@ -281,6 +286,7 @@ async def persist_turn_end(
                                     timestamp=utc_now_naive(),
                                     sender_id=str(request.metadata.get("bot_id") or ""),
                                     sender_name=str(request.metadata.get("bot_name") or ""),
+                                    sender_role=request.metadata.get("bot_group_role") if request.is_group else None,
                                 ),
                                 "_self_message": True,
                             }
@@ -341,6 +347,7 @@ async def mark_sent(
             sender_id=str(request.metadata.get("bot_id") or ""),
             sender_name=str(request.metadata.get("bot_name") or ""),
             quote_id=str(request.metadata.get("sent_quote_id") or "") if index == 0 else "",
+            sender_role=request.metadata.get("bot_group_role") if request.is_group else None,
         ),
         "_self_message": True,
     }
@@ -479,6 +486,8 @@ async def record_group_message(
     occurred_at: datetime | None = None,
     memory_images: list[tuple[str, str | bytes]] | None = None,
     has_at_bot: bool = False,
+    sender_role: str | None = None,
+    quote_snapshot: dict[str, str] | None = None,
 ) -> None:
     """记录群聊或私聊的上下文消息，图片同样转成文字描述写入历史。"""
     if limit <= 0:
@@ -499,6 +508,8 @@ async def record_group_message(
         sender_name=user_name,
         quote_id=reply_to_message_id or "",
         at_bot=has_at_bot,
+        sender_role=sender_role,
+        quote_snapshot=quote_snapshot,
     )
     entry.update(context)
     if images:
@@ -527,7 +538,7 @@ async def record_group_message(
                     platform=platform,
                     platform_event_id=event_id,
                     platform_message_id=message_id,
-                    reply_to_message_id=reply_to_message_id,
+                    reply_to_message_id=context["_quote_ids"][0] if context["_quote_ids"] else None,
                     sender_id=user_id,
                     sender_name=user_name,
                     content=entry["content"],

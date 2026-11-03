@@ -8,19 +8,41 @@ from datetime import datetime
 
 from .types import speaker_label
 from ..utils.tz import now, as_shanghai, to_naive_utc
+from .group_identity import ROLE_LABELS
 
 
 def message_metadata(
-    *, timestamp: datetime, sender_id: str = "", sender_name: str = "", quote_id: str = "", at_bot: bool = False
+    *,
+    timestamp: datetime,
+    sender_id: str = "",
+    sender_name: str = "",
+    quote_id: str = "",
+    at_bot: bool = False,
+    sender_role: str | None = None,
+    quote_snapshot: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """构造可持久化在原消息 payload 的身份元信息。"""
+    reference_id = str((quote_snapshot or {}).get("message_id") or quote_id)
     return {
         "_timestamp": to_naive_utc(timestamp).isoformat(),
         "_sender_id": sender_id,
         "_sender_name": sender_name,
-        "_quote_ids": [quote_id] if quote_id else [],
+        "_sender_role": sender_role if sender_role in ROLE_LABELS else "",
+        "_quote_ids": [reference_id] if reference_id else [],
+        "_quote_snapshot": dict(quote_snapshot) if quote_snapshot else None,
         "_at_bot": at_bot,
     }
+
+
+def quote_preview(snapshot: dict[str, str] | None) -> str:
+    """限长展示引用作者和原文，不把引用变成独立的新发言。"""
+    if not snapshot:
+        return ""
+    name = " ".join(str(snapshot.get("sender_name") or "").split())[:32]
+    sender_id = " ".join(str(snapshot.get("sender_id") or "").split())[:128]
+    speaker = f"{name}({sender_id})" if name and sender_id else name or sender_id or "来源未知"
+    text = " ".join(str(snapshot.get("text") or "").split())[:500]
+    return f"[引用 {speaker}] {text}".rstrip()
 
 
 def render_message(message: dict[str, Any], *, bot_name: str = "") -> dict[str, Any]:
@@ -42,6 +64,8 @@ def render_message(message: dict[str, Any], *, bot_name: str = "") -> dict[str, 
     attrs.append(f'time="{time:%H:%M:%S}"')
     name = message.get("_sender_name") or message.get("_sender_id") or bot_name
     attrs.append(f'user="{escape(str(name), quote=True)}"')
+    if role := ROLE_LABELS.get(message.get("_sender_role")):
+        attrs.append(f'role="{role}"')
     if message.get("_self_message"):
         attrs.append('is_self_message="true"')
     prefix = f"<message {' '.join(attrs)}>\n"
@@ -51,6 +75,11 @@ def render_message(message: dict[str, Any], *, bot_name: str = "") -> dict[str, 
     if isinstance(content, str):
         label = speaker_label(str(message.get("_sender_id") or ""), str(message.get("_sender_name") or ""))
         content = content.removeprefix(f"{label}: ").removeprefix(f"{label}:\n")
+    if quoted := quote_preview(message.get("_quote_snapshot")):
+        if isinstance(content, str):
+            content = f"{quoted}\n{content}"
+        else:
+            content = [{"type": "text", "text": quoted}, *(content or [])]
     public["role"] = "user"
     public["content"] = (
         prefix + content if isinstance(content, str) else [{"type": "text", "text": prefix}, *(content or [])]

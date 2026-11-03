@@ -14,6 +14,8 @@ from ..types import ChatRequest, speaker_label
 from ..bindings import PERSONA, get_binding
 from ..personas import DEFAULT_PERSONA, get_persona_text, compose_persona_prompt
 from ...utils.tz import as_shanghai
+from ..work_schedule import work_life_prompt
+from ..group_identity import group_identity_prompt
 from ..context_summary import SUMMARY_HEADER
 from ..message_context import render_message, message_metadata
 from ..message_receive.reactions import reaction_block
@@ -155,6 +157,8 @@ def assemble_messages(
                         sender_name=request.user_name,
                         quote_id=request.reply_to_message_id or "",
                         at_bot=bool(request.metadata.get("has_at_bot")),
+                        sender_role=request.metadata.get("sender_role") if request.is_group else None,
+                        quote_snapshot=request.metadata.get("quote_snapshot"),
                     ),
                 },
                 bot_name=str(request.metadata.get("bot_name") or ""),
@@ -215,7 +219,7 @@ def truncate_content(content: Any, limit: int = MAX_CURRENT_CHARS) -> Any:
 def build_user_content(request: ChatRequest) -> str | list[dict[str, Any]]:
     """构造用户消息内容，带上发言人标识，引用、@ 目标和图片一并附带。"""
     text = request.text
-    if request.quoted_text:
+    if request.quoted_text and not request.metadata.get("quote_snapshot"):
         text = f"{request.quoted_text}\n{text}" if text else request.quoted_text
     label = speaker_label(request.user_id, request.user_name)
     if text:
@@ -333,4 +337,8 @@ def build_persona_text(request: ChatRequest, chat_cfg: dict[str, Any], behavior:
     aliases = [str(alias).strip() for alias in behavior.get("persona_aliases") or [] if str(alias).strip()]
     if aliases and (not request.metadata.get("planner_loop") or request.metadata.get("planner_reply")):
         persona_text = f"{persona_text}\n有人也这么叫你：{'、'.join(aliases)}。"
+    if routine := work_life_prompt(chat_cfg):
+        persona_text = f"{persona_text}\n\n{routine}"
+    if identity := group_identity_prompt(request):
+        persona_text = f"{persona_text}\n\n{identity}"
     return effective_persona, persona_text
