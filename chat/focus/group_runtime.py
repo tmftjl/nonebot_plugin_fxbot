@@ -21,10 +21,11 @@ from ..tools import ToolRuntime
 from ..types import ChatRequest, speaker_label
 from .context import FocusEntry, FocusCheckpointStore, closed_entry, restore_entries
 from ...config import get_manager as get_config_manager
-from ..service import chat_service, _memory_block
+from ..service import chat_service, _memory_block, _learning_reference
 from ...adapter import get_bot_group_role
 from ..personas import DEFAULT_PERSONA, effective_persona_name
 from ...utils.tz import now
+from ..memory.config import expression_vector_config
 from ..memory.models import ChatPlannerSample
 from ..work_schedule import can_reply, work_life_prompt
 from ..replyer.prompt import recall_query, strip_images, build_persona_text, build_user_content
@@ -363,6 +364,9 @@ class FocusGroupRuntime:
                     },
                 )
             request.metadata["reply_target_id"] = target
+            request.metadata["expression_intent"] = (
+                options.get("expression_intent") if expression_vector_config().get("enabled") else None
+            )
             if style := options.get("reply_style"):
                 if style not in {"简短表达", "正常回复", "长回复"}:
                     raise ValueError("回复风格无效")
@@ -671,10 +675,12 @@ class FocusGroupRuntime:
                 request.metadata["bot_group_role"] = await get_bot_group_role(member.bot, request.group_id)
                 _, persona_text = build_persona_text(request, chat_cfg, behavior)
                 memory = await _memory_block(request, recall_query(request, []))
+                history = chat_service.session_store.get(session_id)
+                learning = await _learning_reference(request, history)
             except Exception:
                 logger.opt(exception=True).debug(f"[ChatFocus] 参考信息构建失败: {session_id}")
                 continue
-            body = "\n".join(part for part in (persona_text, memory) if part)
+            body = "\n".join(part for part in (persona_text, memory, learning) if part)
             if body:
                 references.append(
                     f'<focus_reference session_id="{escape(session_id, quote=True)}">\n{body}\n</focus_reference>'

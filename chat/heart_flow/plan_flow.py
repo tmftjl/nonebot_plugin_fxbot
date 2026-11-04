@@ -97,7 +97,7 @@ async def rebuild_messages(service: Any, context: PlanContext) -> list[dict[str,
         from ..service import _memory_block
 
         context.memory_block = await _memory_block(context.request, recall_query(context.request, history))
-    return assemble_messages(
+    messages = assemble_messages(
         context.request,
         history,
         context.persona_text,
@@ -105,3 +105,9 @@ async def rebuild_messages(service: Any, context: PlanContext) -> list[dict[str,
         context.current_content,
         context_summary=current_summary(context.request.session_id),
     )
+    from ..service import _learning_reference
+
+    reference = await _learning_reference(context.request, history)
+    if reference:
+        messages.append({"role": "user", "content": reference})
+    return messages

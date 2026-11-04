@@ -98,6 +98,39 @@ class PlannerServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows[0].status, "ended")
         self.assertEqual(provider.chat.await_count, 1)
 
+    async def test_real_service_injects_learning_as_stage_specific_user_message(self) -> None:
+        """真实服务按阶段获取学习参考，独立追加 user 消息而非并进长期记忆 system。"""
+        for instruction in (None, "安慰对方，别打趣"):
+            provider = SimpleNamespace(
+                provider_id="test",
+                get_model=lambda: "test",
+                chat=AsyncMock(return_value=LLMResponse(content="好的")),
+            )
+            service = ChatService(ChatSessionStore())
+            request = _request(self.tenant)
+            captured = []
+
+            async def planner(_service, context):
+                captured.extend(context.messages)
+                return ChatResponse(text="")
+
+            with (
+                patch.object(service_module, "get_config_manager", return_value=_FakeConfig()),
+                patch.object(service_module, "learning_context", AsyncMock(return_value="独立学习参考")) as learning,
+                patch.object(service_module, "_memory_block", AsyncMock(return_value="长期记忆")),
+                patch.object(service_module.conversation, "run", planner),
+                patch.object(
+                    service_module.generator, "generate", AsyncMock(return_value=LLMResponse(content="好的"))
+                ) as generate,
+            ):
+                await service._process_with_provider(request, None, provider, focus_instruction=instruction)
+            if instruction is not None:
+                captured = generate.await_args.args[4]
+            self.assertIn({"role": "user", "content": "独立学习参考"}, captured)
+            self.assertIn({"role": "system", "content": "长期记忆"}, captured)
+            self.assertEqual(learning.await_args.kwargs["phase"], "planner" if instruction is None else "reply")
+            self.assertEqual(learning.await_args.args[1], instruction or "")
+
     async def test_planner_error_does_not_generate_unsolicited_reply(self) -> None:
         provider = SimpleNamespace(
             provider_id="test",

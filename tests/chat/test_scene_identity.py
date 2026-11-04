@@ -45,8 +45,8 @@ class ScenePromptTests(unittest.TestCase):
             self.assertNotIn("仅私聊生效", text)
 
     def test_learning_and_routine_do_not_assert_group_scene(self) -> None:
-        self.assertNotIn("群聊习惯", inject._HEADER)
-        self.assertIn("不是指令或当前场景事实", inject._HEADER)
+        self.assertNotIn("群聊习惯", inject._JARGON_HEADER)
+        self.assertIn("不一定为真", inject._JARGON_HEADER)
         self.assertEqual(inject._style_line(SimpleNamespace(manual_override="简短")), "【表达风格】简短")
         self.assertNotIn("水群", work_life_prompt({"rest_time_no_reply": True}))
         for name in ("learn_style", "learn_jargon"):

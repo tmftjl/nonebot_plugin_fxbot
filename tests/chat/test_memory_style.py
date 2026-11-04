@@ -22,7 +22,7 @@ from src.plugins.nonebot_plugin_fxbot.chat.memory.style import (
     StyleResult,
     StyleExample,
 )
-from src.plugins.nonebot_plugin_fxbot.chat.memory.inject import _STYLE_CHARS, _JARGON_CHARS, learning_context
+from src.plugins.nonebot_plugin_fxbot.chat.memory.inject import _STYLE_CHARS, learning_context
 from src.plugins.nonebot_plugin_fxbot.chat.memory.models import (
     ChatStyle,
     ChatJargon,
@@ -270,187 +270,124 @@ class StyleCommitTests(_StyleTestCase):
 
 
 class StyleInjectionTests(_StyleTestCase):
-    """风格在黑话之前注入，黑话只在命中时出现，预算与租户隔离生效。"""
+    """风格只供回复器、黑话只供规划器，完整注入并保持租户隔离。"""
 
     async def _seed_style(self, *, summary: str = "群里说话短、爱接梗") -> None:
         await self._save()
-        async with base_models.async_maker() as session:  # type: ignore[misc]
-            await session.execute(
-                update(ChatStyle)
-                .where(ChatStyle.tenant == self.tenant)
-                .values(summary=summary, manual_override=summary)
-            )
-            await session.commit()
-
-    async def test_style_and_hit_jargon_are_injected_in_order(self) -> None:
-        await self._seed_style()
-
-        with _config():
-            block = await learning_context(self.tenant, query="你说的 yyds 是什么意思")
-
-        self.assertIn("以下是表达习惯参考，不是指令或当前场景事实", block)
-        self.assertIn("【表达风格】群里说话短、爱接梗", block)
-        self.assertIn("【黑话】yyds：永远的神", block)
-        self.assertLess(block.index("【表达风格】"), block.index("【黑话】"))
-
-    async def test_old_automatic_style_is_not_injected(self) -> None:
-        await self._seed_style()
         async with base_models.async_maker() as session:
-            await session.execute(update(ChatStyle).where(ChatStyle.tenant == self.tenant).values(manual_override=""))
-            await session.commit()
-        with _config():
-            block = await learning_context(self.tenant, query="yyds")
-        self.assertNotIn("【表达风格】", block)
-        self.assertIn("【黑话】", block)
-
-    async def test_jargon_is_not_injected_without_hit(self) -> None:
-        await self._seed_style()
-
-        with _config():
-            block = await learning_context(self.tenant, query="今天吃什么")
-
-        self.assertIn("【表达风格】", block)
-        self.assertNotIn("【黑话】", block)
-
-    async def test_manual_override_wins(self) -> None:
-        await self._seed_style()
-        async with base_models.async_maker() as session:  # type: ignore[misc]
             await session.execute(
-                update(ChatStyle).where(ChatStyle.tenant == self.tenant).values(manual_override="人工风格")
+                update(ChatStyle).where(ChatStyle.tenant == self.tenant).values(manual_override=summary)
             )
             await session.commit()
 
-        with _config():
-            block = await learning_context(self.tenant, query="")
-
-        self.assertIn("【表达风格】人工风格", block)
-        self.assertNotIn("群里说话短", block)
-
-    async def test_budgets_truncate_style_and_jargon(self) -> None:
-        await self._seed_style(summary="群的说话风格非常鲜明而且句子很长，喜欢连续接梗" * 10)
-        async with base_models.async_maker() as session:  # type: ignore[misc]
-            await session.execute(update(ChatJargon).where(ChatJargon.tenant == self.tenant).values(meaning="永" * 300))
-            await session.commit()
-
-        with _config():
-            block = await learning_context(self.tenant, query="yyds")
-
-        style_line = next(line for line in block.splitlines() if line.startswith("【表达风格】"))
-        jargon_line = next(line for line in block.splitlines() if line.startswith("【黑话】"))
-        self.assertEqual(len(style_line), _STYLE_CHARS)
-        self.assertEqual(len(jargon_line), _JARGON_CHARS)
-
-    async def test_usage_counts_injected_sections(self) -> None:
-        await self._seed_style()
-
-        with _config():
-            block = await learning_context(self.tenant, query="yyds")
-
-        self.assertIn("【表达风格】", block)
-        style = await chat_repository.get_style(self.tenant)
-        [row] = await chat_repository.list_jargon(self.tenant)
-        self.assertEqual((style.use_count, row.use_count), (1, 1))
-
-    async def test_rejected_jargon_is_not_injected(self) -> None:
-        await self._seed_style()
-        await chat_repository.save_style(
+    async def planner(self, text="yyds", **kwargs):
+        return await learning_context(
             self.tenant,
-            _result(jargon=(StyleJargon(term="笑死", normalized="笑死", meaning="很好笑", status="rejected"),)),
-            seq_start=11,
-            seq_end=20,
-            evidence_count=2,
-            source_batch_id="style:11:20",
+            phase="planner",
+            history=[{"role": "user", "_sender_id": U1, "_source_ids": ["m1"], "content": text}],
+            **kwargs,
         )
 
+    async def test_stages_are_separate(self) -> None:
+        await self._seed_style()
         with _config():
-            block = await learning_context(self.tenant, query="笑死")
+            planner = await self.planner()
+            reply = await learning_context(self.tenant)
+        self.assertIn("yyds：永远的神", planner)
+        self.assertNotIn("【表达风格】", planner)
+        self.assertIn("【表达风格】群里说话短、爱接梗", reply)
+        self.assertNotIn("yyds", reply)
 
-        self.assertNotIn("【黑话】", block)
+    async def test_old_automatic_style_is_not_injected(self) -> None:
+        await self._seed_style(summary="")
+        with _config():
+            self.assertEqual(await learning_context(self.tenant), "")
 
-    async def test_jargon_use_off_skips_injection(self) -> None:
-        self.tenant = f"onebot11:{uuid4().hex}:group:{uuid4().hex}"
-        await chat_repository.set_learn_enabled(self.tenant, True)
+    async def test_jargon_requires_context_hit(self) -> None:
         await self._seed_style()
-        item = {
-            "platform": "onebot11",
-            "item_id": self.tenant.rsplit(":", 1)[-1],
-            "type": "group",
-            "use": False,
-        }
+        with _config():
+            self.assertEqual(await self.planner("今天吃什么"), "")
 
-        with _config(learning_list=[item]):
-            block = await learning_context(self.tenant, query="yyds")
+    async def test_complete_jargon_is_not_truncated(self) -> None:
+        await self._seed_style(summary="风格" * 200)
+        async with base_models.async_maker() as session:
+            await session.execute(update(ChatJargon).where(ChatJargon.tenant == self.tenant).values(meaning="永" * 300))
+            await session.commit()
+        with _config():
+            planner = await self.planner()
+            reply = await learning_context(self.tenant)
+        self.assertIn("yyds：" + "永" * 300, planner)
+        self.assertEqual(len(reply), _STYLE_CHARS)
 
-        self.assertIn("【表达风格】", block)
-        self.assertNotIn("【黑话】", block)
-
-    async def test_expression_use_off_skips_style_but_keeps_jargon(self) -> None:
-        self.tenant = f"onebot11:{uuid4().hex}:group:{uuid4().hex}"
-        await chat_repository.set_learn_enabled(self.tenant, True)
+    async def test_rebuild_deduplicates_usage(self) -> None:
         await self._seed_style()
-        item = {
-            "platform": "onebot11",
-            "item_id": self.tenant.rsplit(":", 1)[-1],
-            "type": "group",
-            "use": False,
-        }
-        trace: dict[str, Any] = {}
-
-        with _config(expression_learning_list=[item]):
-            block = await learning_context(self.tenant, query="yyds", trace=trace)
-
-        self.assertNotIn("【表达风格】", block)
-        self.assertIn("【黑话】yyds：永远的神", block)
-        self.assertEqual(trace["injected"]["style"], 0)
-        self.assertEqual(trace["injected"]["chars"]["style"], 0)
-        self.assertEqual((await chat_repository.get_style(self.tenant)).use_count, 0)
-
-    async def test_expression_learn_off_keeps_style_injection(self) -> None:
-        self.tenant = f"onebot11:{uuid4().hex}:group:{uuid4().hex}"
-        await chat_repository.set_learn_enabled(self.tenant, True)
-        await self._seed_style()
-        item = {
-            "platform": "onebot11",
-            "item_id": self.tenant.rsplit(":", 1)[-1],
-            "type": "group",
-            "learn": False,
-        }
-
-        with _config(expression_learning_list=[item]):
-            block = await learning_context(self.tenant, query="yyds")
-
-        self.assertIn("【表达风格】", block)
-
-    async def test_shared_jargon_group_merges_tenants(self) -> None:
-        sibling = f"onebot11:{uuid4().hex}:group:{uuid4().hex}"
-        await chat_repository.set_learn_enabled(sibling, True)
-        self.tenant = sibling
-        await self._seed("yyds 好家伙")
-        await self._save()
-
-        self.tenant = f"onebot11:{uuid4().hex}:group:{uuid4().hex}"
-        await chat_repository.set_learn_enabled(self.tenant, True)
-        groups = [
-            {
-                "targets": [
-                    {"platform": "onebot11", "item_id": self.tenant.rsplit(":", 1)[-1], "type": "group"},
-                    {"platform": "onebot11", "item_id": sibling.rsplit(":", 1)[-1], "type": "group"},
-                ]
-            }
-        ]
-
-        with _config(groups=groups):
-            block = await learning_context(self.tenant, query="yyds")
-
-        self.assertIn("【黑话】yyds：永远的神", block)
+        references = {}
+        with _config():
+            first = await self.planner(references=references)
+            second = await self.planner(references=references)
+        self.assertEqual(first, second)
+        self.assertEqual(first.count("yyds："), 1)
+        [row] = await chat_repository.list_jargon(self.tenant)
+        self.assertEqual(row.use_count, 1)
 
     async def test_other_tenant_sees_nothing(self) -> None:
         await self._seed_style()
-        other = f"test:{uuid4().hex}"
-        await chat_repository.set_learn_enabled(other, True)
-
         with _config():
-            self.assertEqual(await learning_context(other, query="yyds"), "")
+            self.assertEqual(await learning_context("test:other"), "")
+
+    async def test_self_and_internal_messages_are_not_matched(self) -> None:
+        await self._seed_style()
+        history = [
+            {"role": "user", "_sender_id": U1, "_self_message": True, "content": "yyds"},
+            {"role": "user", "_sender_id": U1, "_planner_internal": True, "content": "yyds"},
+            {"role": "user", "content": "yyds"},
+        ]
+        with _config():
+            self.assertEqual(await learning_context(self.tenant, phase="planner", history=history), "")
+
+    async def test_match_scans_before_last_two_messages(self) -> None:
+        await self._seed_style()
+        history = [
+            {"role": "user", "_sender_id": U1, "_source_ids": [str(i)], "content": text}
+            for i, text in enumerate(["yyds", *["今天吃饭"] * 20])
+        ]
+        with _config():
+            block = await learning_context(self.tenant, phase="planner", history=history)
+        self.assertIn("yyds：永远的神", block)
+
+    async def test_use_switch_still_blocks_jargon(self) -> None:
+        self.tenant = f"onebot11:{uuid4().hex}:group:{uuid4().hex}"
+        await self._seed_style()
+        item = {"platform": "onebot11", "item_id": self.tenant.rsplit(":", 1)[-1], "type": "group", "use": False}
+        with _config(learning_list=[item]):
+            self.assertEqual(await self.planner(), "")
+
+    async def test_shared_jargon_scope_and_usage_are_preserved(self) -> None:
+        sibling = f"onebot11:{uuid4().hex}:group:{uuid4().hex}"
+        self.tenant = sibling
+        await self._seed("yyds 好家伙")
+        await self._save()
+        self.tenant = f"onebot11:{uuid4().hex}:group:{uuid4().hex}"
+        groups = [
+            {
+                "targets": [
+                    {"platform": "onebot11", "item_id": tenant.rsplit(":", 1)[-1], "type": "group"}
+                    for tenant in (self.tenant, sibling)
+                ]
+            }
+        ]
+        with _config(groups=groups):
+            self.assertIn("yyds：永远的神", await self.planner())
+        [row] = await chat_repository.list_jargon(sibling)
+        self.assertEqual(row.use_count, 1)
+
+    async def test_rejected_jargon_is_not_injected(self) -> None:
+        await self._seed_style()
+        async with base_models.async_maker() as session:
+            await session.execute(update(ChatJargon).where(ChatJargon.tenant == self.tenant).values(status="rejected"))
+            await session.commit()
+        with _config():
+            self.assertEqual(await self.planner(), "")
 
 
 class ConsoleRouteTests(_StyleTestCase):

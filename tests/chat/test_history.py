@@ -485,7 +485,7 @@ class TurnPersistenceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_mark_sent_uses_turn_item_id(self) -> None:
         request = _request()
-        response = ChatResponse(text="回复", metadata={"turn_item_ids": [5]})
+        response = ChatResponse(text="回复", metadata={"turn_item_ids": [5], "reply_parts": ["回复"]})
         with (
             patch.object(memory_state, "is_ready", return_value=True),
             patch.object(chat_repository, "mark_turn_item_sent", new=AsyncMock()) as mark,
@@ -524,6 +524,8 @@ class RestartContinuityTests(ReplyPipelineTests):
         ):
             response = await ChatService(ChatSessionStore()).process(request)
             self.assertEqual(response.text, "回复")
+            # 本测试验证完整回复恢复，不把随机拆分出的首段当成全部发送结果。
+            response.metadata["reply_parts"] = ["回复"]
             await ChatService(ChatSessionStore()).mark_sent(request, response)
 
         store = ChatSessionStore()

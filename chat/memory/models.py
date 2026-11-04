@@ -197,7 +197,7 @@ class ChatJargon(BaseIDModel, table=True):
 
 
 class ChatExpression(BaseIDModel, table=True):
-    """情境到说法的表达参考；复审通过后才注入。"""
+    """情境到说法的表达参考；AI 复审在写入前执行，人工精选单独标记。"""
 
     __tablename__ = "chat_expression"
     __table_args__ = (

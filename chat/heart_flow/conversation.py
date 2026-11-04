@@ -23,6 +23,7 @@ from ...utils.tz import now
 from ..providers import LLMResponse
 from .attachments import tool_media, resolve_pictures
 from ..tools.result import prepare_tool_result_content
+from ..memory.config import expression_vector_config
 from ..work_schedule import can_reply
 from ..context_summary import planner_snapshot
 from ..tools.discovery import sync_discovered, deferred_reminder
@@ -52,6 +53,14 @@ def control_tools(passive: bool) -> list[dict[str, Any]]:
             },
         },
     }
+    if expression_vector_config().get("enabled"):
+        reply_options["expression_intent"] = {
+            "type": "object",
+            "description": "为本次回复选择表达：贴合对象、回复动作、场景、语气、优先及避免的说法。",
+            "properties": {
+                key: {"type": "string"} for key in ("focus", "reply_act", "scene", "tone", "prefer", "avoid")
+            },
+        }
     if emoji_config().get("use_new_send_logic"):
         reply_options["attach_emoji"] = {
             "type": "integer",
@@ -307,6 +316,9 @@ async def run(service: Any, context: Any) -> ChatResponse:
                 "sender_role": selected_role,
                 "quote_snapshot": selected_quote,
                 "requested_reply_style": str(arguments.get("reply_style") or ""),
+                "expression_intent": arguments.get("expression_intent")
+                if expression_vector_config().get("enabled")
+                else None,
                 "planner_trace": [],
                 "reply_at_users": list(dict.fromkeys(authors[str(message_id)] for message_id in attached)),
             },

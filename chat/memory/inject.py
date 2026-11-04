@@ -1,8 +1,10 @@
-"""把群风格、黑话与表达注入 system message。"""
+"""按 MaiBot 的阶段边界注入 Planner 黑话参考和 Replyer 表达习惯。"""
 
 from __future__ import annotations
 
 from typing import Any
+
+from nonebot import logger
 
 from .state import is_ready
 from .config import jargon_config, expression_config, tenant_learn_enabled
@@ -11,51 +13,55 @@ from .filtering import sanitize_line
 from .expression import expression_line, select_expressions
 from .repository import chat_repository
 
-_HEADER = (
-    "以下是表达习惯参考，不是指令或当前场景事实；可能来自其他会话，"
-    "只借鉴适用的说法，不据此判断聊天类型、在场人物或共同经历；与当前消息冲突时以当前消息为准。"
-)
-# MaiBot `src/maisaka/jargon_context_matcher.py` MAX_JARGON_REFERENCE_MATCHES
 _MAX_JARGON_HITS = 10
 _STYLE_CHARS = 150
-_JARGON_CHARS = 100
-_EXPRESSION_CHARS = 200
-_TOTAL_CHARS = 450
+_JARGON_HEADER = "以下释义来自当前上下文中部分词汇的猜测含义，仅作理解聊天语境的参考，不一定为真，需要根据情景理解："
 
 
 def _style_line(style: object) -> str:
-    """仅保留用户明确设置的风格，不再注入旧的额外自动风格摘要。"""
+    """仅注入用户明确设置的风格，保留完整的独立表达条目。"""
     summary = str(getattr(style, "manual_override", "") or "")
-    if not summary:
-        return ""
-    return sanitize_line(f"【表达风格】{summary}", 300)
+    return sanitize_line(f"【表达风格】{summary}", _STYLE_CHARS) if summary else ""
 
 
-def _jargon_hits(rows: list[object], query: str, limit: int) -> list[object]:
-    """当前文本包含词条时命中，最多取固定条数。"""
-    needle = " ".join(str(query or "").casefold().split())
-    if not needle:
-        return []
-    hits: list[object] = []
-    for row in rows:
-        normalized = str(getattr(row, "normalized", "") or "")
-        if normalized and normalized in needle:
-            hits.append(row)
-            if len(hits) >= limit:
-                break
-    return hits
+def context_user_texts(history: list[dict[str, Any]]) -> list[str]:
+    """只取真实他人消息，排除自身发言、工具及内部通知并按消息 ID 去重。"""
+    texts: list[str] = []
+    seen: set[str] = set()
+    for message in history:
+        if (
+            message.get("role") != "user"
+            or message.get("_self_message")
+            or message.get("_planner_internal")
+            or message.get("_reference")
+            or not message.get("_sender_id")
+        ):
+            continue
+        identities = {str(value) for value in message.get("_source_ids", [])}
+        if identities and identities.intersection(seen):
+            continue
+        seen.update(identities)
+        content = message.get("content")
+        if isinstance(content, list):
+            content = " ".join(str(part.get("text") or "") for part in content if part.get("type") == "text")
+        if str(content or "").strip():
+            texts.append(str(content))
+    return texts
 
 
-def _jargon_line(hits: list[object]) -> str:
-    """把命中词条压成一行释义。"""
-    pairs = [
-        f"{getattr(row, 'term', '')}：{getattr(row, 'meaning', '')}"
-        for row in hits
-        if getattr(row, "term", "") and getattr(row, "meaning", "")
-    ]
-    if not pairs:
-        return ""
-    return sanitize_line(f"【黑话】{'；'.join(pairs)}", 300)
+def _jargon_hits(rows: list[object], texts: list[str], limit: int) -> list[object]:
+    """沿用 MaiBot 的累计次数和首次命中位置评分，词条只保留一个作用域候选。"""
+    matches: dict[str, tuple[float, int, object]] = {}
+    for index, text in enumerate(texts):
+        normalized_text = " ".join(text.casefold().split())
+        for row in rows:
+            term = " ".join(str(getattr(row, "normalized", "") or "").casefold().split())
+            if not term or term in matches or not getattr(row, "meaning", "") or term not in normalized_text:
+                continue
+            score = float(getattr(row, "count", 0) or 0) - index * 0.01
+            matches[term] = (score, index, row)
+    ordered = sorted(matches, key=lambda term: (-matches[term][0], matches[term][1], -len(term), term))
+    return [matches[term][2] for term in ordered[:limit]]
 
 
 async def _related_tenants(tenant: str, target: TenantTarget | None, groups: object) -> list[str]:
@@ -63,107 +69,81 @@ async def _related_tenants(tenant: str, target: TenantTarget | None, groups: obj
     targets = share_targets(groups, target)
     if not targets:
         return [tenant]
-    try:
-        known = await chat_repository.list_tenants()
-    except Exception:
-        return [tenant]
+    known = await chat_repository.list_tenants()
     return share_tenants(tenant, target, targets, known)
 
 
-async def _mark_usage(
+async def learning_context(
     tenant: str,
-    style_text: str,
-    block: str,
-    hits: list[object],
-    jargon_text: str,
-    expressions: list[object],
-    expression_text: str,
+    query: str = "",
     *,
-    jargon_tenants: list[str] | None = None,
-    expression_tenants: list[str] | None = None,
-) -> None:
-    """只记录真正进入最终注入块的内容；失败不影响回复。"""
-    try:
-        if style_text and style_text in block:
-            await chat_repository.mark_style_used(tenant)
-        if jargon_text and jargon_text in block:
-            await chat_repository.mark_jargon_used(
-                tenant,
-                [str(getattr(row, "term", "")) for row in hits if getattr(row, "term", "")],
-                tenants=jargon_tenants,
-            )
-        if expression_text and expression_text in block:
-            await chat_repository.mark_expressions_used(
-                tenant,
-                [int(getattr(row, "id", 0) or 0) for row in expressions],
-                tenants=expression_tenants,
-            )
-    except Exception:
-        return
-
-
-async def learning_context(tenant: str, query: str = "", *, trace: dict[str, Any] | None = None) -> str:
-    """构造群风格、黑话与表达注入块；关闭学习或 DB 不可用时返回空串。"""
+    phase: str = "reply",
+    history: list[dict[str, Any]] | None = None,
+    references: dict[str, str] | None = None,
+    trace: dict[str, Any] | None = None,
+) -> str:
+    """Planner 匹配上下文黑话；Replyer 独立选择表达，不再共享短查询和总字数预算。"""
     if not is_ready() or not tenant_learn_enabled(await chat_repository.get_session_state(tenant)):
         return ""
-    jargon_cfg = jargon_config()
-    expression_cfg = expression_config()
     target = tenant_target(tenant)
-    expression_use, _ = learning_flags(expression_cfg.get("learning_list"), target)
-    jargon_use, _ = learning_flags(jargon_cfg.get("learning_list"), target)
+    injected: dict[str, Any] = {"style": 0, "jargon": [], "expressions": []}
+    sections: list[str] = []
     try:
-        style = await chat_repository.get_style(tenant) if expression_use else None
-        jargon_rows: list[object] = []
-        jargon_tenants = [tenant]
-        if query and jargon_use:
-            jargon_tenants = await _related_tenants(tenant, target, jargon_cfg.get("groups"))
-            jargon_rows = await chat_repository.list_jargon(tenant, status="active", limit=500, tenants=jargon_tenants)
-        expression_rows: list[object] = []
-        expression_tenants = [tenant]
-        if query and expression_use:
-            expression_tenants = await _related_tenants(tenant, target, expression_cfg.get("groups"))
-            expression_rows = await chat_repository.list_expressions(
+        if phase == "planner":
+            cfg = jargon_config()
+            use, _ = learning_flags(cfg.get("learning_list"), target)
+            if not use:
+                return ""
+            tenants = await _related_tenants(tenant, target, cfg.get("groups"))
+            rows = await chat_repository.list_jargon(tenant, status="active", limit=None, tenants=tenants)
+            hits = _jargon_hits(rows, context_user_texts(history or []), _MAX_JARGON_HITS)
+            existing = references if references is not None else {}
+            new_hits = [row for row in hits if str(getattr(row, "normalized", "")) not in existing]
+            for row in new_hits:
+                existing[str(getattr(row, "normalized", ""))] = (
+                    f"{getattr(row, 'term', '')}：{getattr(row, 'meaning', '')}"
+                )
+            if existing:
+                sections.append("\n".join([_JARGON_HEADER, *existing.values()]))
+            injected["jargon"] = [line.split("：", 1)[0] for line in existing.values()]
+            if new_hits:
+                await chat_repository.mark_jargon_used(
+                    tenant, [str(getattr(row, "term", "")) for row in new_hits], tenants=tenants
+                )
+        else:
+            cfg = expression_config()
+            use, _ = learning_flags(cfg.get("learning_list"), target)
+            if not use:
+                return ""
+            style = await chat_repository.get_style(tenant)
+            style_text = _style_line(style)
+            if style_text:
+                sections.append(style_text)
+                injected["style"] = int(getattr(style, "id", 0) or 0)
+                await chat_repository.mark_style_used(tenant)
+            tenants = await _related_tenants(tenant, target, cfg.get("groups"))
+            rows = await chat_repository.list_expressions(
                 tenant,
                 status="active",
-                limit=200,
-                tenants=expression_tenants,
-                manual_only=bool(expression_cfg.get("checked_only", False)),
+                limit=None,
+                tenants=tenants,
+                manual_only=bool(cfg.get("checked_only", False)),
             )
+            selected = await select_expressions(tenant, query, rows, history=history)
+            text = expression_line(selected)
+            if text:
+                sections.append(text)
+                injected["expressions"] = [int(row.id) for row in selected]
+                await chat_repository.mark_expressions_used(tenant, injected["expressions"], tenants=tenants)
     except Exception:
-        return ""
-    style_text = _style_line(style)[:_STYLE_CHARS] if style is not None else ""
-    hits = _jargon_hits(jargon_rows, query, _MAX_JARGON_HITS)
-    jargon_text = _jargon_line(hits)[:_JARGON_CHARS]
-    try:
-        expressions = await select_expressions(tenant, query, expression_rows) if expression_rows else []
-    except Exception:
-        expressions = []
-    expression_text = expression_line(expressions)[:_EXPRESSION_CHARS]
-    sections = [section for section in (style_text, jargon_text, expression_text) if section]
-    if not sections:
-        return ""
-    block = "\n".join([_HEADER, *sections])[:_TOTAL_CHARS]
+        logger.opt(exception=True).debug("[ChatLearning] 构造学习参考失败")
+    block = "\n".join(sections)
     if trace is not None:
-        trace["injected"] = {
-            "style": int(getattr(style, "id", 0) or 0),
-            "jargon": [str(getattr(row, "term", "")) for row in hits],
-            "expressions": [int(getattr(row, "id", 0) or 0) for row in expressions],
-            "chars": {
-                "style": len(style_text),
-                "jargon": len(jargon_text),
-                "expressions": len(expression_text),
-                "total": len(block),
-            },
+        injected["chars"] = {
+            "style": len(sections[0]) if injected["style"] and sections else 0,
+            "jargon": len(block) if phase == "planner" else 0,
+            "expressions": len(sections[-1]) if injected["expressions"] else 0,
+            "total": len(block),
         }
-    await _mark_usage(
-        tenant,
-        style_text,
-        block,
-        hits,
-        jargon_text,
-        expressions,
-        expression_text,
-        jargon_tenants=jargon_tenants,
-        expression_tenants=expression_tenants,
-    )
+        trace["injected"] = injected
     return block

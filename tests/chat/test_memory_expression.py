@@ -380,10 +380,9 @@ class ExpressionLearningTests(_ExpressionTestCase):
             self.assertTrue(await learn_expressions(self.tenant, provider=provider))
 
         rows = {row.situation: row for row in await chat_repository.list_expressions(self.tenant)}
-        self.assertTrue(rows["炫耀成绩时"].checked)
+        self.assertFalse(rows["炫耀成绩时"].checked)
         self.assertFalse(rows["炫耀成绩时"].rejected)
-        self.assertTrue(rows["有人求助时"].checked)
-        self.assertTrue(rows["有人求助时"].rejected)
+        self.assertNotIn("有人求助时", rows)
         cursor = await chat_repository.get_cursor(self.tenant, "expression")
         self.assertEqual(cursor.cursor_seq, int(messages[-1].id or 0))
 
@@ -417,7 +416,7 @@ class ExpressionLearningTests(_ExpressionTestCase):
         cursor = await chat_repository.get_cursor(self.tenant, "expression")
         self.assertEqual(cursor.cursor_seq, int(messages[-1].id or 0))
 
-    async def test_review_failure_keeps_unchecked(self) -> None:
+    async def test_review_failure_does_not_store_candidate(self) -> None:
         await self._seed_many(40)
         provider = _QueueProvider(
             _learn_payload({"situation": "炫耀时", "style": "笑死"}),
@@ -428,9 +427,21 @@ class ExpressionLearningTests(_ExpressionTestCase):
         with _config():
             self.assertTrue(await learn_expressions(self.tenant, provider=provider))
 
-        [row] = await chat_repository.list_expressions(self.tenant)
-        self.assertFalse(row.checked)
-        self.assertFalse(row.rejected)
+        self.assertEqual(await chat_repository.list_expressions(self.tenant), [])
+
+    async def test_review_failure_does_not_discard_other_candidates(self) -> None:
+        await self._seed_many(40)
+        provider = _QueueProvider(
+            _learn_payload(
+                {"situation": "有人求助", "style": "让我看看"}, {"situation": "有人开玩笑", "style": "笑死"}
+            ),
+            ValueError("first review failed"),
+            {"suitable": True},
+        )
+        with _config():
+            self.assertTrue(await learn_expressions(self.tenant, provider=provider))
+        rows = await chat_repository.list_expressions(self.tenant)
+        self.assertEqual([row.style for row in rows], ["笑死"])
 
     async def test_self_reflect_off_skips_review(self) -> None:
         await self._seed_many(40)
@@ -441,7 +452,7 @@ class ExpressionLearningTests(_ExpressionTestCase):
 
         self.assertEqual(provider.calls, 1)
         [row] = await chat_repository.list_expressions(self.tenant)
-        self.assertTrue(row.checked)
+        self.assertFalse(row.checked)
         self.assertFalse(row.rejected)
 
     async def test_learning_list_learn_off_skips_tenant(self) -> None:
@@ -519,7 +530,41 @@ class ExpressionLearningTests(_ExpressionTestCase):
 
 
 class ExpressionInjectionTests(_ExpressionTestCase):
-    """只注入已复审表达；阈值、权重、预算、使用计数与租户隔离。"""
+    """普通和向量档统一候选门槛，完整条目注入与租户隔离。"""
+
+    async def test_unchecked_candidates_are_usable_by_default(self) -> None:
+        await self._save_expressions(
+            [{"situation": f"有人开玩笑{index}", "style": f"说法{index}", "checked": False} for index in range(10)]
+        )
+        with _config():
+            block = await learning_context(self.tenant, query="回复方向")
+        self.assertEqual(block.count('- 当"'), 5)
+        with _config(checked_only=True):
+            self.assertEqual(await learning_context(self.tenant, query="回复方向"), "")
+
+    async def test_selected_entries_are_complete_and_trace_matches(self) -> None:
+        await self._save_expressions(
+            [
+                {"situation": f"情境{index}" + "很长的场景" * 12, "style": f"说法{index}" + "长句子" * 20}
+                for index in range(10)
+            ]
+        )
+        trace = {}
+        with _config():
+            block = await learning_context(self.tenant, query="回复方向", trace=trace)
+        rows = {int(row.id): row for row in await chat_repository.list_expressions(self.tenant)}
+        self.assertGreater(len(block), 450)
+        for identity in trace["injected"]["expressions"]:
+            row = rows[identity]
+            self.assertIn(f'- 当"{row.situation}"时，可以用"{row.style}"来表达。', block)
+            self.assertEqual(row.use_count, 1)
+
+    async def test_planner_does_not_select_expressions(self) -> None:
+        await self._save_expressions([{"situation": f"情境{index}", "style": f"说法{index}"} for index in range(10)])
+        with _config():
+            block = await learning_context(self.tenant, phase="planner", history=[])
+        self.assertEqual(block, "")
+        self.assertEqual(sum(row.use_count for row in await chat_repository.list_expressions(self.tenant)), 0)
 
     async def test_checked_expression_is_injected(self) -> None:
         await self._save_expressions(
@@ -529,12 +574,12 @@ class ExpressionInjectionTests(_ExpressionTestCase):
         with _config():
             block = await learning_context(self.tenant, query="别人在群里炫耀成绩，你怎么看")
 
-        self.assertIn("【表达参考】", block)
+        self.assertIn("你可以视情况自由使用以下句式", block)
         self.assertIn("笑死，又来", block)
         rows = await chat_repository.list_expressions(self.tenant)
         self.assertEqual(sum(row.use_count for row in rows), 5)
 
-    async def test_unchecked_and_rejected_are_not_injected(self) -> None:
+    async def test_rejected_candidates_do_not_meet_minimum_pool_size(self) -> None:
         await self._save_expressions(
             [
                 {"situation": "别人在群里炫耀成绩时", "style": "笑死，又来", "checked": False},
@@ -545,7 +590,7 @@ class ExpressionInjectionTests(_ExpressionTestCase):
         with _config():
             block = await learning_context(self.tenant, query="别人在群里炫耀成绩，你怎么看")
 
-        self.assertNotIn("【表达参考】", block)
+        self.assertNotIn("你可以视情况自由使用以下句式", block)
 
     async def test_low_similarity_is_not_injected(self) -> None:
         await self._save_expressions([{"situation": "别人在群里炫耀成绩时", "style": "笑死，又来"}])
@@ -553,7 +598,7 @@ class ExpressionInjectionTests(_ExpressionTestCase):
         with _config():
             block = await learning_context(self.tenant, query="今天晚饭吃什么")
 
-        self.assertNotIn("【表达参考】", block)
+        self.assertNotIn("你可以视情况自由使用以下句式", block)
 
     async def test_injection_cap_is_five(self) -> None:
         await self._save_expressions(
@@ -563,7 +608,7 @@ class ExpressionInjectionTests(_ExpressionTestCase):
         with _config():
             block = await learning_context(self.tenant, query="别人在群里炫耀成绩，你怎么看")
 
-        self.assertEqual(block.count("当「"), 5)
+        self.assertEqual(block.count('- 当"'), 5)
 
     async def test_other_tenant_sees_nothing(self) -> None:
         await self._save_expressions([{"situation": "别人在群里炫耀成绩时", "style": "笑死，又来"}])
@@ -600,12 +645,12 @@ class ExpressionInjectionTests(_ExpressionTestCase):
 
         with _config(checked_only=True):
             block = await learning_context(self.tenant, query="别人在群里炫耀成绩，你怎么看")
-        self.assertNotIn("【表达参考】", block)
+        self.assertNotIn("你可以视情况自由使用以下句式", block)
         self.assertNotIn("就这", block)
 
         with _config():
             block = await learning_context(self.tenant, query="别人在群里炫耀成绩，你怎么看")
-        self.assertNotIn("【表达参考】", block)
+        self.assertNotIn("你可以视情况自由使用以下句式", block)
         manual = await chat_repository.list_expressions(self.tenant, manual_only=True)
         self.assertEqual([item.style for item in manual], ["笑死，又来"])
 
@@ -809,7 +854,9 @@ class ExpressionInvalidationTests(_ExpressionTestCase):
             expected_cursor=0,
             source_batch_id="expression:0:0",
         )
-        provider = _QueueProvider(_learn_payload({"situation": "别人在群里炫耀成绩时", "style": "笑死，又来"}))
+        provider = _QueueProvider(
+            _learn_payload({"situation": "别人在群里炫耀成绩时", "style": "笑死，又来"}), _approve_all(1)
+        )
         with _config():
             self.assertTrue(await learn_expressions(self.tenant, provider=provider))
 

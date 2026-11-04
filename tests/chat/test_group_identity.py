@@ -180,3 +180,27 @@ class FocusIdentityTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("群 102", references[0])
         self.assertIn("群 102 的身份：普通成员", references[1])
         self.assertNotIn("群 101", references[1])
+
+    async def test_learning_references_read_only_the_target_session_history(self) -> None:
+        """共享规划仍逐会话匹配黑话，不使用其他成员的原始消息冒充本会话上下文。"""
+        group = group_runtime.FocusGroupRuntime("learning-test")
+        group.members = {
+            sid: SimpleNamespace(bot=SimpleNamespace(self_id="501"), request=request(gid))
+            for sid, gid in (("a", "101"), ("b", "102"))
+        }
+        histories = {sid: [{"role": "user", "content": sid, "_sender_id": sid}] for sid in ("a", "b")}
+        manager = SimpleNamespace(get_system=lambda: {"chat": {"persona": "小鱼"}})
+        with (
+            patch.object(group, "_has_unconsidered", return_value=True),
+            patch.object(group_runtime, "get_config_manager", return_value=manager),
+            patch.object(group_runtime, "get_bot_group_role", AsyncMock(return_value="member")),
+            patch.object(group_runtime, "_memory_block", AsyncMock(return_value="")),
+            patch.object(group_runtime.chat_service.session_store, "get", side_effect=lambda sid: histories[sid]),
+            patch.object(group_runtime, "_learning_reference", AsyncMock(return_value="黑话参考")) as learning,
+        ):
+            references = await group._build_references()
+        self.assertEqual(learning.await_count, 2)
+        self.assertIs(learning.await_args_list[0].args[1], histories["a"])
+        self.assertIs(learning.await_args_list[1].args[1], histories["b"])
+        self.assertIn('session_id="a"', references[0])
+        self.assertIn('session_id="b"', references[1])

@@ -117,7 +117,11 @@ class BudgetIntegrationTests(ReplyPipelineTests):
             ("user", "新问题"),
             ("assistant", "新回答"),
         ):
-            self.store.append(TENANT, {"role": role, "content": content}, limit=2)
+            self.store.append(
+                TENANT,
+                {"role": role, "content": content, "_sender_id": "user", "_self_message": role == "assistant"},
+                limit=2,
+            )
         provider = _Provider()
 
         await self._run(provider, _Config())

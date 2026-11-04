@@ -95,21 +95,40 @@ async def _wait_image_descriptions(task: asyncio.Task | None) -> list[str]:
 
 
 async def _memory_block(request: ChatRequest, query: str = "", trace: dict[str, Any] | None = None) -> str:
-    """读取 A_Memorix 长期记忆与群学习参考；失败只降级注入，不影响本轮对话。"""
+    """读取 A_Memorix 长期记忆，学习参考按 Planner 和 Replyer 分别组装。"""
     try:
         block = await memory_block(request)
     except Exception:
         logger.opt(exception=True).debug("[Chat] 长期记忆读取失败，本轮不注入")
         block = ""
-    try:
-        learning = await learning_context(request.session_id, query, trace=trace)
-    except Exception:
-        logger.opt(exception=True).debug("[Chat] 群学习参考读取失败，本轮不注入")
-        learning = ""
     if trace is not None:
         trace["memory_chars"] = len(block)
-        trace["learning_chars"] = len(learning)
-    return "\n".join(part for part in (block, learning) if part)
+    return block
+
+
+async def _learning_reference(
+    request: ChatRequest,
+    history: list[dict[str, Any]],
+    *,
+    reply_reference: str | None = None,
+    trace: dict[str, Any] | None = None,
+) -> str:
+    """黑话只供 Planner 理解，表达只供 Replyer 使用，重建上下文沿用本轮已注入词条。"""
+    intent = request.metadata.get("expression_intent")
+    intent_text = "\n".join(f"{key}：{value}" for key, value in intent.items()) if isinstance(intent, dict) else ""
+    query = "\n\n".join(part for part in (intent_text, reply_reference or "") if part)
+    try:
+        return await learning_context(
+            request.session_id,
+            query,
+            phase="planner" if reply_reference is None else "reply",
+            history=history,
+            references=request.metadata.setdefault("planner_jargon_references", {}),
+            trace=trace,
+        )
+    except Exception:
+        logger.opt(exception=True).debug("[Chat] 学习参考读取失败，本轮不注入")
+        return ""
 
 
 class ChatService:
@@ -583,6 +602,16 @@ class ChatService:
             async with self.session_store.lock(request.session_id):
                 self.session_store.trim(request.session_id, limit)
                 history = [m for m in self.session_store.get(request.session_id) if m.get("role") != "system"]
+                if focus_instruction is not None:
+                    history = [
+                        message
+                        for message in history
+                        if not message.get("_planner_internal")
+                        and not message.get("_reference")
+                        and (message.get("_sender_id") or message.get("_self_message"))
+                        and message.get("role") in {"user", "assistant"}
+                        and not message.get("tool_calls")
+                    ]
                 while history and history[0].get("role") != "user" and not history[0].get("_self_message"):
                     history.pop(0)
                 epoch = (
@@ -649,6 +678,15 @@ class ChatService:
                 current_content,
                 context_summary=summary,
             )
+            learning_history = list(history)
+            current_ids = set(entry.get("_source_ids", []))
+            if not current_ids or not any(current_ids.intersection(item.get("_source_ids", [])) for item in history):
+                learning_history.append(entry)
+            reference = await _learning_reference(
+                request, learning_history, reply_reference=focus_instruction, trace=trace
+            )
+            if reference:
+                messages.append({"role": "user", "content": reference})
             if focus_instruction:
                 messages.append({"role": "user", "content": focus_instruction.strip()})
                 is_self = bool(request.metadata.get("bot_id")) and request.user_id == request.metadata["bot_id"]

@@ -213,10 +213,36 @@ class SelectByVectorsTests(unittest.IsolatedAsyncioTestCase):
                 [],
             )
 
-    async def test_recall_failure_falls_back_to_fuzzy(self) -> None:
+    async def test_selector_receives_recent_real_context_and_reply_intent(self) -> None:
+        """精细档筛选器读取真实上下文，不把内部参考和工具协议算进最近十条。"""
+        provider = AsyncMock(return_value=LLMResponse(content='{"selected_ids":[]}'))
+        history = [{"role": "user", "_sender_id": "u", "content": f"真实消息{index}"} for index in range(12)]
+        history.extend(
+            [
+                {"role": "tool", "content": "工具返回"},
+                {"role": "user", "_sender_id": "u", "_planner_internal": True, "content": "内部指令"},
+            ]
+        )
+        with (
+            patch.object(vector_module, "vector_candidates", AsyncMock(return_value=self.rows)) as recall,
+            patch.object(vector_module, "fallback_provider", lambda *a, **k: _Lease(SimpleProvider(provider))),
+            patch.object(vector_module, "routed_task", return_value="utils"),
+        ):
+            await vector_module.select_by_vectors(
+                TENANT, "安慰朋友，语气温和", self.rows, index_path="x.json", pool_size=50, history=history
+            )
+        self.assertEqual(recall.await_args.args[0], "安慰朋友，语气温和")
+        messages = provider.await_args.kwargs["messages"]
+        self.assertEqual(len(messages), 11)
+        self.assertEqual(messages[0]["role"], "system")
+        self.assertIn("安慰朋友，语气温和", messages[0]["content"])
+        self.assertEqual(messages[1]["content"], "真实消息2")
+        self.assertNotIn("内部指令", str(messages))
+
+    async def test_recall_failure_with_insufficient_candidates_is_empty(self) -> None:
         with patch.object(vector_module, "vector_candidates", AsyncMock(side_effect=RuntimeError("no model"))):
-            self.assertIsNone(
-                await vector_module.select_by_vectors(TENANT, "再见", self.rows, index_path="x.json", pool_size=50)
+            self.assertEqual(
+                await vector_module.select_by_vectors(TENANT, "再见", self.rows, index_path="x.json", pool_size=50), []
             )
 
     async def test_selector_failure_uses_candidates(self) -> None:
@@ -228,6 +254,19 @@ class SelectByVectorsTests(unittest.IsolatedAsyncioTestCase):
                 TENANT, "再见", self.rows, index_path="x.json", pool_size=50
             )
         self.assertEqual([row.id for row in selected], [1, 2])  # type: ignore[union-attr]
+
+    async def test_recall_failure_still_runs_context_selector_on_ordinary_candidates(self) -> None:
+        """向量召回失败时仍按精细档对子代理候选精排，不能直接注入随机结果。"""
+        rows = [_row(index, "问候", f"问候{index}") for index in range(1, 11)]
+        provider = AsyncMock(return_value=LLMResponse(content='{"selected_ids":[]}'))
+        with (
+            patch.object(vector_module, "vector_candidates", AsyncMock(side_effect=RuntimeError("no model"))),
+            patch.object(vector_module, "fallback_provider", lambda *a, **k: _Lease(SimpleProvider(provider))),
+            patch.object(vector_module, "routed_task", return_value="utils"),
+        ):
+            selected = await vector_module.select_by_vectors(TENANT, "告别", rows, index_path="x", pool_size=50)
+        self.assertEqual(selected, [])
+        provider.assert_awaited_once()
 
 
 class SimpleProvider:
@@ -248,7 +287,16 @@ class SelectExpressionsTests(unittest.IsolatedAsyncioTestCase):
             selected = await expression_module.select_expressions(TENANT, "早上好", self.rows)
         self.assertEqual(selected, [])
 
+    async def test_enabled_also_requires_ten_candidates(self) -> None:
+        with (
+            patch.object(expression_module, "expression_vector_config", return_value={"enabled": True}),
+            patch.object(expression_module, "select_by_vectors", AsyncMock()) as vector,
+        ):
+            self.assertEqual(await expression_module.select_expressions(TENANT, "回复方向", self.rows), [])
+        vector.assert_not_awaited()
+
     async def test_enabled_prefers_vector(self) -> None:
+        self.rows = [_row(index, "问候", f"早上好{index}") for index in range(1, 11)]
         with (
             patch.object(
                 expression_module,
@@ -261,10 +309,10 @@ class SelectExpressionsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(selected, [self.rows[0]])
         vector.assert_awaited_once()
 
-    async def test_vector_none_falls_back(self) -> None:
+    async def test_vector_empty_selection_stays_empty(self) -> None:
         with (
             patch.object(expression_module, "expression_vector_config", return_value={"enabled": True}),
-            patch.object(expression_module, "select_by_vectors", AsyncMock(return_value=None)),
+            patch.object(expression_module, "select_by_vectors", AsyncMock(return_value=[])),
         ):
             selected = await expression_module.select_expressions(TENANT, "早上好", self.rows)
         self.assertEqual(selected, [])

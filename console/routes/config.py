@@ -461,7 +461,9 @@ def _all_config_tab() -> dict[str, Any]:
                         "label": "只用人工确认表达",
                         "component": "Switch",
                         "default": SYSTEM_DEFAULTS["chat"]["expression"]["checked_only"],
-                        "helpMessage": "开启后只注入在控制台人工通过过的表达；关闭时复审通过的表达都可用。",
+                        "helpMessage": (
+                            "开启后只使用人工精选的表达；关闭时使用作用域内未被拒绝的表达，AI 复审在新条目写入前执行。"
+                        ),
                     },
                     {
                         "field": "self_reflect",

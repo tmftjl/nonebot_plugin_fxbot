@@ -26,8 +26,6 @@ _BATCH_SIZE = 40
 _MIN_MESSAGES = 10
 _MAX_ITEMS = 20
 _COUNT_STEP = 1.0
-# MaiBot `src/chat/replyer/maisaka_expression_selector.py` MAX_SELECTED_EXPRESSIONS
-_MAX_INJECTED = 5
 _EXPRESSION_TYPES = frozenset({"phrase", "tone", "structure", "emoji"})
 MAX_SOURCE_LENGTH = 200_000
 CHUNK_LENGTH = 4_500
@@ -137,8 +135,8 @@ async def request_expressions(
     return None
 
 
-async def request_review(provider: Any, items: list[dict[str, Any]], *, model: str = "") -> list[bool] | None:
-    """调用复审模型；失败返回 None，由调用方决定是否保留未复审条目。"""
+async def request_review(provider: Any, items: list[dict[str, Any]], *, model: str = "") -> list[bool]:
+    """逐条执行写入前复审，失败仅拒绝当前条目，不影响其余候选。"""
     if not items:
         return []
     criteria = "\n".join(
@@ -161,10 +159,12 @@ async def request_review(provider: Any, items: list[dict[str, Any]], *, model: s
             data = json.loads(repair_json(response.content))
         except Exception as exc:
             logger.opt(exception=True).debug(f"[ChatExpression] 表达复审失败: {type(exc).__name__}")
-            return None
+            decisions.append(False)
+            continue
         if not isinstance(data, dict) or not isinstance(data.get("suitable"), bool):
-            return None
-        decisions.append(data["suitable"])
+            decisions.append(False)
+        else:
+            decisions.append(data["suitable"])
     return decisions
 
 
@@ -387,19 +387,18 @@ async def learn_expressions(
             items = await request_expressions(leased, selected)
             if items is None:
                 return False
+            if items and config.get("self_reflect", True):
+                decisions = await request_review(
+                    leased, [{"situation": item.situation, "style": item.style} for item in items]
+                )
+                items = [item for item, approved in zip(items, decisions) if approved]
             existing = await chat_repository.list_expressions(tenant, limit=1000)
             new_items, updates = merge_candidates(items, existing)
-            if new_items and config.get("self_reflect", True):
-                decisions = await request_review(leased, new_items)
-            else:
-                decisions = [True] * len(new_items)
     except Exception as exc:
         logger.opt(exception=True).warning(f"[ChatExpression] 租户表达学习失败: {type(exc).__name__}")
         return False
     inserts: list[dict[str, Any]] = []
-    for index, item in enumerate(new_items):
-        checked = decisions is not None
-        approved = bool(decisions[index]) if checked else False
+    for item in new_items:
         inserts.append(
             {
                 "situation": item["situation"],
@@ -408,8 +407,8 @@ async def learn_expressions(
                 "style_hash": text_hash(item["style"]),
                 "type": item["type"],
                 "count": float(item["count"]),
-                "checked": checked,
-                "rejected": checked and not approved,
+                "checked": False,
+                "rejected": False,
                 "source_message_seq": int(item.get("source_message_seq") or seq_end),
                 "learn_count": int(item["learn"]),
             }
@@ -425,10 +424,12 @@ async def learn_expressions(
     )
 
 
-async def select_expressions(tenant: str, query: str, rows: list[ChatExpression]) -> list[ChatExpression]:
+async def select_expressions(
+    tenant: str, query: str, rows: list[ChatExpression], *, history: list[dict[str, Any]] | None = None
+) -> list[ChatExpression]:
     """向量模式召回后筛选；普通模式按 MaiBot 的计数权重抽样直接注入。"""
-    active = [row for row in rows if row.checked and not row.rejected]
-    if not active:
+    active = [row for row in rows if not row.rejected]
+    if len(active) < 10:
         return []
     vector_cfg = expression_vector_config()
     if vector_cfg.get("enabled"):
@@ -436,15 +437,14 @@ async def select_expressions(tenant: str, query: str, rows: list[ChatExpression]
             pool = int(vector_cfg.get("candidate_pool_size", 50))
         except (TypeError, ValueError):
             pool = 50
-        selected = await select_by_vectors(
+        return await select_by_vectors(
             tenant,
             query,
             active,
             index_path=str(vector_cfg.get("index_path") or ""),
             pool_size=pool,
+            history=history,
         )
-        if selected is not None:
-            return selected
     return sample_expression_candidates(active)
 
 
@@ -482,12 +482,12 @@ def sample_expression_candidates(rows: list[ChatExpression]) -> list[ChatExpress
 
 
 def expression_line(rows: list[ChatExpression]) -> str:
-    """把选中的表达压成一段参考，明确要求不要照抄。"""
+    """完整列出选中句式，沿用 MaiBot 的自由使用措辞。"""
     pairs = [
-        f"当「{sanitize_line(row.situation, 60)}」时，可以说「{sanitize_line(row.style, 60)}」"
+        f'- 当"{row.situation}"时，可以用"{row.style}"来表达。'
         for row in rows
         if str(row.situation or "").strip() and str(row.style or "").strip()
     ]
     if not pairs:
         return ""
-    return sanitize_line(f"【表达参考】可以参考这些说法，不要照抄：{'；'.join(pairs)}", 600)
+    return "你可以视情况自由使用以下句式：\n" + "\n".join(pairs)

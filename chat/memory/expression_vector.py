@@ -2,7 +2,7 @@
 
 对齐 MaiBot（`src/chat/replyer/expression_vector_index.py` 与
 `maisaka_expression_selector.py`）：索引按情境+说法文本增量维护，落盘为 JSON；
-向量召回失败或没有候选时由调用方回退模糊匹配。
+向量召回失败或没有候选时回退普通候选，精细档仍通过上下文子代理筛选。
 """
 
 from __future__ import annotations
@@ -199,7 +199,7 @@ async def vector_candidates(
 def build_selector_prompt(query: str, rows: list[ChatExpression]) -> str:
     """候选列表只给编号、情境和说法，要求模型返回编号数组。"""
     lines = [f"{int(row.id or 0)}: 情景={row.situation} | 风格={row.style}" for row in rows if int(row.id or 0)]
-    return _SELECTOR_PROMPT.format(lines="\n".join(lines)) + f"\n\n当前聊天：\n{query}"
+    return _SELECTOR_PROMPT.format(lines="\n".join(lines)) + f"\n\n表达选择意图与回复信息参考：\n{query}"
 
 
 def parse_selected_ids(text: str, rows: list[ChatExpression]) -> list[int]:
@@ -230,29 +230,49 @@ async def select_by_vectors(
     index_path: str,
     pool_size: int,
     timeout: float = 20.0,
-) -> list[ChatExpression] | None:
-    """向量召回后再让模型筛选；返回 None 表示应回退模糊匹配。"""
+    history: list[dict[str, Any]] | None = None,
+) -> list[ChatExpression]:
+    """向量召回失败时改用普通候选，精细档始终继续上下文二次筛选。"""
     try:
         candidates = await asyncio.wait_for(
             vector_candidates(query, rows, index_path=index_path, pool_size=pool_size),
             timeout=timeout,
         )
     except Exception:
-        logger.opt(exception=True).debug("[ChatExpression] 表达向量召回失败，回退模糊匹配")
-        return None
+        logger.opt(exception=True).debug("[ChatExpression] 表达向量召回失败，回退普通候选")
+        candidates = []
     if not candidates:
-        return None
+        from .expression import sample_expression_candidates
+
+        candidates = sample_expression_candidates(rows)
+    if not candidates:
+        return []
     by_id = {int(row.id or 0): row for row in candidates}
     try:
         async with fallback_provider(routed_task("fast_model", "utils"), tenant) as provider:
+            messages = [{"role": "system", "content": build_selector_prompt(query, candidates)}]
+            # 子代理只接收最近十条真实收发消息，不能把 Planner 工具协议当聊天内容。
+            visible_history = [
+                message
+                for message in (history or [])
+                if message.get("role") in {"user", "assistant"}
+                and (message.get("_sender_id") or message.get("_self_message"))
+                and not message.get("_planner_internal")
+                and not message.get("_reference")
+                and not message.get("tool_calls")
+            ]
+            messages.extend(
+                {"role": "user" if message.get("_self_message") else message["role"], "content": message["content"]}
+                for message in visible_history[-10:]
+            )
             response = await asyncio.wait_for(
                 provider.chat(
-                    messages=[{"role": "user", "content": build_selector_prompt(query, candidates)}],
+                    messages=messages,
                     temperature=0.2,
                 ),
                 timeout=timeout,
             )
     except Exception:
         logger.opt(exception=True).debug("[ChatExpression] 表达筛选失败，直接注入向量候选")
-        return candidates[:MAX_SELECTED]
+        return candidates
     return [by_id[value] for value in parse_selected_ids(str(response.content or ""), candidates)]

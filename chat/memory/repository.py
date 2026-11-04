@@ -645,7 +645,7 @@ class ChatRepository:
         *,
         status: str | None = None,
         search: str = "",
-        limit: int = 500,
+        limit: int | None = 500,
         offset: int = 0,
         tenants: list[str] | None = None,
     ) -> list[ChatJargon]:
@@ -886,7 +886,7 @@ class ChatRepository:
         *,
         status: str | None = None,
         search: str = "",
-        limit: int = 500,
+        limit: int | None = 500,
         offset: int = 0,
         tenants: list[str] | None = None,
         manual_only: bool = False,
@@ -929,7 +929,7 @@ class ChatRepository:
         scope = list(dict.fromkeys(tenants or [tenant]))
         statement = select(ChatExpression).where(ChatExpression.tenant.in_(scope))
         if status == "active":
-            statement = statement.where(ChatExpression.checked.is_(True), ChatExpression.rejected.is_(False))
+            statement = statement.where(ChatExpression.rejected.is_(False))
         elif status == "rejected":
             statement = statement.where(ChatExpression.rejected.is_(True))
         elif status == "unchecked":
@@ -1506,13 +1506,7 @@ class ChatRepository:
     ) -> dict[str, int]:
         """表达计数每周衰减；长时间未用且低于阈值的条目驳回。"""
         cutoff = now - timedelta(days=max(1, idle_days))
-        rows = list(
-            (
-                await session.execute(
-                    select(ChatExpression).where(ChatExpression.checked.is_(True), ChatExpression.rejected.is_(False))
-                )
-            ).scalars()
-        )
+        rows = list((await session.execute(select(ChatExpression).where(ChatExpression.rejected.is_(False)))).scalars())
         counts = {"decayed": 0, "rejected": 0}
         for row in rows:
             row.count = max(0.0, float(row.count) * factor)
