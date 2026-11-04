@@ -6,21 +6,21 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from time import time
 from typing import Any
+from dataclasses import field, dataclass
 
 from nonebot import logger
 
 from ..types import ChatRequest
-from ._host.llm import LLMServiceClient
-from ._host.person_db import make_person_id, person_scope
-from ._host.prompt_i18n import load_prompt
-from .core.utils.profile_text import build_profile_injection_text
-from .messages import count_messages, recent_messages
 from .people import session_parts
 from .runtime import amemorix_runtime
-from .service import person_profile, search
+from .service import search, person_profile
+from .messages import count_messages, recent_messages
+from ._host.llm import LLMServiceClient
+from ._host.person_db import person_scope, make_person_id
+from ._host.prompt_i18n import load_prompt
+from .core.utils.profile_text import build_profile_injection_text
 
 HEURISTIC_MARKER = "【启发式记忆-内部参考】"
 PROFILE_MARKER = "【人物画像-内部参考】"
@@ -75,11 +75,11 @@ class HeuristicRecall:
         messages = await recent_messages(tenant, window_size)
         if len(messages) < window_size:
             return ""
-        platform, group_id = session_parts(tenant)
+        platform = request.platform or session_parts(tenant)[0]
         context = _RecallContext(
             tenant=tenant,
             platform=platform,
-            group_id=group_id,
+            group_id=str(request.group_id or ""),
             user_id=request.user_id,
             messages=messages,
             active_person_ids=self._active_person_ids(request, messages, platform),

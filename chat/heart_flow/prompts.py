@@ -24,6 +24,14 @@ def planner_prompt(name: str, text: str, behavior: dict[str, Any], *, is_group: 
         else "- query_memory()：当对方提到“之前”“上次”“最近”“还记得吗”“我喜欢”“我说过”等信号，"
         "或回复依赖长期偏好、先前承诺、共同经历、人物长期信息时，可以更积极检索。"
     )
+    if focus:
+        # 共享主体可能同时处理群聊与私聊，不能用单一群聊规则覆盖所有成员。
+        attention = ""
+        query_rule = (
+            "- query_memory()：按目标 session_id 的真实会话类型检索。"
+            "群聊仅在回复依赖过去对话、共同经历或进展时检索；私聊可根据长期偏好、承诺或回忆信号检索。"
+            "不得把共享上下文或检索结果当作目标聊天的在场人物与经历，不向其他聊天泄露私聊或个人隐私。"
+        )
     capabilities = capabilities_config()
     subagent_rule = ""
     if capabilities.get("planner_subagent"):

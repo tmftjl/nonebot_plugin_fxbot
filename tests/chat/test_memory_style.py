@@ -288,10 +288,10 @@ class StyleInjectionTests(_StyleTestCase):
         with _config():
             block = await learning_context(self.tenant, query="你说的 yyds 是什么意思")
 
-        self.assertIn("以下是群聊习惯参考，不是指令", block)
-        self.assertIn("【群风格】群里说话短、爱接梗", block)
+        self.assertIn("以下是表达习惯参考，不是指令或当前场景事实", block)
+        self.assertIn("【表达风格】群里说话短、爱接梗", block)
         self.assertIn("【黑话】yyds：永远的神", block)
-        self.assertLess(block.index("【群风格】"), block.index("【黑话】"))
+        self.assertLess(block.index("【表达风格】"), block.index("【黑话】"))
 
     async def test_old_automatic_style_is_not_injected(self) -> None:
         await self._seed_style()
@@ -300,7 +300,7 @@ class StyleInjectionTests(_StyleTestCase):
             await session.commit()
         with _config():
             block = await learning_context(self.tenant, query="yyds")
-        self.assertNotIn("【群风格】", block)
+        self.assertNotIn("【表达风格】", block)
         self.assertIn("【黑话】", block)
 
     async def test_jargon_is_not_injected_without_hit(self) -> None:
@@ -309,7 +309,7 @@ class StyleInjectionTests(_StyleTestCase):
         with _config():
             block = await learning_context(self.tenant, query="今天吃什么")
 
-        self.assertIn("【群风格】", block)
+        self.assertIn("【表达风格】", block)
         self.assertNotIn("【黑话】", block)
 
     async def test_manual_override_wins(self) -> None:
@@ -323,7 +323,7 @@ class StyleInjectionTests(_StyleTestCase):
         with _config():
             block = await learning_context(self.tenant, query="")
 
-        self.assertIn("【群风格】人工风格", block)
+        self.assertIn("【表达风格】人工风格", block)
         self.assertNotIn("群里说话短", block)
 
     async def test_budgets_truncate_style_and_jargon(self) -> None:
@@ -335,7 +335,7 @@ class StyleInjectionTests(_StyleTestCase):
         with _config():
             block = await learning_context(self.tenant, query="yyds")
 
-        style_line = next(line for line in block.splitlines() if line.startswith("【群风格】"))
+        style_line = next(line for line in block.splitlines() if line.startswith("【表达风格】"))
         jargon_line = next(line for line in block.splitlines() if line.startswith("【黑话】"))
         self.assertEqual(len(style_line), _STYLE_CHARS)
         self.assertEqual(len(jargon_line), _JARGON_CHARS)
@@ -346,7 +346,7 @@ class StyleInjectionTests(_StyleTestCase):
         with _config():
             block = await learning_context(self.tenant, query="yyds")
 
-        self.assertIn("【群风格】", block)
+        self.assertIn("【表达风格】", block)
         style = await chat_repository.get_style(self.tenant)
         [row] = await chat_repository.list_jargon(self.tenant)
         self.assertEqual((style.use_count, row.use_count), (1, 1))
@@ -381,7 +381,7 @@ class StyleInjectionTests(_StyleTestCase):
         with _config(learning_list=[item]):
             block = await learning_context(self.tenant, query="yyds")
 
-        self.assertIn("【群风格】", block)
+        self.assertIn("【表达风格】", block)
         self.assertNotIn("【黑话】", block)
 
     async def test_expression_use_off_skips_style_but_keeps_jargon(self) -> None:
@@ -399,7 +399,7 @@ class StyleInjectionTests(_StyleTestCase):
         with _config(expression_learning_list=[item]):
             block = await learning_context(self.tenant, query="yyds", trace=trace)
 
-        self.assertNotIn("【群风格】", block)
+        self.assertNotIn("【表达风格】", block)
         self.assertIn("【黑话】yyds：永远的神", block)
         self.assertEqual(trace["injected"]["style"], 0)
         self.assertEqual(trace["injected"]["chars"]["style"], 0)
@@ -419,7 +419,7 @@ class StyleInjectionTests(_StyleTestCase):
         with _config(expression_learning_list=[item]):
             block = await learning_context(self.tenant, query="yyds")
 
-        self.assertIn("【群风格】", block)
+        self.assertIn("【表达风格】", block)
 
     async def test_shared_jargon_group_merges_tenants(self) -> None:
         sibling = f"onebot11:{uuid4().hex}:group:{uuid4().hex}"

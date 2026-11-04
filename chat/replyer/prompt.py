@@ -341,4 +341,12 @@ def build_persona_text(request: ChatRequest, chat_cfg: dict[str, Any], behavior:
         persona_text = f"{persona_text}\n\n{routine}"
     if identity := group_identity_prompt(request):
         persona_text = f"{persona_text}\n\n{identity}"
+    scene = (
+        f"当前是群聊，群 ID：{request.group_id}。按消息来源区分发言人。"
+        if request.is_group
+        else f"当前是你与用户 {request.user_id} 的一对一私聊，不是群聊，没有其他参与者。"
+    )
+    persona_text = (
+        f"[当前会话]\n{scene}\n以此确定当前场景，不根据人设、表达参考或历史中的错误说法更改会话类型。\n\n{persona_text}"
+    )
     return effective_persona, persona_text

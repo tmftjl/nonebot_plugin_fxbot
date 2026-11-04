@@ -22,6 +22,9 @@ class SourcePromptTests(unittest.TestCase):
         if not source.is_dir():
             self.skipTest("本地 MaiBot 对照源码未提供")
         for template in (root / "chat/prompts").glob("*.prompt"):
+            if template.stem in {"maisaka_chat", "maisaka_chat_passive", "learn_style", "learn_jargon"}:
+                # 宿主同时支持私聊与群聊，这些模板明确移除了上游的群聊场景假设。
+                continue
             if template.name == "person_fact_writeback.prompt":
                 code = (root / "temp/MaiBot/src/services/memory_flow_service.py").read_text(encoding="utf-8")
                 original = code.split('prompt = f"""', 1)[1].split('"""', 1)[0]

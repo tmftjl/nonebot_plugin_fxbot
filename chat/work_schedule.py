@@ -95,7 +95,7 @@ def work_life_prompt(chat: dict[str, Any]) -> str:
     work_time = str(chat.get("work_time", "08:30-17:30"))
     return (
         "[日常作息]\n"
-        f"北京时间 {work_time}，仅法定工作日（含调休补班）上班时水群；"
+        f"北京时间 {work_time}，仅法定工作日（含调休补班）上班时在线聊天；"
         "休息时忙着打游戏、看电视、出去玩，不上线回复。被问时自然解释，不反复强调或编造具体经历。"
     )
 
