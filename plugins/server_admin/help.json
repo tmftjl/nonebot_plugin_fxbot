@@ -1,0 +1,9 @@
+{
+  "title": "服务器运维", "sub_title": "仅 NoneBot 主人私聊使用，机器人管理员不可用", "key": "服务器", "aliases": ["server_admin"],
+  "footer": "任意 shell 使用 Bot 进程权限，不是安全沙箱", "col_count": 1,
+  "groups": [{"group": "独立服务器会话", "list": [
+    {"icon": 1, "title": "#服务器模式", "desc": "进入独立服务器运维会话"},
+    {"icon": 2, "title": "#聊天模式", "desc": "回普通私聊并取消命令任务"},
+    {"icon": 3, "title": "#确认 [编号] / #取消", "desc": "120 秒内确认完整命令或放弃"}
+  ]}]
+}

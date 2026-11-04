@@ -13,6 +13,7 @@ from .helpers import upsert_plugin_defaults, upsert_command_defaults
 from .storage import PermissionStorage, get_storage, scan_plugins_for_permissions
 
 _CHECKER_EXPORTS = {
+    "is_superuser",
     "PermissionChecker",
     "check_permission",
     "permission_for",
@@ -31,6 +32,7 @@ def __getattr__(name: str):
 
 
 __all__ = [
+    "is_superuser",
     "Decision",
     "PermContext",
     "PermLevel",

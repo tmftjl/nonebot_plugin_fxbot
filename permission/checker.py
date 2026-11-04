@@ -82,6 +82,18 @@ async def _user_level(event: Any, config: dict[str, Any]) -> PermLevel:
     return PermLevel.LOW
 
 
+def is_superuser(user_id: str) -> bool:
+    """仅检查 NoneBot 主人，机器人管理员和权限白名单不授予此身份。"""
+    try:
+        identity = normalize_id(user_id)
+        return bool(identity and _is_superuser(identity))
+    except Exception:
+        from nonebot import logger
+
+        logger.opt(exception=True).warning("[Permission] 主人身份读取失败")
+        return False
+
+
 class PermissionChecker:
     """权限检查器。"""
 
