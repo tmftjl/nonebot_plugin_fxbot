@@ -15,6 +15,7 @@ from nonebot import logger
 
 from ..typo import apply_typo, typo_config
 from ..emoji import mark_used, emoji_by_hash
+from ..hooks import ChatHookContext, guard, notify, hook_context
 from ..trace import turn_trace
 from ..types import ChatRequest, ChatResponse, is_proactive
 from ..voice import synthesize, tts_enabled
@@ -146,6 +147,18 @@ async def send_pictures(service: Any, request: ChatRequest, response: ChatRespon
         if not _alive(service, request, response):
             return
         try:
+            if not await guard(
+                "send_guard", hook_context(request, phase="send"), kind="image", index=index
+            ) or not _alive(service, request, response):
+                if persisted_id is not None:
+                    await chat_repository.update_turn_item(
+                        request.session_id,
+                        persisted_id,
+                        generation=response.epoch,
+                        send_status="skipped",
+                        visible=False,
+                    )
+                return
             receipt = await matcher.send(build_message(bot, build_message_segment(bot, "image", picture)))
         except Exception:
             logger.opt(exception=True).warning("[Chat] 回复附图发送失败")
@@ -171,13 +184,21 @@ async def send_pictures(service: Any, request: ChatRequest, response: ChatRespon
         await service.mark_sent(request, attachment, 0, _receipt_id(receipt), content="[图片]")
 
 
-async def send_voice(runtime: Any, matcher: Any, text: str, alive: Any = None) -> bool:
+async def send_voice(
+    runtime: Any, matcher: Any, text: str, alive: Any = None, *, context: ChatHookContext | None = None
+) -> bool:
     """给刚发出的文字补一条同内容语音；未开启、失败或轮次已失效时只跳过。"""
     if not tts_enabled():
+        return False
+    if not await guard("send_guard", context or ChatHookContext("", phase="send"), kind="voice", text=text):
         return False
     audio = await synthesize(text)
     bot = getattr(runtime, "bot", None)
     if audio is None or bot is None or not (alive or _always_alive)():
+        return False
+    if not await guard("send_guard", context or ChatHookContext("", phase="send"), kind="voice", text=text):
+        return False
+    if not (alive or _always_alive)():
         return False
     try:
         segment = build_message_segment(bot, "record", audio)
@@ -212,9 +233,21 @@ def _quote_correction() -> bool:
     )
 
 
-async def send_correction(runtime: Any, matcher: Any, text: str, message_id: str | None, alive: Any = None) -> None:
+async def send_correction(
+    runtime: Any,
+    matcher: Any,
+    text: str,
+    message_id: str | None,
+    alive: Any = None,
+    *,
+    context: ChatHookContext | None = None,
+) -> None:
     """在错字消息后补一条纠正；等待期间轮次失效或发送失败都只跳过。"""
     await asyncio.sleep(typing_time(text))
+    if not (alive or _always_alive)():
+        return
+    if not await guard("send_guard", context or ChatHookContext("", phase="send"), kind="correction", text=text):
+        return
     if not (alive or _always_alive)():
         return
     payload = correction_payload(runtime, text, message_id if _quote_correction() else None)
@@ -266,6 +299,14 @@ async def deliver_emoji(
             )
         return False
     try:
+        if not await guard("send_guard", hook_context(request, phase="send"), kind="emoji", text=content) or not _alive(
+            service, request, response
+        ):
+            if identifier is not None:
+                await chat_repository.update_turn_item(
+                    request.session_id, identifier, generation=response.epoch, send_status="skipped", visible=False
+                )
+            return False
         segment = build_message_segment(bot, "image", row.path)
         segments = [segment]
         quoted = False
@@ -346,7 +387,10 @@ async def send_parts(service: Any, request: ChatRequest, response: ChatResponse,
         delivery["error"] = f"{type(exc).__name__}: {exc}"[:500]
         raise
     finally:
-        await record_send_trace(request, response, **delivery, send_ms=int((perf_counter() - started) * 1000))
+        try:
+            await record_send_trace(request, response, **delivery, send_ms=int((perf_counter() - started) * 1000))
+        finally:
+            await notify("delivery_complete", hook_context(request, phase="send"), **delivery)
 
 
 async def record_send_trace(
@@ -429,6 +473,15 @@ async def _send_parts(
                 else:
                     user_ids, body = split_mentions(part, request)
             typo = apply_typo(body)
+            if (
+                not await guard(
+                    "send_guard", hook_context(request, phase="send"), kind="text", text=typo.text, part_index=index
+                )
+                or not alive()
+            ):
+                delivery["cancelled"] = True
+                await service.mark_send_aborted(request, response, index)
+                break
             payload = first_payload(service, request, runtime, typo.text, user_ids) if index == 0 else typo.text
             try:
                 receipt = await matcher.send(payload)
@@ -447,9 +500,12 @@ async def _send_parts(
             if receipt_id:
                 quote_counter(request.session_id).record(receipt_id, _bot_id(runtime))
             sent_texts.append(typo.text)
-            await send_voice(runtime, matcher, body, alive)
+            await notify("part_sent", hook_context(request, phase="send"), text=typo.text, part_index=index)
+            await send_voice(runtime, matcher, body, alive, context=hook_context(request, phase="send"))
             if typo.correction:
-                await send_correction(runtime, matcher, typo.correction, receipt_id, alive)
+                await send_correction(
+                    runtime, matcher, typo.correction, receipt_id, alive, context=hook_context(request, phase="send")
+                )
         if sent_texts:
             if delivery.get("failed_index") is None and not delivery.get("cancelled"):
                 await send_pictures(service, request, response, runtime, matcher)

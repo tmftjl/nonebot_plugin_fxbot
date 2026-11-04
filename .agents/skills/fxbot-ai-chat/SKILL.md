@@ -21,7 +21,9 @@ Read `../fxbot/SKILL.md` first. Current source code is the implementation source
 - Preserve the distinction between generated output and successfully sent visible history. Check cancellation, partial sends and clearing against in-flight turns.
 - For batching and tools, trace authors, runtime events and allowed tools through discovery and execution. Do not assume a design document's batch authorization or read-only guarantees are implemented.
 - Inspect Focus routing before changing ordinary debounce or proactive gates; avoid duplicate reply paths and duplicate history writes.
+- Plugins derive chat namespaces through `chat/session_hooks.py`, not by patching callers. Resolve once per event, preserve platform/scene/target identity, and reject resolver failures rather than falling back to an unrelated session. Session policies must be honored by Focus and both ends of learning sharing; they do not change A_Memorix's own-session/public-knowledge semantics. See `docs/chat-session-hooks.md` for the extension contract and verify default behavior, dynamic policy restrictions and event-local consistency when changing it.
 - Preserve ConfigManager hot reload and platform adapter boundaries from the core skill.
+- Use `chat/hooks.py` for request/send guards, per-generation persona/prompt/reply-text filters and lifecycle observers; the contract is in `docs/chat-hooks.md`. Pass immutable identity snapshots, keep tool guards deny-only at discovery and execution, filter reply text before splitting/persistence, and never let observers change delivery truth or prevent core cleanup. Verify ordinary chat, Focus, subagent tool execution, partial sends and cancellation when changing these extension boundaries.
 
 ## Implementation and Verification
 

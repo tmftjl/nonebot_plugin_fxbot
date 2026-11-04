@@ -64,7 +64,7 @@ async def tool_search_tool(
             continue
         if allowed is not None and spec.name not in allowed:
             continue
-        if not _hits(spec, terms) or not await tool_allowed(spec, runtime):
+        if not _hits(spec, terms) or not await tool_allowed(spec, runtime, session_id=context.session_id):
             continue
         matched.append(spec)
     matched.sort(key=lambda spec: _score(spec, terms), reverse=True)

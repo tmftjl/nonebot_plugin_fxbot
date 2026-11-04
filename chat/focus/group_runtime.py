@@ -17,6 +17,7 @@ from collections.abc import Callable
 from nonebot import logger
 
 from .tools import WAIT_TOOL, FocusToolRouter, _failure
+from ..hooks import ChatHookError, guard, notify, hook_context, prompt_notes
 from ..tools import ToolRuntime
 from ..types import ChatRequest, speaker_label
 from .context import FocusEntry, FocusCheckpointStore, closed_entry, restore_entries
@@ -25,6 +26,7 @@ from ..service import chat_service, _memory_block, _learning_reference
 from ...adapter import get_bot_group_role
 from ..personas import DEFAULT_PERSONA, effective_persona_name
 from ...utils.tz import now
+from ..providers import LLMResponse
 from ..memory.config import expression_vector_config
 from ..memory.models import ChatPlannerSample
 from ..work_schedule import can_reply, work_life_prompt
@@ -618,6 +620,15 @@ class FocusGroupRuntime:
         return next(iter(self.members), "")
 
     async def _chat(self, messages: list[dict[str, Any]], definitions: list[dict[str, Any]]) -> tuple[Any, str, str]:
+        for member in list(self.members.values()):
+            if not await guard(
+                "request_guard",
+                hook_context(member.request, phase="focus_planner"),
+                text=member.request.text,
+                trigger_kind=member.request.trigger_kind,
+            ):
+                await notify("request_rejected", hook_context(member.request, phase="focus_planner"))
+                return LLMResponse(content=""), "", ""
         async with fallback_provider("planner", self._routing_session()) as provider:
             response = await asyncio.wait_for(
                 provider.chat(messages=messages, tools=definitions or None, temperature=0.7, max_tokens=16384), 180
@@ -677,10 +688,13 @@ class FocusGroupRuntime:
                 memory = await _memory_block(request, recall_query(request, []))
                 history = chat_service.session_store.get(session_id)
                 learning = await _learning_reference(request, history)
+            except ChatHookError:
+                raise
             except Exception:
                 logger.opt(exception=True).debug(f"[ChatFocus] 参考信息构建失败: {session_id}")
                 continue
-            body = "\n".join(part for part in (persona_text, memory, learning) if part)
+            notes = prompt_notes(hook_context(request, phase="focus_planner"))
+            body = "\n".join(part for part in (persona_text, memory, learning, *notes) if part)
             if body:
                 references.append(
                     f'<focus_reference session_id="{escape(session_id, quote=True)}">\n{body}\n</focus_reference>'

@@ -15,6 +15,7 @@ from collections.abc import Callable
 
 from nonebot import logger
 
+from .hooks import ChatHookContext, guard, notify, hook_context, filter_reply_text
 from .tools import ToolRuntime, subagent as subagent_module, tool_result_store
 from .trace import TurnTrace, turn_trace
 from .types import MentionRef, ChatRequest, ChatResponse, is_proactive
@@ -295,11 +296,26 @@ class ChatService:
         if not self.is_current(request.session_id, request.accepted_epoch):
             logger.debug(f"[Chat] 清空后跳过排队轮次: session={request.session_id}")
             return ChatResponse(text="", epoch=request.accepted_epoch)
+        hook = hook_context(request, phase="planner" if focus_instruction is None else "reply")
+        if not await guard("request_guard", hook, text=request.text, trigger_kind=request.trigger_kind):
+            await notify("request_rejected", hook)
+            return ChatResponse(text="", epoch=request.accepted_epoch)
+        # 异步守卫期间可能清空会话，不能再发起旧轮次。
+        if not self.is_current(request.session_id, request.accepted_epoch):
+            return ChatResponse(text="", epoch=request.accepted_epoch)
         try:
+            await notify("request_start", hook)
+            if not self.is_current(request.session_id, request.accepted_epoch):
+                return ChatResponse(text="", epoch=request.accepted_epoch)
             response = await self._process(request, runtime, focus_instruction=focus_instruction)
+        except asyncio.CancelledError:
+            await notify("request_cancelled", hook)
+            raise
         except Exception as exc:
+            await notify("request_error", hook)
             await self._mark_turn_failed(request, exc)
             raise
+        await notify("request_complete", hook, text=response.text, epoch=response.epoch)
         return response
 
     async def _send_emoji(
@@ -323,6 +339,17 @@ class ChatService:
         await self._hydrate(session_id, history_limit(chat_cfg, is_group))
 
     async def clear_session(self, session_id: str) -> None:
+        """通知插件清理会话资源，通知失败不能阻止核心清空。"""
+        context = ChatHookContext(session_id, phase="clear")
+        await notify("session_clear_start", context)
+        try:
+            await self._clear_session(session_id)
+        except BaseException:
+            await notify("session_clear_error", context)
+            raise
+        await notify("session_clear_complete", context, epoch=self.session_store.epoch(session_id))
+
+    async def _clear_session(self, session_id: str) -> None:
         """清空会话历史；内存、数据库、待合并批次与在途轮次一起失效。"""
         from .memory.trimmed import trimmed_learning
         from .behavior.turn_scheduler import normal_scheduler
@@ -745,6 +772,7 @@ class ChatService:
             response = await generator.generate(
                 self, request, runtime, provider, messages, tools, allowed_names, epoch, limit
             )
+            response.content = filter_reply_text(hook_context(request, phase="reply"), response.content or "")
             post_cfg = chat_cfg.get("response_post_process") or {}
             splitter_cfg = chat_cfg.get("response_splitter")
             # 上游快速任务未分配时使用 utils，规则断句不额外租用模型。

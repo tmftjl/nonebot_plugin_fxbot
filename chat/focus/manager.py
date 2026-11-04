@@ -12,6 +12,7 @@ from nonebot import logger
 from .context import FocusCheckpointStore
 from ...config import get_manager as get_config_manager
 from .group_runtime import FocusMember, FocusGroupRuntime
+from ..session_hooks import session_policy
 
 _DEFAULTS: dict[str, Any] = {"enabled": False, "on_private": False, "chat_whitelist": [], "groups": []}
 FAILURE_THRESHOLD = 3
@@ -40,6 +41,8 @@ def _target_matches(target: Any, request: Any) -> bool:
 
 def _scope_key(request: Any) -> str:
     """组身份基于规则内容而非列表顺序；不在任何组内时各聊天独立。"""
+    if not session_policy(request.session_id).allow_sharing:
+        return "session:" + request.session_id
     groups = focus_config()["groups"] or []
     if not groups:
         return "session:" + request.session_id
@@ -86,6 +89,8 @@ class FocusModeManager:
 
     def is_enabled_for_request(self, request: Any) -> bool:
         """Focus 是否接管这条消息所在的聊天。"""
+        if not session_policy(request.session_id).allow_focus:
+            return False
         cfg = focus_config()
         if not cfg["enabled"]:
             return False
@@ -105,6 +110,9 @@ class FocusModeManager:
     async def register(self, member: FocusMember, request: Any, *, is_at: bool) -> None:
         """登记入站消息；归属变化时先退出旧组再接入新组。"""
         session_id = request.session_id
+        if not session_policy(session_id).allow_focus:
+            await self.detach(session_id, clear_context=True)
+            return
         scope = _scope_key(request)
         async with self._lock:
             if self._stopping:

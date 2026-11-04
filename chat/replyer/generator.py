@@ -81,7 +81,7 @@ async def allowed_tools(
         specs = [s for s in specs if s.name not in {SUBAGENT_STATUS_TOOL_NAME, SUBAGENT_STOP_TOOL_NAME}]
     if proactive:
         specs = [spec for spec in specs if spec.name in PROACTIVE_TOOLS]
-    allowed_specs = [spec for spec in specs if await tool_allowed(spec, runtime)]
+    allowed_specs = [spec for spec in specs if await tool_allowed(spec, runtime, session_id=session_id)]
     names = {spec.name for spec in allowed_specs}
     visible = {spec.name for spec in allowed_specs if tool_visible(spec, session_id)}
     tools = visible_tools(visible, session_id)

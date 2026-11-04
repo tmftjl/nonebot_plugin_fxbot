@@ -10,6 +10,7 @@ import random
 from typing import Any
 from datetime import datetime
 
+from ..hooks import hook_context, prompt_notes, resolve_persona
 from ..types import ChatRequest, speaker_label
 from ..bindings import PERSONA, get_binding
 from ..personas import DEFAULT_PERSONA, get_persona_text, compose_persona_prompt
@@ -164,6 +165,7 @@ def assemble_messages(
                 bot_name=str(request.metadata.get("bot_name") or ""),
             )
         )
+    messages.extend({"role": "user", "content": note} for note in prompt_notes(hook_context(request)))
     return messages
 
 
@@ -315,19 +317,20 @@ def build_persona_text(request: ChatRequest, chat_cfg: dict[str, Any], behavior:
     persona_name = request.metadata.get("persona_name") if isinstance(request.metadata, dict) else None
     bound_persona = get_binding(PERSONA, request.session_id)
     effective_persona = str(persona_name or bound_persona or chat_cfg["persona"] or DEFAULT_PERSONA)
+    effective_persona, persona_details = resolve_persona(
+        hook_context(request), effective_persona, get_persona_text(effective_persona)
+    )
     scene_prompt = behavior.get("group_chat_prompt" if request.is_group else "private_chat_prompts")
     persona_text = compose_persona_prompt(
         effective_persona,
-        get_persona_text(effective_persona),
+        persona_details,
         scene_prompt=str(scene_prompt or ""),
         planner=bool(request.metadata.get("planner_loop") and not request.metadata.get("planner_reply")),
     )
     if request.metadata.get("planner_loop") and not request.metadata.get("planner_reply"):
         from ..heart_flow.prompts import planner_prompt
 
-        persona_text = planner_prompt(
-            effective_persona, get_persona_text(effective_persona), behavior, is_group=request.is_group
-        )
+        persona_text = planner_prompt(effective_persona, persona_details, behavior, is_group=request.is_group)
     if extra_prompt := extra_prompt_block(chat_cfg, request):
         persona_text = f"{persona_text}\n\n当前聊天额外注意事项：\n{extra_prompt}"
     if reaction := reaction_block(chat_cfg, request.text):

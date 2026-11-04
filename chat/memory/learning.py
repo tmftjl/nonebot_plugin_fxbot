@@ -9,6 +9,8 @@ from __future__ import annotations
 from typing import Any
 from dataclasses import dataclass
 
+from ..session_hooks import session_policy, can_share_sessions
+
 GROUP = "group"
 PRIVATE = "private"
 
@@ -129,13 +131,15 @@ def share_tenants(
 ) -> list[str]:
     """把共享组目标解析成已知租户；通配目标按平台与聊天类型筛选。"""
     result = [current]
-    if target is None:
+    if target is None or not session_policy(current).allow_sharing:
         return result
     for item in targets:
         platform, item_id, is_group = _values(item)
         if not platform or not item_id or is_group is None:
             continue
         for tenant in known:
+            if not can_share_sessions(current, tenant):
+                continue
             other = tenant_target(tenant)
             if other is None or other.is_group != is_group:
                 continue

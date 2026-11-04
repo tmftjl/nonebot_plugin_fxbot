@@ -36,6 +36,7 @@ from ..adapter import (
 from ..utils.tz import now, to_naive_utc
 from ..utils.http import ResponseTooLargeError, read_limited, ensure_public_http_url, get_shared_async_client
 from ..utils.cache import cache
+from .session_hooks import resolve_session_id
 from .message_context import quote_preview
 
 _MAX_IMAGE_COUNT = 64
@@ -424,7 +425,8 @@ def session_id_for_event(bot: Any, event: Any) -> str:
     group_id = normalize_id(event_group_id(event))
     user_id = normalize_id(event_user_id(event)) or "unknown"
     namespace = f"{platform_for_bot(bot)}:{getattr(bot, 'self_id', None) or 'unknown'}"
-    return f"{namespace}:group:{group_id}" if group_id else f"{namespace}:private:{user_id}"
+    base = f"{namespace}:group:{group_id}" if group_id else f"{namespace}:private:{user_id}"
+    return resolve_session_id(bot, event, base)
 
 
 @dataclass(frozen=True)
