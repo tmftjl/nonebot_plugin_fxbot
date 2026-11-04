@@ -17,8 +17,8 @@ from nonebot import logger
 
 from ...config import SYSTEM_DEFAULTS, get_manager as get_config_manager
 from ...utils.tz import now as shanghai_now
-from ..memory.learning import GROUP, PRIVATE, TenantTarget, tenant_target
 from ..memory.state import is_ready as memory_ready
+from ..memory.learning import GROUP, PRIVATE, TenantTarget, tenant_target
 from ..memory.repository import chat_repository
 
 MAX_PENDING_COUNT = 20
@@ -457,12 +457,23 @@ class ReplyGate:
         self._clock = clock
         self._gate = DynamicReplyGate()
         self._events: deque[tuple[float, bool]] = deque(maxlen=MAX_RECENT_EVENTS)
+        self._event_message_ids: OrderedDict[str, None] = OrderedDict()
+        self._last_reply_at: float | None = None
         self._observations: deque[GateObservation] = deque(maxlen=MAX_OBSERVATIONS)
         self._round_texts: list[str] = []
         self._round_has_at_bot = False
         self._round_at_other = False
         self._pending = 0
         self._backoff = IdleBackoff()
+
+    def record_message(self, message_id: str, *, now: float | None = None) -> None:
+        """按消息 ID 记录入站活跃度，与是否运行门控及预计回复数解耦。"""
+        if not message_id or message_id in self._event_message_ids:
+            return
+        self._event_message_ids[message_id] = None
+        while len(self._event_message_ids) > MAX_COUNTED_MESSAGE_IDS:
+            self._event_message_ids.popitem(last=False)
+        self._note_external(self._clock() if now is None else now, 1)
 
     def observe_message(
         self,
@@ -475,19 +486,23 @@ class ReplyGate:
     ) -> GateObservation:
         """记录一条普通群消息；返回本轮若启用门控时的判定。"""
         current = self._clock() if now is None else now
-        clean = [str(text or "") for text in texts] or [""]
-        new_ids = self._gate.take_uncounted_message_ids([str(item) for item in message_ids if item])
+        messages = {str(message_id): str(text or "") for message_id, text in zip(message_ids, texts) if message_id}
+        clean = list(messages.values()) or [""]
+        for message_id in messages:
+            self.record_message(message_id, now=current)
+        new_ids = self._gate.take_uncounted_message_ids(list(messages))
         if not new_ids:
             # 重复投递不重复计入供需和观察，但仍返回当前判定供路由复用
             snapshot, probability = self._likelihood(clean, has_at_bot, at_other, current, len(clean))
             return self._record(snapshot, probability, current, record=False)
-        self._note_external(current, len(clean))
-        self._pending += len(clean)
+        new_texts = [messages[message_id] for message_id in new_ids]
+        self._pending = min(MAX_COUNTED_MESSAGE_IDS, self._pending + len(new_ids))
         if not self._gate.is_round_open(current):
             self._round_texts = []
             self._round_has_at_bot = False
             self._round_at_other = False
-        self._round_texts.extend(clean)
+        self._round_texts.extend(new_texts)
+        del self._round_texts[:-MAX_COUNTED_MESSAGE_IDS]
         self._round_has_at_bot = self._round_has_at_bot or has_at_bot
         self._round_at_other = self._round_at_other or at_other
         _, round_probability = self._likelihood(
@@ -503,7 +518,8 @@ class ReplyGate:
         new_ids = self._gate.take_uncounted_message_ids([str(item) for item in message_ids if item])
         if not new_ids:
             return
-        self._note_external(current, len(new_ids))
+        for message_id in new_ids:
+            self.record_message(message_id, now=current)
         self._gate.record_forced_turn(current)
         self._pending = 0
         self._backoff.reset()
@@ -512,6 +528,7 @@ class ReplyGate:
         """记录一次实际发出的群回复。"""
         current = self._clock() if now is None else now
         self._events.append((current, True))
+        self._last_reply_at = current
         self._gate.record_reply(current)
         self._pending = 0
         self._backoff.reset()
@@ -553,17 +570,17 @@ class ReplyGate:
     def _recent(self, now: float) -> tuple[int, int, float]:
         """最近 5 分钟的自身发言数、总消息数和距上次发言秒数。"""
         cutoff = now - RECENT_WINDOW_SECONDS
-        while self._events and self._events[0][0] < cutoff:
-            self._events.popleft()
+        # 媒体适配可能乱序结束，入站时刻不保证与入队顺序一致。
+        self._events = deque((event for event in self._events if event[0] >= cutoff), maxlen=MAX_RECENT_EVENTS)
         self_count = 0
         total = 0
-        last_self: float | None = None
-        for occurred_at, is_self in self._events:
+        for _, is_self in self._events:
             total += 1
             if is_self:
                 self_count += 1
-                last_self = occurred_at
-        seconds = DEFAULT_SECONDS_SINCE_BOT_MESSAGE if last_self is None else max(0.0, now - last_self)
+        seconds = (
+            DEFAULT_SECONDS_SINCE_BOT_MESSAGE if self._last_reply_at is None else max(0.0, now - self._last_reply_at)
+        )
         return self_count, total, seconds
 
     def _likelihood(

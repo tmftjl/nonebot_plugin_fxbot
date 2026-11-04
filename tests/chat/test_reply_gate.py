@@ -256,7 +256,63 @@ class ReplyGateTests(unittest.TestCase):
         self.gate.record_reply(now=100)
         observation = self.gate.observe_message(["m1"], ["你好"], now=1000)
         self.assertEqual(observation.features["recent_self_ratio"], 0.0)
-        self.assertEqual(observation.features["seconds_since_bot_message"], 3600.0)
+        self.assertEqual(observation.features["seconds_since_bot_message"], 900.0)
+
+    def test_last_reply_time_survives_window_and_event_capacity(self) -> None:
+        """上次发言不随活跃度窗口或事件容量淘汰。"""
+        self.gate.record_reply(now=100)
+        self.assertEqual(self.gate._recent(400)[2], 300.0)
+        self.assertEqual(self.gate._recent(401)[2], 301.0)
+        self.assertEqual(self.gate._recent(5000)[2], 4900.0)
+        self.gate.record_reply(now=5000)
+        for index in range(2100):
+            self.gate.record_message(f"m{index}", now=5001)
+        self.assertEqual(self.gate._recent(5002)[2], 2.0)
+
+    def test_growing_batch_counts_each_message_once(self) -> None:
+        """积压批次重评不重复累计活跃度、pending 或轮次文本。"""
+        for size in range(1, 21):
+            observation = self.gate.observe_message(
+                [f"m{index}" for index in range(size)], ["你好"] * size, now=1000 + size
+            )
+            self.assertEqual(observation.features["recent_message_count"], size)
+            self.assertEqual(observation.features["pending_count"], size)
+            self.assertEqual(self.gate._pending, size)
+            self.assertEqual(len(self.gate._round_texts), size)
+        self.assertAlmostEqual(observation.probability, 0.635778956, places=7)
+        self.assertAlmostEqual(self.gate._gate.stats(1020)["expected_proactive"], observation.probability)
+
+    def test_ingress_and_repeated_evaluation_do_not_refresh_old_events(self) -> None:
+        """预先记录的接收时间不会被评分刷新，乱序到达也能正确过期。"""
+        self.gate.record_message("new", now=1400)
+        self.gate.record_message("old", now=1000)
+        observation = self.gate.observe_message(["old", "new"], ["旧消息", "新消息"], now=1400)
+        self.assertEqual(observation.features["recent_message_count"], 1)
+        duplicate = self.gate.observe_message(["old", "new"], ["旧消息", "新消息"], now=1401)
+        self.assertEqual(duplicate.features["recent_message_count"], 1)
+
+    def test_new_round_only_includes_new_message_texts(self) -> None:
+        """跨轮次的旧积压只参与放行评分，不参与本轮预计回复数。"""
+        self.gate.observe_message(["old"], ["旧问题？"], now=1000)
+        observation = self.gate.observe_message(["old", "new"], ["旧问题？", "新消息"], now=1400)
+        self.assertEqual(self.gate._round_texts, ["新消息"])
+        self.assertTrue(observation.features["has_question_mark"])
+        self.assertEqual(observation.features["recent_message_count"], 1)
+
+    def test_duplicate_ids_within_batch_are_counted_once(self) -> None:
+        """同一批内重复 ID 也只对应一条消息。"""
+        observation = self.gate.observe_message(["m1", "m1"], ["你好", "你好"], now=1000)
+        self.assertEqual(observation.features["recent_message_count"], 1)
+        self.assertEqual(observation.features["pending_count"], 1)
+        self.assertEqual(self.gate._round_texts, ["你好"])
+
+    def test_ingress_does_not_consume_forced_demand_identity(self) -> None:
+        """入站活跃度和强制预计回复数各自去重，互不吞计数。"""
+        self.gate.record_message("m1", now=1000)
+        self.gate.record_forced_turn(["m1"], now=1001)
+        self.gate.record_forced_turn(["m1"], now=1002)
+        self.assertEqual(self.gate._recent(1002)[1], 1)
+        self.assertAlmostEqual(self.gate._gate.stats(1002)["expected_forced"], 0.91)
 
     def test_duplicate_message_does_not_add_demand(self) -> None:
         first = self.gate.observe_message(["m1"], ["你好"], now=1000)
@@ -419,6 +475,11 @@ class ServiceReplyTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_private_reply_is_not_counted(self) -> None:
         self.assertEqual((await self._send(None)).replies, 0)
+
+    async def test_group_reply_is_counted_without_history(self) -> None:
+        """关闭历史只影响存储，不影响实际回复反馈。"""
+        with patch.object(sender_module, "history_enabled", return_value=False):
+            self.assertEqual((await self._send("group")).replies, 1)
 
 
 class GateConsoleTests(unittest.IsolatedAsyncioTestCase):

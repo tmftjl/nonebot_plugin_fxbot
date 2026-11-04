@@ -439,6 +439,9 @@ async def _send_parts(
                 await service.mark_send_failed(request, response, exc, index)
                 break
             delivery["sent_parts"] += 1
+            # 首段已真实发出就计一次，后续持久化失败、分段取消或关闭历史都不撤销发送事实。
+            if not sent_texts and request.is_group:
+                default_reply_gate_registry.get(request.session_id).record_reply()
             receipt_id = _receipt_id(receipt)
             await service.mark_sent(request, response, index, receipt_id, content=typo.text)
             if receipt_id:
@@ -463,6 +466,4 @@ async def _send_parts(
             reply_to_message_id=str(request.metadata.get("reply_target_id") or request.message_id or ""),
             occurred_at=utc_now_naive(),
         )
-        if request.is_group:
-            default_reply_gate_registry.get(request.session_id).record_reply()
     return reply_text

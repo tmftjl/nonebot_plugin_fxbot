@@ -6,7 +6,7 @@ import random
 import unittest
 from types import SimpleNamespace
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, patch
+from unittest.mock import Mock, AsyncMock, patch
 
 from src.plugins.nonebot_plugin_fxbot.chat import service as service_module
 from src.plugins.nonebot_plugin_fxbot.chat.tools import ToolRuntime
@@ -203,12 +203,14 @@ class SenderAliveTests(unittest.IsolatedAsyncioTestCase):
                     patch.object(sender_module, "send_voice", AsyncMock()),
                     patch.object(sender_module, "send_emoji", AsyncMock()) as send_emoji,
                     patch.object(sender_module.chat_writeback, "on_reply") as writeback,
+                    patch.object(sender_module.default_reply_gate_registry, "get", return_value=Mock()) as gate,
                 ):
                     text = await sender_module.send_parts(service, request, response, None, matcher)
                 expected = "" if outcome in ("first_failure", "empty") else "first!"
                 if outcome == "success":
                     expected += "\nsecond!"
                 self.assertEqual(text, expected)
+                self.assertEqual(gate.return_value.record_reply.call_count, int(bool(expected)))
                 self.assertEqual(service.mark_sent.await_count, len(expected.splitlines()) if expected else 0)
                 if expected:
                     self.assertEqual(writeback.call_args.kwargs["reply_text"], expected)
@@ -219,6 +221,28 @@ class SenderAliveTests(unittest.IsolatedAsyncioTestCase):
                 else:
                     writeback.assert_not_called()
                     send_emoji.assert_not_awaited()
+
+    async def test_successful_send_is_counted_before_history_failure(self) -> None:
+        """平台发送成功后，即使历史写入异常也不能丢失回复反馈。"""
+        service = SimpleNamespace(
+            session_store=ChatSessionStore(),
+            is_current=lambda *args: True,
+            is_latest=lambda *args: True,
+            mark_sending=AsyncMock(),
+            mark_sent=AsyncMock(side_effect=RuntimeError("history failed")),
+        )
+        gate = Mock()
+        matcher = SimpleNamespace(send=AsyncMock())
+        with (
+            patch.object(sender_module, "parts", return_value=["已发出"]),
+            patch.object(sender_module.default_reply_gate_registry, "get", return_value=gate),
+            self.assertRaises(RuntimeError),
+        ):
+            await sender_module._send_parts(
+                service, self._request(), ChatResponse(text="已发出"), None, matcher, {"sent_parts": 0}
+            )
+        matcher.send.assert_awaited_once()
+        gate.record_reply.assert_called_once()
 
     async def test_process_and_send_keeps_boolean_result(self) -> None:
         service = service_module.ChatService(ChatSessionStore())
