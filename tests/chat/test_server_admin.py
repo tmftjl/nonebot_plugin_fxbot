@@ -136,6 +136,7 @@ class ModeTests(unittest.IsolatedAsyncioTestCase):
                 side_effect=lambda: self.folder("personas"),
             )
         )
+        self.enterContext(patch.object(store, "persona_text", return_value=""))
         cache.clear()
         self.addCleanup(cache.clear)
 
@@ -164,23 +165,20 @@ class ModeTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(store.enabled(BASE))
         self.assertEqual(get_binding(PERSONA, SERVER), "用户选择")
 
-    def test_pristine_seed_is_upgraded_on_next_activation(self) -> None:
-        store.set_mode(BASE, True)
-        path = self.folder("personas") / "运维.md"
-        path.write_text("旧版人格", encoding="utf-8")
-        with patch.object(store, "_LEGACY_SEEDS", frozenset({store._digest("旧版人格")})):
-            store.set_mode(BASE, False)
-            store.set_mode(BASE, True)
-        seed = Path(store.__file__).with_name("persona.md").read_text(encoding="utf-8").strip()
-        self.assertEqual(path.read_text(encoding="utf-8"), seed)
-
-    def test_user_edited_persona_is_not_overwritten(self) -> None:
+    def test_persona_is_resynced_to_bundled_seed_on_activation(self) -> None:
         store.set_mode(BASE, True)
         path = self.folder("personas") / "运维.md"
         path.write_text("我改过的人格", encoding="utf-8")
         store.set_mode(BASE, False)
         store.set_mode(BASE, True)
-        self.assertEqual(path.read_text(encoding="utf-8"), "我改过的人格")
+        seed = Path(store.__file__).with_name("persona.md").read_text(encoding="utf-8").strip()
+        self.assertEqual(path.read_text(encoding="utf-8"), seed)
+
+    def test_configured_persona_overrides_bundled_seed(self) -> None:
+        with patch.object(store, "persona_text", return_value="控制台人格"):
+            store.set_mode(BASE, True)
+        path = self.folder("personas") / "运维.md"
+        self.assertEqual(path.read_text(encoding="utf-8"), "控制台人格")
 
     def test_invalid_state_file_does_not_fall_back_to_enabled(self) -> None:
         store.set_mode(BASE, True)
@@ -295,6 +293,22 @@ class SkipConfirmationTests(unittest.TestCase):
             plugin_config, "REG", SimpleNamespace(load=lambda: {"skip_confirmation": True}, _last_error="corrupt")
         ):
             self.assertFalse(plugin_config.skip_confirmation())
+
+
+class PersonaConfigTests(unittest.TestCase):
+    """控制台人格优先，留空或配置损坏时回退内置人格。"""
+
+    def test_persona_reads_config(self) -> None:
+        with patch.object(
+            plugin_config, "REG", SimpleNamespace(load=lambda: {"persona": " 自定义 "}, _last_error=None)
+        ):
+            self.assertEqual(plugin_config.persona_text(), "自定义")
+
+    def test_unreadable_config_falls_back(self) -> None:
+        with patch.object(
+            plugin_config, "REG", SimpleNamespace(load=lambda: {"persona": "自定义"}, _last_error="corrupt")
+        ):
+            self.assertEqual(plugin_config.persona_text(), "")
 
 
 class PolicySwitchTests(unittest.TestCase):

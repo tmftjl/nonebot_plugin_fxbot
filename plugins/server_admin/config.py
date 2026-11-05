@@ -37,6 +37,14 @@ def policy_switches() -> dict[str, bool]:
     return {key: rules.get(key, DEFAULTS[key]) is True for key in _POLICY_KEYS}
 
 
+def persona_text() -> str:
+    """控制台填写的运维人格；留空或配置不可读时使用插件内置版本。"""
+    rules = REG.load()
+    if REG._last_error is not None:
+        return ""
+    return str(rules.get("persona") or "").strip()
+
+
 def blocked_reason(command: str) -> str:
     """命中禁用规则时返回该规则；配置读不出来时按拒绝处理。"""
     rules = REG.load()

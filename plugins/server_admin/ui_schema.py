@@ -83,6 +83,7 @@ DEFAULTS: dict[str, Any] = {
     "allow_debounce": False,
     "allow_typing": False,
     "allow_split": False,
+    "persona": "",
 }
 
 
@@ -131,6 +132,15 @@ def get_ui_schema() -> dict[str, Any]:
                         "component": "Switch",
                         "default": DEFAULTS["allow_split"],
                         "helpMessage": "长回复按句拆成多条发送，更像真人聊天。",
+                    },
+                    {"component": "Divider", "label": "运维人格"},
+                    {
+                        "field": "persona",
+                        "label": "人格内容",
+                        "component": "Textarea",
+                        "default": DEFAULTS["persona"],
+                        "helpMessage": "留空使用插件内置人格；填写后每次进入服务器模式都会写入「运维」人格。",
+                        "componentProps": {"rows": 10},
                     },
                     {"component": "Divider", "label": "命令黑名单"},
                     {

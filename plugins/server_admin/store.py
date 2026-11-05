@@ -5,23 +5,13 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-from nonebot import logger
-
 from ...chat import personas
+from .config import persona_text
 from ...config import get_manager
 from ...chat.bindings import PERSONA, get_binding, set_binding
 
 MARKER = "#server"
 PERSONA_NAME = "运维"
-# 已发布过的「运维」人格种子；内容未改过时允许被新版本覆盖。
-_LEGACY_SEEDS = frozenset(
-    {
-        "090fcd4333c4ad1e91f574b795017e25d3b41bbb608cff2c977d419d049f2cc1",
-        "bfe126c39bffae37d647760ed39e6b5612cfa66e61d0128a0d38671930fa163c",
-        "0c457ce6a43b64f99d319119bc40cb408f32c5396b624ed45d0067a392a61ca6",
-        "afd30b3beeb3a615d8f47f67312ff1d1e1a610f89ff529c07897be44fe1edbbb",
-    }
-)
 
 
 def base_session(session_id: str) -> str:
@@ -70,20 +60,13 @@ def _digest(text: str) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
-def _sync_persona(entry: dict) -> None:
-    """播种或升级「运维」人格；用户改过的内容不覆盖。"""
-    seed = Path(__file__).with_name("persona.md").read_text(encoding="utf-8")
-    seed_hash = _digest(seed)
+def _sync_persona() -> None:
+    """每次激活同步「运维」人格：控制台填写优先，否则使用插件内置版本。"""
+    seed = persona_text() or Path(__file__).with_name("persona.md").read_text(encoding="utf-8")
     path = personas.get_personas_dir() / f"{PERSONA_NAME}.md"
     current = path.read_text(encoding="utf-8", errors="ignore") if path.exists() else ""
-    current_hash = _digest(current)
-    if seed_hash != current_hash and (
-        not current or current_hash == entry.get("persona_hash") or current_hash in _LEGACY_SEEDS
-    ):
+    if _digest(seed) != _digest(current):
         personas.save_persona_text(PERSONA_NAME, seed, overwrite=True)
-    elif seed_hash != current_hash:
-        logger.info("[ServerAdmin] 运维人格已被手动修改，保留现有内容")
-    entry["persona_hash"] = seed_hash
 
 
 def set_mode(session_id: str, active: bool) -> None:
@@ -94,7 +77,7 @@ def set_mode(session_id: str, active: bool) -> None:
     entry = dict(data["sessions"].get(base, {}))
     if active:
         entry.pop("initialized", None)
-        _sync_persona(entry)
+        _sync_persona()
         if not get_binding(PERSONA, derived):
             set_binding(PERSONA, derived, PERSONA_NAME)
     entry["enabled"] = active
