@@ -18,6 +18,7 @@ from nonebot import logger
 from nonebot.log import default_filter
 
 from ..utils.tz import as_shanghai
+from .log_store import enqueue as enqueue_log
 
 if TYPE_CHECKING:
     # loguru 只在 __init__.pyi 里声明 Message，运行时顶层仅导出 logger，只能作类型注解用
@@ -59,10 +60,13 @@ def _sink(message: Message) -> None:
         global _seq
         with _lock:
             _seq += 1
+            moment = as_shanghai(record["time"])
             item = {
                 "boot": _BOOT_ID,
                 "seq": _seq,
-                "time": as_shanghai(record["time"]).strftime(_TIME_FORMAT),
+                "time": moment.strftime(_TIME_FORMAT),
+                "ts": moment.isoformat(timespec="milliseconds"),
+                "ts_ms": int(moment.timestamp() * 1000),
                 "level": record["level"].name,
                 "name": record["name"] or "",
                 "text": str(message).rstrip("\n"),
@@ -70,6 +74,7 @@ def _sink(message: Message) -> None:
             _records.append(item)
             loop = _loop
             has_subscriber = bool(_subscribers)
+        enqueue_log(item)
         if loop is not None and has_subscriber:
             loop.call_soon_threadsafe(_dispatch, item)
     except Exception:

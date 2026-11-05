@@ -155,6 +155,47 @@ export const systemApi = {
   status: () => api.get<SystemStatus>('/system/status'),
 }
 
+export interface LogHistoryItem {
+  id: number
+  ts: string
+  ts_ms: number
+  boot: string
+  level: string
+  name: string
+  text: string
+}
+
+export interface LogHistory {
+  items: LogHistoryItem[]
+  total: number
+  page: number
+  page_size: number
+}
+
+export const logsApi = {
+  history: (
+    options: {
+      level?: string
+      keyword?: string
+      since?: number | null
+      until?: number | null
+      page?: number
+      pageSize?: number
+    } = {},
+  ) => {
+    const params = new URLSearchParams({
+      level: options.level || 'INFO',
+      keyword: options.keyword || '',
+      page: String(options.page || 1),
+      page_size: String(options.pageSize || 50),
+    })
+    if (options.since != null) params.set('since', String(options.since))
+    if (options.until != null) params.set('until', String(options.until))
+    return api.get<LogHistory>(`/logs/history?${params.toString()}`)
+  },
+  clearHistory: () => api.delete<{ success: boolean }>('/logs/history'),
+}
+
 export const cacheApi = {
   stats: () => api.get<CacheStats>('/cache'),
   keys: (domain: string, limit = 200) =>

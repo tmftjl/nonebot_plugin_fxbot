@@ -1,9 +1,11 @@
 <!-- -*- coding: utf-8 -*- -->
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import PageHeader from '@/components/PageHeader.vue'
-import { getToken } from '@/api'
+import ListPager from '@/components/ListPager.vue'
+import PillTabs from '@/components/PillTabs.vue'
+import { logsApi, getToken, type LogHistoryItem } from '@/api'
 
 interface LogEntry {
   boot: string
@@ -15,9 +17,26 @@ interface LogEntry {
 }
 
 type LevelFilter = 'ALL' | 'DEBUG' | 'INFO' | 'WARNING' | 'ERROR'
+type LogMode = 'live' | 'history'
 
 const MAX_LOGS = 2000
 const FLUSH_MS = 100
+const HISTORY_PAGE_SIZE = 50
+
+const mode = ref<LogMode>('live')
+const modeItems: { key: LogMode; label: string }[] = [
+  { key: 'live', label: '实时' },
+  { key: 'history', label: '历史（近 7 天）' },
+]
+
+const historyLevel = ref<'INFO' | 'WARNING' | 'ERROR'>('INFO')
+const historyKeyword = ref('')
+const sinceInput = ref('')
+const untilInput = ref('')
+const historyItems = ref<LogHistoryItem[]>([])
+const historyTotal = ref(0)
+const historyPage = ref(1)
+const loadingHistory = ref(false)
 
 const logs = ref<LogEntry[]>([])
 const levelFilter = ref<LevelFilter>('ALL')
@@ -162,6 +181,57 @@ const togglePaused = () => {
   if (!paused.value && userAtBottom) scrollToBottom()
 }
 
+const formatTs = (ts: string): string => (ts ? ts.slice(5, 19).replace('T', ' ') : '')
+
+const fetchHistory = async (page = historyPage.value) => {
+  loadingHistory.value = true
+  historyPage.value = page
+  try {
+    const res = await logsApi.history({
+      level: historyLevel.value,
+      keyword: historyKeyword.value,
+      since: sinceInput.value ? new Date(sinceInput.value).getTime() : null,
+      until: untilInput.value ? new Date(untilInput.value).getTime() : null,
+      page,
+      pageSize: HISTORY_PAGE_SIZE,
+    })
+    historyItems.value = res.items || []
+    historyTotal.value = res.total || 0
+  } catch (e: any) {
+    ElMessage.error('加载历史日志失败: ' + (e?.message || e))
+  } finally {
+    loadingHistory.value = false
+  }
+}
+
+const resetHistoryFilters = () => {
+  historyLevel.value = 'INFO'
+  historyKeyword.value = ''
+  sinceInput.value = ''
+  untilInput.value = ''
+  fetchHistory(1)
+}
+
+const clearHistory = async () => {
+  try {
+    await ElMessageBox.confirm('确认清空已落库的历史日志？', '清空历史日志', { type: 'warning' })
+  } catch {
+    return
+  }
+  try {
+    await logsApi.clearHistory()
+    ElMessage.success('已清空历史日志')
+    fetchHistory(1)
+  } catch {
+    ElMessage.error('清空失败，请稍后再试')
+  }
+}
+
+watch(mode, (value) => {
+  if (value === 'history') fetchHistory(1)
+  else scrollToBottom()
+})
+
 onMounted(() => {
   connect()
 })
@@ -177,39 +247,87 @@ onUnmounted(() => {
 
 <template>
   <div class="logs-view">
-    <PageHeader title="运行日志" subtitle="实时日志流，可按等级和关键字过滤" />
+    <PageHeader title="运行日志" subtitle="实时日志流；INFO 及以上自动落库，保留 7 天" />
 
     <div class="panel">
-      <div class="toolbar">
-        <select v-model="levelFilter" class="input level-select" aria-label="级别阈值">
-          <option value="ALL">全部</option>
-          <option value="DEBUG">DEBUG</option>
-          <option value="INFO">INFO</option>
-          <option value="WARNING">WARNING</option>
-          <option value="ERROR">ERROR</option>
-        </select>
-        <input v-model="keyword" class="input keyword-input" placeholder="搜索日志关键字" />
-        <button class="btn" type="button" @click="togglePaused">{{ paused ? '继续滚动' : '暂停滚动' }}</button>
-        <button class="btn" type="button" @click="clearLogs">清空</button>
-        <div class="toolbar-status">
-          <span class="status-dot" :class="{ connected: connectionStatus === '已连接' }" />
-          <span>{{ connectionStatus }}</span>
-          <span>{{ filteredLogs.length }} 行</span>
-        </div>
+      <div class="mode-row">
+        <PillTabs v-model="mode" :items="modeItems" size="small" />
       </div>
-      <div v-if="lossNotice" class="loss-notice">{{ lossNotice }}</div>
-      <div ref="logContainer" class="log-list" @scroll="handleScroll">
-        <div v-if="!filteredLogs.length" class="empty-state">暂无日志</div>
-        <div v-for="log in filteredLogs" :key="log.seq" class="log-row" :class="`level-${log.level.toLowerCase()}`">
-          <span class="log-time">{{ log.time }}</span>
-          <span class="log-level">{{ log.level }}</span>
-          <span class="log-name">{{ log.name }}</span>
-          <span class="log-text">{{ log.text }}</span>
+
+      <template v-if="mode === 'live'">
+        <div class="toolbar">
+          <select v-model="levelFilter" class="input level-select" aria-label="级别阈值">
+            <option value="ALL">全部</option>
+            <option value="DEBUG">DEBUG</option>
+            <option value="INFO">INFO</option>
+            <option value="WARNING">WARNING</option>
+            <option value="ERROR">ERROR</option>
+          </select>
+          <input v-model="keyword" class="input keyword-input" placeholder="搜索日志关键字" />
+          <button class="btn" type="button" @click="togglePaused">{{ paused ? '继续滚动' : '暂停滚动' }}</button>
+          <button class="btn" type="button" @click="clearLogs">清空</button>
+          <div class="toolbar-status">
+            <span class="status-dot" :class="{ connected: connectionStatus === '已连接' }" />
+            <span>{{ connectionStatus }}</span>
+            <span>{{ filteredLogs.length }} 行</span>
+          </div>
         </div>
-      </div>
-      <button v-if="newLogCount" class="new-logs" type="button" @click="scrollToBottom">
-        {{ newLogCount }} 条新日志
-      </button>
+        <div v-if="lossNotice" class="loss-notice">{{ lossNotice }}</div>
+        <div ref="logContainer" class="log-list" @scroll="handleScroll">
+          <div v-if="!filteredLogs.length" class="empty-state">暂无日志</div>
+          <div v-for="log in filteredLogs" :key="log.seq" class="log-row" :class="`level-${log.level.toLowerCase()}`">
+            <span class="log-time">{{ log.time }}</span>
+            <span class="log-level">{{ log.level }}</span>
+            <span class="log-name">{{ log.name }}</span>
+            <span class="log-text">{{ log.text }}</span>
+          </div>
+        </div>
+        <button v-if="newLogCount" class="new-logs" type="button" @click="scrollToBottom">
+          {{ newLogCount }} 条新日志
+        </button>
+      </template>
+
+      <template v-else>
+        <div class="toolbar">
+          <select v-model="historyLevel" class="input level-select" aria-label="级别阈值">
+            <option value="INFO">INFO</option>
+            <option value="WARNING">WARNING</option>
+            <option value="ERROR">ERROR</option>
+          </select>
+          <input
+            v-model="historyKeyword"
+            class="input keyword-input"
+            placeholder="搜索日志关键字"
+            @keyup.enter="fetchHistory(1)"
+          />
+          <input v-model="sinceInput" type="datetime-local" class="input time-input" aria-label="开始时间" />
+          <span class="time-sep">至</span>
+          <input v-model="untilInput" type="datetime-local" class="input time-input" aria-label="结束时间" />
+          <button class="btn" type="button" :disabled="loadingHistory" @click="fetchHistory(1)">查询</button>
+          <button class="btn" type="button" @click="resetHistoryFilters">重置</button>
+          <button class="btn" type="button" @click="clearHistory">清空历史</button>
+          <div class="toolbar-status">
+            <span>共 {{ historyTotal }} 条</span>
+          </div>
+        </div>
+        <div class="log-list">
+          <div v-if="!historyItems.length" class="empty-state">
+            {{ loadingHistory ? '加载中…' : '暂无历史日志' }}
+          </div>
+          <div v-for="log in historyItems" :key="log.id" class="log-row" :class="`level-${log.level.toLowerCase()}`">
+            <span class="log-time">{{ formatTs(log.ts) }}</span>
+            <span class="log-level">{{ log.level }}</span>
+            <span class="log-name">{{ log.name }}</span>
+            <span class="log-text">{{ log.text }}</span>
+          </div>
+        </div>
+        <ListPager
+          :page="historyPage"
+          :total="historyTotal"
+          :page-size="HISTORY_PAGE_SIZE"
+          @update:page="fetchHistory"
+        />
+      </template>
     </div>
   </div>
 </template>
@@ -217,10 +335,13 @@ onUnmounted(() => {
 <style scoped lang="scss">
 .logs-view { height: 100%; box-sizing: border-box; display: flex; flex-direction: column; padding: 24px 28px 22px; }
 .panel { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 16px 18px; margin-bottom: 0; box-sizing: border-box; }
+.mode-row { margin-bottom: 12px; }
 .toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
 .input { height: 34px; box-sizing: border-box; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-bg-secondary); color: var(--color-text); padding: 0 10px; }
 .level-select { min-width: 110px; }
 .keyword-input { width: 240px; }
+.time-input { width: 190px; }
+.time-sep { color: var(--color-text-secondary); font-size: 13px; }
 .toolbar-status { display: flex; align-items: center; gap: 8px; margin-left: auto; color: var(--color-text-secondary); font-size: 13px; }
 .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--color-warning); &.connected { background: var(--color-success); } }
 .loss-notice { color: var(--color-danger); font-size: 13px; margin-bottom: 8px; }

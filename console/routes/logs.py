@@ -10,6 +10,7 @@ from fastapi import Depends, Request, APIRouter
 from fastapi.responses import StreamingResponse
 
 from ..auth import sse_auth
+from ..log_store import clear as clear_logs, query as query_logs
 from ..log_stream import boot_id, snapshot, subscribe, unsubscribe
 
 if TYPE_CHECKING:
@@ -36,6 +37,34 @@ def _resume_seq(last_event_id: str) -> int | None:
     if not sep or boot != boot_id() or not seq_text.isdigit():
         return None
     return int(seq_text)
+
+
+@router.get("/history")
+async def history_logs(
+    level: str = "INFO",
+    keyword: str = "",
+    since: int | None = None,
+    until: int | None = None,
+    page: int = 1,
+    page_size: int = 50,
+) -> dict[str, Any]:
+    """分页查询落库的历史日志；since/until 为毫秒时间戳。"""
+    return await asyncio.to_thread(
+        query_logs,
+        level=level,
+        keyword=keyword,
+        since_ms=since,
+        until_ms=until,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router.delete("/history")
+async def clear_history() -> dict[str, bool]:
+    """清空历史日志。"""
+    await asyncio.to_thread(clear_logs)
+    return {"success": True}
 
 
 @router.get("/stream")
