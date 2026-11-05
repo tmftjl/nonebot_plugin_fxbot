@@ -217,7 +217,14 @@ class ModeTests(unittest.IsolatedAsyncioTestCase):
     def test_hooks_route_and_protect_disabled_server_sessions(self) -> None:
         store.set_mode(BASE, True)
         self.assertEqual(plugin._resolve(bot(), event(), BASE), SERVER)
-        self.assertEqual(plugin._policy(SERVER), session_hooks.SessionPolicy(False, False, False, False, False))
+        flags = {
+            "allow_sharing": True,
+            "allow_debounce": False,
+            "allow_typing": False,
+            "allow_split": False,
+        }
+        with patch.object(plugin, "policy_switches", return_value=flags):
+            self.assertEqual(plugin._policy(SERVER), session_hooks.SessionPolicy(False, True, False, False, False))
         request = ChatRequest(SERVER, "admin", None, "hi", "turn", "msg", "private")
         context = hooks.hook_context(request)
         with patch.object(plugin, "plugin_enabled", return_value=False):
@@ -288,6 +295,43 @@ class SkipConfirmationTests(unittest.TestCase):
             plugin_config, "REG", SimpleNamespace(load=lambda: {"skip_confirmation": True}, _last_error="corrupt")
         ):
             self.assertFalse(plugin_config.skip_confirmation())
+
+
+class PolicySwitchTests(unittest.TestCase):
+    """会话能力默认保持保守，学习共享默认开启，配置损坏时回退默认值。"""
+
+    def _flags(self, data: dict, error: str | None = None) -> dict[str, bool]:
+        with patch.object(plugin_config, "REG", SimpleNamespace(load=lambda: data, _last_error=error)):
+            return plugin_config.policy_switches()
+
+    def test_defaults(self) -> None:
+        self.assertEqual(
+            self._flags({}),
+            {
+                "allow_sharing": True,
+                "allow_debounce": False,
+                "allow_typing": False,
+                "allow_split": False,
+            },
+        )
+
+    def test_switch_reads_config(self) -> None:
+        flags = self._flags({"allow_split": True, "allow_sharing": False})
+        self.assertTrue(flags["allow_split"])
+        self.assertFalse(flags["allow_sharing"])
+
+    def test_unreadable_config_uses_defaults(self) -> None:
+        self.assertFalse(self._flags({"allow_split": True}, "corrupt")["allow_split"])
+
+    def test_policy_uses_switches(self) -> None:
+        flags = {
+            "allow_sharing": True,
+            "allow_debounce": True,
+            "allow_typing": True,
+            "allow_split": True,
+        }
+        with patch.object(plugin, "policy_switches", return_value=flags):
+            self.assertEqual(plugin._policy(SERVER), session_hooks.SessionPolicy(False, True, True, True, True))
 
 
 class ExecutorTests(unittest.IsolatedAsyncioTestCase):
@@ -515,7 +559,7 @@ class ToolTests(unittest.IsolatedAsyncioTestCase):
             prompt = plugin._prompt(hooks.ChatHookContext(SERVER))
             self.assertIn("server_confirm", prompt)
             self.assertIn("明确同意", prompt)
-            self.assertIn("不要重复提交", prompt)
+            self.assertIn("别重复提交", prompt)
             self.assertIsNone(plugin._prompt(hooks.ChatHookContext(BASE)))
 
     def test_prompt_switches_when_confirmation_is_skipped(self) -> None:

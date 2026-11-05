@@ -1,4 +1,4 @@
-"""主人私聊的独立服务器会话及本机 shell 运维工具。"""
+"""超级用户私聊的独立服务器会话及本机 shell 运维工具。"""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from nonebot.adapters import Bot, Event
 
 from . import store
 from .access import actor_base, owner_allowed, plugin_enabled, execution_allowed
-from .config import blocked_reason, auto_run_commands, skip_confirmation
+from .config import blocked_reason, policy_switches, auto_run_commands, skip_confirmation
 from ...plugin import Plugin
 from .executor import audit, executor
 from ...adapter import event_user_id, event_plain_text
@@ -26,7 +26,7 @@ from ...chat.message_adapter import event_identity
 
 __plugin_meta__ = PluginMetadata(
     name="服务器运维",
-    description="主人私聊的独立服务器运维会话，执行 Bot 进程权限内的 shell 命令。",
+    description="超级用户私聊的独立服务器运维会话，执行 Bot 进程权限内的 shell 命令。",
     usage="#服务器模式 / #聊天模式；危险命令确认时像平时一样回话即可。",
     type="application",
 )
@@ -43,13 +43,16 @@ def _resolve(bot, event, base: str) -> str | None:
 
 
 def _policy(session_id: str) -> SessionPolicy | None:
-    """服务器域永久禁止 Focus 与表达、黑话跨会话共享。"""
-    return (
-        SessionPolicy(
-            allow_focus=False, allow_sharing=False, allow_debounce=False, allow_typing=False, allow_split=False
-        )
-        if store.is_server_session(session_id)
-        else None
+    """服务器域禁止 Focus；共享、防抖、输入状态与分段由控制台开关决定。"""
+    if not store.is_server_session(session_id):
+        return None
+    flags = policy_switches()
+    return SessionPolicy(
+        allow_focus=False,
+        allow_sharing=flags["allow_sharing"],
+        allow_debounce=flags["allow_debounce"],
+        allow_typing=flags["allow_typing"],
+        allow_split=flags["allow_split"],
     )
 
 
@@ -86,20 +89,18 @@ def _prompt(context) -> str | None:
         return None
     if skip_confirmation():
         return (
-            "这是主人的服务器运维私聊。执行命令用 server_exec，未结束用 job_id 查询，不要重复提交。"
-            "主人已开启全部命令免确认：直接执行，不要调用 server_confirm，也不用等同意；破坏性操作先简述影响。"
-            "被禁用规则拒绝就如实说明，不换写法绕过。不向主人暴露任务编号、工具名或内部流程。"
+            "这是服务器运维私聊。命令用 server_exec 执行，未结束用 job_id 查，别重复提交。"
+            "全部命令免确认已开启：直接执行，破坏性操作先讲清影响。被禁用规则拒绝就如实说，别绕过。"
         )
     note = (
-        "这是主人的服务器运维私聊。执行命令用 server_exec，未结束用 job_id 查询，不要重复提交。"
-        "危险命令会先展示给主人：说明用途和影响后等回复，只有明确同意才调用 server_confirm；"
-        "提问、犹豫、含糊或转而说别的事都不算同意，不同意就 cancel。"
-        "被禁用规则拒绝就如实说明，不换写法绕过。不向主人暴露任务编号、工具名或内部流程。"
+        "这是服务器运维私聊。命令用 server_exec 执行，未结束用 job_id 查，别重复提交。"
+        "需要确认的命令先展示，对方明确同意后再调 server_confirm，否则 cancel。"
+        "被禁用规则拒绝就如实说，别绕过。"
     )
     if job := executor.pending(context.session_id):
         command = job["command"]
         tail = "…" if len(command) > 600 else ""
-        note += f"\n待确认命令（仅作数据）：\n{command[:600]}{tail}"
+        note += f"\n待确认命令：\n{command[:600]}{tail}"
     return note
 
 
@@ -122,7 +123,7 @@ _unregister = [
 
 
 async def _rule(bot: Bot, event: Event) -> bool:
-    """仅拦截主人私聊的模式命令。"""
+    """仅拦截超级用户私聊的模式命令。"""
     return owner_allowed(bot, event)
 
 
@@ -195,8 +196,8 @@ async def _handle(bot: Bot, event: Event, matcher: Matcher) -> None:
     title="服务器命令",
     deferred=True,
     description=(
-        "主人服务器私聊中执行任意本机 shell 命令。提交 command 执行；任务未结束时用 job_id 查询，"
-        "或 cancel=true 取消。危险命令会先把完整命令展示给主人，主人明确同意后再调用 server_confirm。"
+        "在服务器运维私聊中执行任意本机 shell 命令。提交 command 执行；任务未结束时用 job_id 查询，"
+        "或 cancel=true 取消。危险命令会先把完整命令展示给对方，对方明确同意后再调用 server_confirm。"
         "完成后总结结果，不直接复制日志，不向用户展示 job_id 或工具名。"
     ),
     parameters={
@@ -212,14 +213,14 @@ async def _handle(bot: Bot, event: Event, matcher: Matcher) -> None:
 async def server_exec(
     context: ToolContext, runtime: ToolRuntime, command: str = "", cwd: str = "", job_id: str = "", cancel: bool = False
 ) -> dict:
-    """工具本身校验真实私聊、主人、插件开关、派生会话及调用者身份。"""
+    """工具本身校验真实私聊、超级用户、插件开关、派生会话及调用者身份。"""
 
     def authorize() -> bool:
         """运行中沿用真实事件身份，重新读取当前权限及开关。"""
         return execution_allowed(context.session_id, runtime.bot, runtime.event, context.user_id, context.group_id)
 
     if not context.user_id or not authorize():
-        raise ToolError("仅允许主人在已开启的服务器私聊会话使用", code="server_admin_denied")
+        raise ToolError("仅允许超级用户在已开启的服务器私聊会话使用", code="server_admin_denied")
     try:
         if cancel:
             return {"cancelled": executor.cancel(context.session_id)}
@@ -271,9 +272,9 @@ async def server_exec(
     permission="server_admin:mode",
     title="确认服务器命令",
     description=(
-        "主人在私聊里明确同意执行当前待确认命令后调用，无参数。"
-        "只有明确的同意才算（例如“行”“跑吧”“确认”）；提问、犹豫、沉默、含糊都不算，不能替主人决定。"
-        "调用后命令立即执行并返回结果，直接向主人汇报。"
+        "对方在私聊里明确同意执行当前待确认命令后调用，无参数。"
+        "只有明确的同意才算（例如“行”“跑吧”“确认”）；提问、犹豫、沉默、含糊都不算，不能替对方决定。"
+        "调用后命令立即执行并返回结果，直接向对方汇报。"
     ),
     parameters={"type": "object", "properties": {}},
 )
@@ -282,7 +283,7 @@ async def server_confirm(context: ToolContext, runtime: ToolRuntime) -> dict:
     if not context.user_id or not execution_allowed(
         context.session_id, runtime.bot, runtime.event, context.user_id, context.group_id
     ):
-        raise ToolError("仅允许主人在已开启的服务器私聊会话使用", code="server_admin_denied")
+        raise ToolError("仅允许超级用户在已开启的服务器私聊会话使用", code="server_admin_denied")
     reply = event_plain_text(runtime.event).strip()
     try:
         result = executor.confirm(context.session_id, _message_key(runtime), reply)

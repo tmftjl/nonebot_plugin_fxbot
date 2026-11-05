@@ -28,7 +28,7 @@ def plugin_enabled() -> bool:
 def actor_base(bot, event) -> str:
     """从真实平台事件取身份，不经过会话解析器，防止伪造工具上下文。"""
     if bot is None or event is None or not event_is_private(event) or event_group_id(event):
-        raise ValueError("仅限主人私聊")
+        raise ValueError("仅限超级用户私聊")
     user = str(event_user_id(event) or "")
     self_id = str(getattr(bot, "self_id", "") or "")
     if not user or not self_id:
@@ -37,12 +37,12 @@ def actor_base(bot, event) -> str:
 
 
 def owner_allowed(bot, event) -> bool:
-    """真实私聊加显式主人和插件开关，任何异常均拒绝。"""
+    """真实私聊加显式超级用户和插件开关，任何异常均拒绝。"""
     try:
         actor_base(bot, event)
         return plugin_enabled() and is_superuser(str(event_user_id(event)))
     except Exception:
-        logger.opt(exception=True).debug("[ServerAdmin] 主人校验未通过")
+        logger.opt(exception=True).debug("[ServerAdmin] 超级用户校验未通过")
         return False
 
 

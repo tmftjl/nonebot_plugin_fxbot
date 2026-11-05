@@ -26,6 +26,17 @@ def skip_confirmation() -> bool:
     return REG._last_error is None and rules.get("skip_confirmation") is True
 
 
+_POLICY_KEYS = ("allow_sharing", "allow_debounce", "allow_typing", "allow_split")
+
+
+def policy_switches() -> dict[str, bool]:
+    """服务器会话的能力开关；配置不可读时沿用默认值。"""
+    rules = REG.load()
+    if REG._last_error is not None:
+        rules = {}
+    return {key: rules.get(key, DEFAULTS[key]) is True for key in _POLICY_KEYS}
+
+
 def blocked_reason(command: str) -> str:
     """命中禁用规则时返回该规则；配置读不出来时按拒绝处理。"""
     rules = REG.load()

@@ -79,6 +79,10 @@ DEFAULTS: dict[str, Any] = {
         "git rev-parse",
     ],
     "skip_confirmation": False,
+    "allow_sharing": True,
+    "allow_debounce": False,
+    "allow_typing": False,
+    "allow_split": False,
 }
 
 
@@ -98,6 +102,35 @@ def get_ui_schema() -> dict[str, Any]:
                         "component": "Switch",
                         "default": DEFAULTS["skip_confirmation"],
                         "helpMessage": "开启后除黑名单外全部直接执行。仅建议测试或临时排障时打开。",
+                    },
+                    {"component": "Divider", "label": "会话能力"},
+                    {
+                        "field": "allow_sharing",
+                        "label": "共享学习内容",
+                        "component": "Switch",
+                        "default": DEFAULTS["allow_sharing"],
+                        "helpMessage": "按「学习 → 群表达 / 黑话 → 共享组」共用词条；关闭后只用本会话学到的。",
+                    },
+                    {
+                        "field": "allow_debounce",
+                        "label": "消息防抖",
+                        "component": "Switch",
+                        "default": DEFAULTS["allow_debounce"],
+                        "helpMessage": "连续消息合并后再统一回复。",
+                    },
+                    {
+                        "field": "allow_typing",
+                        "label": "正在输入状态",
+                        "component": "Switch",
+                        "default": DEFAULTS["allow_typing"],
+                        "helpMessage": "回复前发送正在输入提示。",
+                    },
+                    {
+                        "field": "allow_split",
+                        "label": "分段回复",
+                        "component": "Switch",
+                        "default": DEFAULTS["allow_split"],
+                        "helpMessage": "长回复按句拆成多条发送，更像真人聊天。",
                     },
                     {"component": "Divider", "label": "命令黑名单"},
                     {

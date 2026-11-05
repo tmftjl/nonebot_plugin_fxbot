@@ -1,4 +1,4 @@
-"""有界 shell 任务、按主人表态的一次性确认、进程清理及逐条执行审计。"""
+"""有界 shell 任务、按超级用户表态的一次性确认、进程清理及逐条执行审计。"""
 
 from __future__ import annotations
 
@@ -161,7 +161,7 @@ class CommandExecutor:
         job.task = asyncio.create_task(self._run(job), name=f"server-admin-{job.id}")
 
     def confirm(self, session_id: str, source: str, reply: str = "") -> dict:
-        """只能由主人随后一轮明确表态执行；同一事件里的自我确认无效。"""
+        """只能由超级用户随后一轮明确表态执行；同一事件里的自我确认无效。"""
         job = self._pending(session_id)
         if job is None or not source or job.source == source:
             raise ValueError("没有匹配的待确认命令，或确认已过期")
@@ -279,7 +279,7 @@ class CommandExecutor:
                     job.output = text[:OUTPUT_LIMIT]
 
             async def watch_permission() -> None:
-                """运行期间持续重查开关与主人身份。"""
+                """运行期间持续重查开关与超级用户身份。"""
                 while True:
                     if not job.authorize() or self.stopping:
                         raise PermissionError("运行权限已撤销")
