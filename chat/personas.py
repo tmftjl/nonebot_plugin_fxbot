@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 from nonebot import logger
 
-from .bindings import PERSONA, get_binding
+from .bindings import PERSONA, get_binding, clear_binding_value
 from ..utils.cache import cache
 from ..utils.paths import config_dir
 
@@ -179,8 +179,10 @@ def save_persona_text(name: str, text: str, *, overwrite: bool = True) -> Path:
     if "\x00" in content:
         raise ValueError("人格描述包含非法字符")
     _ensure_default_persona(dir_path)
-    if not overwrite and any((dir_path / f"{key}{ext}").exists() for ext in (".md", ".txt")):
+    existing = next((dir_path / f"{key}{ext}" for ext in (".md", ".txt") if (dir_path / f"{key}{ext}").exists()), None)
+    if not overwrite and existing is not None:
         raise FileExistsError(key)
+    path = existing or path
     path.write_text(content, encoding="utf-8")
     cache.pop(("personas",))
     return path
@@ -199,6 +201,8 @@ def delete_persona(name: str) -> int:
             candidate.unlink()
             removed += 1
     cache.pop(("personas",))
+    if removed:
+        clear_binding_value(PERSONA, key)
     return removed
 
 

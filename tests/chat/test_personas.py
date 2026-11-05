@@ -3,8 +3,15 @@
 from __future__ import annotations
 
 import unittest
+from uuid import uuid4
 
-from src.plugins.nonebot_plugin_fxbot.chat.personas import compose_persona_prompt
+from src.plugins.nonebot_plugin_fxbot.chat.bindings import PERSONA, get_binding, set_binding
+from src.plugins.nonebot_plugin_fxbot.chat.personas import (
+    delete_persona,
+    get_personas_dir,
+    save_persona_text,
+    compose_persona_prompt,
+)
 
 STRUCTURED = """你的名字是雪球。
 
@@ -54,6 +61,48 @@ class ComposePersonaPromptTests(unittest.TestCase):
         text = compose_persona_prompt("雪球", "## 人格特征\n\n冷淡。")
 
         self.assertTrue(text.startswith("你的名字是雪球。\n冷淡。\n"))
+
+
+class PersonaStorageTests(unittest.TestCase):
+    """编辑沿用原文件，删除人格时清掉指向它的会话绑定。"""
+
+    def test_save_reuses_existing_txt_file(self) -> None:
+        directory = get_personas_dir()
+        name = f"txt-{uuid4().hex}"
+        (directory / f"{name}.txt").write_text("旧内容", encoding="utf-8")
+
+        path = save_persona_text(name, "新内容")
+
+        self.assertEqual(path.suffix, ".txt")
+        self.assertEqual((directory / f"{name}.txt").read_text(encoding="utf-8"), "新内容")
+        self.assertFalse((directory / f"{name}.md").exists())
+
+    def test_delete_clears_bindings_and_keeps_others(self) -> None:
+        name = f"del-{uuid4().hex}"
+        other = f"keep-{uuid4().hex}"
+        save_persona_text(name, "内容")
+        save_persona_text(other, "内容")
+        set_binding(PERSONA, f"session-a-{name}", name)
+        set_binding(PERSONA, f"session-b-{name}", name)
+        set_binding(PERSONA, f"session-c-{name}", other)
+
+        self.assertEqual(delete_persona(name), 1)
+
+        self.assertEqual(get_binding(PERSONA, f"session-a-{name}"), "")
+        self.assertEqual(get_binding(PERSONA, f"session-b-{name}"), "")
+        self.assertEqual(get_binding(PERSONA, f"session-c-{name}"), other)
+
+
+class ConsolePersonaRouteTests(unittest.IsolatedAsyncioTestCase):
+    """控制台只能修改已存在的人格，不再顺带创建。"""
+
+    async def test_update_missing_persona_is_rejected(self) -> None:
+        from src.plugins.nonebot_plugin_fxbot.console.routes import meta
+
+        result = await meta.update_ai_persona(f"missing-{uuid4().hex}", {"desc": "内容"})
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["message"], "人格不存在")
 
 
 if __name__ == "__main__":

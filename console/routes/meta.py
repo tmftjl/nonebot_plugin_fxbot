@@ -75,6 +75,8 @@ async def create_ai_persona(payload: dict[str, Any]) -> dict[str, Any]:
 async def update_ai_persona(key: str, payload: dict[str, Any]) -> dict[str, Any]:
     """更新 AI 人格。"""
     desc = str(payload.get("desc") or "").strip()
+    if key.strip() not in list_personas():
+        return {"success": False, "message": "人格不存在"}
     try:
         save_persona_text(key, desc)
     except ValueError as exc:
@@ -92,6 +94,9 @@ async def delete_ai_persona(key: str) -> dict[str, bool | str]:
         delete_persona(key)
     except ValueError as exc:
         return {"success": False, "message": str(exc)}
+    except OSError:
+        logger.opt(exception=True).error(f"[Console] 删除人格失败: key={key}")
+        return {"success": False, "message": "删除失败，请稍后再试"}
     return {"success": True}
 
 

@@ -61,6 +61,24 @@ def get_binding(kind: str, session_id: str) -> str:
     return _load().get(str(session_id), {}).get(kind, "")
 
 
+def clear_binding_value(kind: str, value: str) -> int:
+    """删除所有指向该值的一类绑定，返回清掉的会话数。"""
+    bindings = {key: dict(items) for key, items in _load().items()}
+    target = str(value or "").strip()
+    removed = 0
+    for session_id, items in list(bindings.items()):
+        if not target or items.get(kind) != target:
+            continue
+        items.pop(kind, None)
+        removed += 1
+        if not items:
+            bindings.pop(session_id, None)
+    if removed:
+        _save(bindings)
+        cache.pop(("bindings",))
+    return removed
+
+
 def set_binding(kind: str, session_id: str, value: str | None) -> None:
     """写入或清除会话绑定；会话下没有任何绑定时从文件里移除。"""
     # 缓存里的对象不直接改，避免写盘失败后内存与文件不一致

@@ -35,23 +35,24 @@ const emptyForm = (): PersonaForm => ({
   reply_style: '',
 })
 
-const parsePersona = (text: string): Omit<PersonaForm, 'key'> => {
+const parsePersona = (text: string): { form: Omit<PersonaForm, 'key'>; raw: boolean } => {
   const matches = [...text.matchAll(/^#{1,6}[ \t]+(.+?)[ \t]*$/gm)]
   if (!matches.length) {
-    return { ...emptyForm(), personality: text.trim() }
+    return { form: { ...emptyForm(), personality: text.trim() }, raw: false }
   }
-  const result = { ...emptyForm(), intro: text.slice(0, matches[0].index ?? 0).trim() }
+  const form = { ...emptyForm(), intro: text.slice(0, matches[0].index ?? 0).trim() }
   const seen = new Set<string>()
   for (let index = 0; index < matches.length; index += 1) {
     const key = SECTION_KEYS[matches[index][1].trim()]
     if (!key || seen.has(key)) {
-      return { ...emptyForm(), personality: text.trim() }
+      // 自定义小节映射不到三段表单：按原文编辑、原样保存，避免被反复套壳
+      return { form: { ...emptyForm(), personality: text.trim() }, raw: true }
     }
     seen.add(key)
     const end = matches[index + 1]?.index ?? text.length
-    result[key] = text.slice((matches[index].index ?? 0) + matches[index][0].length, end).trim()
+    form[key] = text.slice((matches[index].index ?? 0) + matches[index][0].length, end).trim()
   }
-  return result
+  return { form, raw: false }
 }
 
 const buildPersonaText = (form: PersonaForm): string => {
@@ -76,6 +77,7 @@ const defaultPersona = ref('')
 const activeSection = ref('personality')
 const dialogVisible = ref(false)
 const editingKey = ref<string | null>(null)
+const rawMode = ref(false)
 const knowledgeSupported = ref(true)
 const currentPersona = ref('')
 const knowledgeDialogVisible = ref(false)
@@ -127,14 +129,17 @@ const loadPersonas = async () => {
 
 const openCreateDialog = () => {
   editingKey.value = null
+  rawMode.value = false
   form.value = emptyForm()
   activeSection.value = 'personality'
   dialogVisible.value = true
 }
 
 const openEditDialog = (item: PersonaItem) => {
+  const parsed = parsePersona(item.desc)
   editingKey.value = item.key
-  form.value = { key: item.key, ...parsePersona(item.desc) }
+  rawMode.value = parsed.raw
+  form.value = { key: item.key, ...parsed.form }
   activeSection.value = 'personality'
   dialogVisible.value = true
 }
@@ -144,14 +149,18 @@ const savePersona = async () => {
     ElMessage.warning('请输入人格名称')
     return
   }
-  if (!form.value.personality.trim()) {
+  if (rawMode.value && !form.value.personality.trim()) {
+    ElMessage.warning('人格内容不能为空')
+    return
+  }
+  if (!rawMode.value && !form.value.personality.trim() && !form.value.behavior_style.trim() && !form.value.reply_style.trim()) {
     activeSection.value = 'personality'
-    ElMessage.warning('请填写人格特征')
+    ElMessage.warning('请至少填写一段人格内容')
     return
   }
   saving.value = true
   try {
-    const desc = buildPersonaText(form.value)
+    const desc = rawMode.value ? form.value.personality.trim() : buildPersonaText(form.value)
     const res = editingKey.value
       ? await metaApi.updatePersona(editingKey.value, desc)
       : await metaApi.createPersona(form.value.key, desc)
@@ -319,8 +328,16 @@ onMounted(() => {
             {{ editingKey ? '名称创建后不可修改。' : '名称同时作为文件名，不能包含 / \\ : * ? " < > |' }}
           </div>
         </el-form-item>
+        <el-form-item v-if="!rawMode" label="身份介绍">
+          <el-input
+            v-model="form.intro"
+            type="textarea"
+            :rows="2"
+            placeholder="可留空，例如：你的名字是雪球。"
+          />
+        </el-form-item>
       </el-form>
-      <el-tabs v-model="activeSection" class="persona-tabs">
+      <el-tabs v-if="!rawMode" v-model="activeSection" class="persona-tabs">
         <el-tab-pane label="人格特征" name="personality">
           <el-input
             v-model="form.personality"
@@ -337,7 +354,9 @@ onMounted(() => {
             :rows="10"
             placeholder="如何观察局面、何时参与、如何保持人设..."
           />
-          <div class="form-hint">{{ form.behavior_style.length }} 字 · 对应 MaiBot 的 behavior_style</div>
+          <div class="form-hint">
+            {{ form.behavior_style.length }} 字 · 只影响 Planner 的思考与决策，不改变回复正文
+          </div>
         </el-tab-pane>
         <el-tab-pane label="回复风格" name="reply_style">
           <el-input
@@ -349,6 +368,15 @@ onMounted(() => {
           <div class="form-hint">{{ form.reply_style.length }} 字 · 对应 MaiBot 的 reply_style</div>
         </el-tab-pane>
       </el-tabs>
+      <template v-else>
+        <el-input
+          v-model="form.personality"
+          type="textarea"
+          :rows="16"
+          placeholder="按原文编辑人格文件..."
+        />
+        <div class="form-hint">该文件包含自定义小节，拆不成三段，保存时按原文写回。</div>
+      </template>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="saving" @click="savePersona">保存</el-button>
