@@ -107,12 +107,11 @@ def _prompt(context) -> str | None:
     if store.is_server_session(context.session_id):
         return (
             "这是独立的服务器运维私聊。需要执行时通过 tool_search 找 server_exec；"
-            "先提交 command，返回 job_id 后用同一工具查询。pending 必须等待用户亲自回复“确认执行”；"
-            "不得自行确认或重复提交任务。命令使用 Bot 当前运行环境与权限，不一定是宿主机。"
-            "简单查询优先单条只读命令；查内存用 free -h，不为排版附加 echo、分号或管道。"
-            "pending 时只说明等待真人确认并结束本轮，不轮询或重复回复；running 时可查询同一 job_id。"
-            "取得完成结果后必须先总结再回复：先结论，再列关键数据和必要建议；保留单位，少用标题，不贴整屏日志。"
-            "不把任务编号当结果，不把非零退出码说成成功，不凭 Swap 已用就断言当前内存不足。"
+            "已有任务用同一工具查询进度，不重复提交。待确认时必须等待用户亲自回复“确认执行”，"
+            "不得自行确认。命令使用 Bot 当前运行环境与权限，不一定是宿主机。"
+            "等待确认时把完整命令和影响告诉用户后结束本轮，不轮询或反复催问。"
+            "取得执行结果后先总结再回复：先结论，再列关键数据和必要建议，保留单位，不贴整屏日志。"
+            "非零退出码不等于成功；不要向用户展示任务编号、工具名或内部流程。"
         )
     return None
 
@@ -161,13 +160,11 @@ mode_cmd = P.on_regex(
 
 def _describe(result: dict[str, Any]) -> str:
     """确认前展示完整命令与工作目录，不截断待审批的实际内容。"""
-    if result["status"] == "pending":
-        return (
-            f"这条操作需要你确认，有效期 120 秒。\n目录：{result['cwd']}\n命令：\n{result['command']}\n"
-            "命令具有当前 Bot 进程的系统权限，可能修改或删除数据。\n"
-            f"同意就回复“确认执行”，不做就回复“取消执行”。编号：{result['job_id']}"
-        )
-    return f"任务 {result['job_id']}：{result['status']}。请让 AI 使用 job_id 查询结果。"
+    return (
+        f"这条操作需要你确认，有效期 120 秒。\n目录：{result['cwd']}\n命令：\n{result['command']}\n"
+        "命令具有当前 Bot 进程的系统权限，可能修改或删除数据。\n"
+        "同意就回复“确认执行”，不做就回复“取消执行”。"
+    )
 
 
 async def handle_mode(bot: Bot, event: Event, matcher: Matcher | None = None) -> str:
@@ -271,9 +268,9 @@ async def _handle(bot: Bot, event: Event, matcher: Matcher) -> None:
     title="服务器命令",
     deferred=True,
     description=(
-        "主人服务器私聊中执行任意本机 shell 命令。提交 command 得到 job_id；用 job_id 查询，"
-        "或 cancel=true 取消。危险命令需用户本人私聊回复“确认执行”，不能由 AI 确认。完成后总结结果，不直接复制日志。"
-        "查询内存仅提交 free -h；其他简单查询也优先单条只读命令，不为排版拼接 echo 或分号。"
+        "主人服务器私聊中执行任意本机 shell 命令。提交 command 执行；任务未结束时用 job_id 查询，"
+        "或 cancel=true 取消。危险命令需用户本人私聊回复“确认执行”，不能由 AI 确认。"
+        "完成后总结结果，不直接复制日志，不向用户展示 job_id 或工具名。"
     ),
     parameters={
         "type": "object",
