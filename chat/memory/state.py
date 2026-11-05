@@ -41,5 +41,14 @@ async def prepare_memory() -> None:
     except Exception as exc:
         mark_degraded(f"schema: {type(exc).__name__}: {exc}")
         logger.opt(exception=True).error("[ChatStorage] 表结构迁移失败，聊天存储降级")
+        return
+    from .repository import chat_repository
+
+    try:
+        changed = await chat_repository.normalize_expression_styles()
+    except Exception as exc:
+        logger.opt(exception=True).warning(f"[ChatStorage] 表达说法归一失败: {type(exc).__name__}")
     else:
-        mark_ready()
+        if changed:
+            logger.info(f"[ChatStorage] 表达说法归一完成: {changed} 条")
+    mark_ready()

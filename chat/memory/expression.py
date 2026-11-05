@@ -17,7 +17,7 @@ from .config import expression_config, tenant_learn_enabled, expression_vector_c
 from .models import ChatMessage, ChatExpression
 from .prompts import learning_prompt
 from .learning import tenant_target, learning_flags
-from .filtering import SENSITIVE, text_hash, should_learn, sanitize_line
+from .filtering import SENSITIVE, text_hash, should_learn, sanitize_line, normalize_expression_style
 from .repository import chat_repository
 from .expression_vector import select_by_vectors
 from ..providers.routing import routed_task, fallback_provider
@@ -83,9 +83,7 @@ def parse_expressions(data: object, messages: list[ChatMessage]) -> list[Express
         if not isinstance(raw, dict):
             continue
         situation = sanitize_line(raw.get("situation"), 60)
-        style = sanitize_line(raw.get("style"), 60)
-        if style.startswith("使用"):
-            style = style[2:].strip()
+        style = normalize_expression_style(sanitize_line(raw.get("style"), 60))
         if not situation or not style or SENSITIVE.search(situation) or SENSITIVE.search(style):
             continue
         key = (normalize(situation), normalize(style))
@@ -307,9 +305,7 @@ def parse_text_expressions(response: str, sources: dict[int, str]) -> list[TextE
         if not isinstance(raw, dict):
             continue
         situation = sanitize_line(raw.get("situation") or raw.get("title"), 60)
-        style = sanitize_line(raw.get("style") or raw.get("description"), 60)
-        if style.startswith("使用"):
-            style = style[2:].strip()
+        style = normalize_expression_style(sanitize_line(raw.get("style") or raw.get("description"), 60))
         if not situation or not style or SENSITIVE.search(situation) or SENSITIVE.search(style):
             continue
         if any(marker in situation or marker in style for marker in ("SELF", "[图片", "[表情包")):

@@ -165,6 +165,18 @@ class ParseExpressionTests(unittest.TestCase):
             [("别人在炫耀时", "笑死，又来", "tone", 21)],
         )
 
+    def test_style_is_reduced_to_spoken_phrase(self) -> None:
+        parsed = parse_expressions(
+            [
+                {"situation": "别人喝饮料时", "style": "用「多喝凉水」敷衍回怼", "id": 21},
+                {"situation": "撒娇时", "style": "句末加「捏」", "id": 22},
+                {"situation": "群友复读时", "style": "重复原词并加「（）」", "id": 21},
+            ],
+            self.messages,
+        )
+
+        self.assertEqual([item.style for item in parsed], ["多喝凉水", "捏", "重复原词并加「（）」"])
+
     def test_invalid_payload_returns_none_and_empty_is_valid(self) -> None:
         self.assertIsNone(parse_expressions("not json", self.messages))
         self.assertIsNone(parse_expressions({}, self.messages))
@@ -527,6 +539,32 @@ class ExpressionLearningTests(_ExpressionTestCase):
         self.assertEqual(await chat_repository.list_expressions(self.tenant), [])
         cursor = await chat_repository.get_cursor(self.tenant, "expression")
         self.assertEqual(cursor.cursor_seq if cursor else 0, 0)
+
+
+class ExpressionStyleBackfillTests(_ExpressionTestCase):
+    """启动时把历史的说明式说法归一成短语，并把撞车项合并到较早的一条。"""
+
+    async def test_normalizes_and_merges_duplicates(self) -> None:
+        await self._save_expressions(
+            [
+                {"situation": "别人炫耀时", "style": "用「笑死」敷衍回怼", "count": 1.0},
+                {"situation": "别人炫耀时", "style": "笑死", "count": 2.0},
+                {"situation": "有人求助时", "style": "让我看看", "count": 1.0},
+            ]
+        )
+
+        changed = await chat_repository.normalize_expression_styles()
+
+        rows = await chat_repository.list_expressions(self.tenant)
+        self.assertEqual(
+            sorted((row.situation, row.style, row.count) for row in rows),
+            [("别人炫耀时", "笑死", 3.0), ("有人求助时", "让我看看", 1.0)],
+        )
+        self.assertGreaterEqual(changed, 2)
+
+        await chat_repository.normalize_expression_styles()
+        rows = await chat_repository.list_expressions(self.tenant)
+        self.assertEqual([(row.style, row.count) for row in rows], [("笑死", 3.0), ("让我看看", 1.0)])
 
 
 class ExpressionInjectionTests(_ExpressionTestCase):

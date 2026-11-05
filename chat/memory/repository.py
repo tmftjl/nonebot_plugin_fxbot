@@ -29,7 +29,7 @@ from .models import (
     ChatRecallTombstone,
     utc_now_naive,
 )
-from .filtering import text_hash, sanitize_line
+from .filtering import text_hash, sanitize_line, normalize_expression_style
 from ..message_context import message_metadata
 
 DIAGNOSTIC_RETENTION_HOURS = 72
@@ -71,6 +71,24 @@ def _add_contribution(raw: object, batch_id: str, delta: float, learned: int) ->
     else:
         entries.append({"batch": batch_id, "count": delta, "learn": learned})
     return json.dumps(entries, ensure_ascii=False)
+
+
+def _merge_contributions(target: object, source: object) -> str:
+    """合并两条表达的来源批次，撤回时仍能按批次回滚。"""
+    merged: dict[str, dict[str, Any]] = {}
+    for raw in (target, source):
+        try:
+            entries = json.loads(str(raw or "[]"))
+        except (TypeError, ValueError):
+            entries = []
+        for entry in entries if isinstance(entries, list) else []:
+            if not isinstance(entry, dict) or not entry.get("batch"):
+                continue
+            batch = str(entry["batch"])
+            current = merged.setdefault(batch, {"batch": batch, "count": 0.0, "learn": 0})
+            current["count"] += float(entry.get("count") or 0)
+            current["learn"] += int(entry.get("learn") or 0)
+    return json.dumps(list(merged.values()), ensure_ascii=False)
 
 
 @dataclass(frozen=True)
@@ -981,6 +999,47 @@ class ChatRepository:
         return True
 
     @with_session
+    async def normalize_expression_styles(self, session: AsyncSession) -> int:
+        """把历史说法归一成短语；同租户重复项合并到较早的一条。"""
+        rows = list((await session.execute(select(ChatExpression).order_by(ChatExpression.id))).scalars())
+        targets: dict[tuple[str, str, str], ChatExpression] = {}
+        styles: dict[int, str] = {}
+        duplicates: list[int] = []
+        for row in rows:
+            style = normalize_expression_style(row.style)
+            style_hash = text_hash(style)
+            key = (str(row.tenant), str(row.situation_hash), style_hash)
+            target = targets.get(key)
+            if target is None:
+                targets[key] = row
+                styles[int(row.id or 0)] = style
+                continue
+            target.count += float(row.count or 0)
+            target.use_count += int(row.use_count or 0)
+            target.learn_count += int(row.learn_count or 0)
+            target.checked = bool(target.checked or row.checked)
+            target.manual_checked = bool(target.manual_checked or row.manual_checked)
+            target.rejected = bool(target.rejected and row.rejected)
+            target.contributions = _merge_contributions(target.contributions, row.contributions)
+            if row.last_used_at and (target.last_used_at is None or row.last_used_at > target.last_used_at):
+                target.last_used_at = row.last_used_at
+            target.updated_at = utc_now_naive()
+            duplicates.append(int(row.id or 0))
+        changed = len(duplicates)
+        if duplicates:
+            # 先删重复行再改风格，避免唯一索引在两次写入之间冲突
+            with session.no_autoflush:
+                await session.execute(delete(ChatExpression).where(ChatExpression.id.in_(duplicates)))
+        for row in targets.values():
+            style = styles[int(row.id or 0)]
+            if style != row.style:
+                row.style = style
+                row.style_hash = text_hash(style)
+                row.updated_at = utc_now_naive()
+                changed += 1
+        return changed
+
+    @with_session
     async def upsert_expressions(
         self, session: AsyncSession, tenant: str, items: list[dict[str, Any]]
     ) -> list[ChatExpression]:
@@ -990,9 +1049,7 @@ class ChatRepository:
         seen: set[tuple[str, str]] = set()
         for item in items:
             situation = sanitize_line(item.get("situation"), 60)
-            style = sanitize_line(item.get("style"), 60)
-            if style.startswith("使用"):
-                style = style[2:].strip()
+            style = normalize_expression_style(sanitize_line(item.get("style"), 60))
             if not situation or not style:
                 raise ValueError("情境和说法都不能为空")
             situation_hash = text_hash(situation)

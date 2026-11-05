@@ -15,6 +15,8 @@ SENSITIVE = re.compile(
 
 _URL_ONLY = re.compile(r"^(?:https?://\S+\s*)+$", re.I)
 _AD = re.compile(r"(加群|代练|刷单|返利|优惠券|免费领取|vx[:：]?\s*\w+|微信[:：]?\s*\w+|qq群[:：]?\s*\d+)", re.I)
+_QUOTED = re.compile(r"[「“\"'‘]([^」”\"'’]+)[」”\"'’]")
+_STYLE_PREFIX = re.compile(r"^(?:使用|直接说|直接反问|反问|句[末尾]加|结尾加|末尾[补加]|可以?用)\s*")
 _RECENT_TTL = 600.0
 _recent_hashes: dict[tuple[str, str], float] = {}
 
@@ -31,6 +33,15 @@ def _digest(text: str) -> str:
 def text_hash(text: object) -> str:
     """情境与说法的稳定指纹，学习与人工写入共用。"""
     return _digest(str(text or "").strip())
+
+
+def normalize_expression_style(style: object) -> str:
+    """把「用 X / 句末加 X」这类说明改写成可以直接说的短语。"""
+    text = " ".join(str(style or "").split())
+    quoted = [part.strip() for part in _QUOTED.findall(text) if _visible_chars(part.strip())]
+    if quoted:
+        return "、".join(dict.fromkeys(quoted))
+    return _STYLE_PREFIX.sub("", text).strip() or text
 
 
 def _is_duplicate(tenant: str, text: str, now: float) -> bool:
