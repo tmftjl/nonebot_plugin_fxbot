@@ -12,10 +12,11 @@ import asyncio
 from uuid import uuid4
 from pathlib import Path
 from dataclasses import field, dataclass
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 
 from nonebot import logger
 
+from .ui_schema import DEFAULTS
 from ...utils.tz import now
 from ...utils.paths import data_dir
 
@@ -23,16 +24,38 @@ COMMAND_TIMEOUT = 60.0
 CONFIRM_TTL = 120.0
 OUTPUT_LIMIT = 4000
 MAX_COMMAND_CHARS = 12000
-_READ_COMMANDS = {"pwd", "ls", "dir", "whoami", "hostname", "uname", "uptime", "date", "df", "free", "echo"}
+# 前缀命中后仍要确认的参数；未列出的命令按只读处理。
+_DENY_ARGS = {
+    "date": ("-s", "--set"),
+    "journalctl": ("--vacuum", "--rotate", "--flush", "--sync"),
+}
+_EXACT_ONLY = {"hostname"}
+_METACHARS = re.compile(r"[\n\r;&><`$()%{}]")
 
 
-def needs_confirmation(command: str) -> bool:
-    """仅简单查询自动执行，其余保守确认；此判定不是安全沙箱。"""
-    value = command.strip()
-    if re.search(r"[\n\r;&|><`$()%{}]", value):
+def _matches(segment: str, allow: Iterable[str]) -> bool:
+    """命令片段按空格分词后以前缀表命中，且不带会写数据的参数。"""
+    tokens = segment.casefold().split()
+    for item in allow:
+        parts = str(item).casefold().split()
+        if not parts or tokens[: len(parts)] != parts:
+            continue
+        if parts[0] in _EXACT_ONLY and len(tokens) != len(parts):
+            continue
+        denied = _DENY_ARGS.get(parts[0], ())
+        if any(token.startswith(flag) for token in tokens[len(parts) :] for flag in denied):
+            continue
         return True
-    first = value.split(None, 1)[0].casefold() if value else ""
-    return first not in _READ_COMMANDS
+    return False
+
+
+def needs_confirmation(command: str, allow: Iterable[str] | None = None) -> bool:
+    """只读前缀自动执行；含分号、重定向、替换等组合符号或任一段不在表内就确认。"""
+    value = command.strip()
+    if _METACHARS.search(value):
+        return True
+    rules = DEFAULTS["auto_run_commands"] if allow is None else allow
+    return not all(_matches(segment, rules) for segment in value.split("|"))
 
 
 def audit(action: str, session_id: str, **details) -> None:
@@ -99,7 +122,15 @@ class CommandExecutor:
         for job in finished[:-100]:
             self.jobs.pop(job.id, None)
 
-    def submit(self, session_id: str, command: str, cwd: str, authorize: Callable[[], bool]) -> dict:
+    def submit(
+        self,
+        session_id: str,
+        command: str,
+        cwd: str,
+        authorize: Callable[[], bool],
+        allow: Iterable[str] | None = None,
+        auto_run_all: bool = False,
+    ) -> dict:
         """保存确切命令后返回确认请求或启动任务，启动前再次校验权限。"""
         self._prune()
         if self.stopping or not authorize():
@@ -117,7 +148,7 @@ class CommandExecutor:
         job = Command(session_id, command, str(directory), authorize)
         audit("submitted", session_id, job_id=job.id, command=command, cwd=str(directory))
         self.jobs[job.id] = job
-        if not needs_confirmation(command):
+        if auto_run_all or not needs_confirmation(command, allow):
             self._start(job)
         return job.result()
 

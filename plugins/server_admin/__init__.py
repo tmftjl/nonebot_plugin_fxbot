@@ -14,7 +14,7 @@ from nonebot.adapters import Bot, Event
 
 from . import store
 from .access import actor_base, owner_allowed, plugin_enabled, execution_allowed
-from .config import blocked_reason
+from .config import blocked_reason, auto_run_commands, skip_confirmation
 from ...plugin import Plugin
 from .executor import audit, executor
 from ...adapter import event_user_id, event_plain_text
@@ -84,6 +84,12 @@ def _prompt(context) -> str | None:
     """提示工作环境和确认方式，不覆盖用户通过 #人格 设置的绑定。"""
     if not store.is_server_session(context.session_id):
         return None
+    if skip_confirmation():
+        return (
+            "这是主人的服务器运维私聊。执行命令用 server_exec，未结束用 job_id 查询，不要重复提交。"
+            "主人已开启全部命令免确认：直接执行，不要调用 server_confirm，也不用等同意；破坏性操作先简述影响。"
+            "被禁用规则拒绝就如实说明，不换写法绕过。不向主人暴露任务编号、工具名或内部流程。"
+        )
     note = (
         "这是主人的服务器运维私聊。执行命令用 server_exec，未结束用 job_id 查询，不要重复提交。"
         "危险命令会先展示给主人：说明用途和影响后等回复，只有明确同意才调用 server_confirm；"
@@ -227,7 +233,14 @@ async def server_exec(
             except Exception:
                 logger.opt(exception=True).error("[ServerAdmin] 黑名单拦截审计失败")
             raise ToolError(f"命令命中服务器禁用规则，已拒绝执行：{reason[:120]}", code="server_admin_denied")
-        result = executor.submit(context.session_id, command, cwd, authorize)
+        result = executor.submit(
+            context.session_id,
+            command,
+            cwd,
+            authorize,
+            allow=auto_run_commands(),
+            auto_run_all=skip_confirmation(),
+        )
         if result["status"] == "running":
             job = executor.jobs[result["job_id"]]
             # 简单查询通常立即完成，直接把结果交给 Planner，长任务仍使用 job_id。

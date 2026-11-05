@@ -274,6 +274,22 @@ class BlocklistTests(unittest.TestCase):
             self.assertTrue(plugin_config.blocked_reason("echo hi"))
 
 
+class SkipConfirmationTests(unittest.TestCase):
+    """免确认开关默认关闭，配置损坏时也保持关闭。"""
+
+    def test_switch_reads_config(self) -> None:
+        with patch.object(
+            plugin_config, "REG", SimpleNamespace(load=lambda: {"skip_confirmation": True}, _last_error=None)
+        ):
+            self.assertTrue(plugin_config.skip_confirmation())
+
+    def test_unreadable_config_keeps_confirmation(self) -> None:
+        with patch.object(
+            plugin_config, "REG", SimpleNamespace(load=lambda: {"skip_confirmation": True}, _last_error="corrupt")
+        ):
+            self.assertFalse(plugin_config.skip_confirmation())
+
+
 class ExecutorTests(unittest.IsolatedAsyncioTestCase):
     """测试仅执行无害子进程，不执行任何删除、重启或服务命令。"""
 
@@ -307,6 +323,40 @@ class ExecutorTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(execution.needs_confirmation("echo harmless"))
         self.assertFalse(execution.needs_confirmation("free -h"))
         self.assertTrue(execution.needs_confirmation("free -h; echo '---'; uptime"))
+
+    def test_read_only_prefixes_auto_run(self) -> None:
+        for command in (
+            "ps -eo pid,comm",
+            "ps -eo pid,comm | grep docker",
+            "docker ps -a",
+            "docker logs --tail 50 nb",
+            "systemctl status docker",
+            "journalctl -u docker --no-pager | tail -n 100",
+            "cat /etc/os-release",
+            "date",
+        ):
+            self.assertFalse(execution.needs_confirmation(command), command)
+
+    def test_auto_run_rejects_writes_and_custom_rules(self) -> None:
+        for command in (
+            "hostname evil",
+            "date -s 2020-01-01",
+            "journalctl --vacuum-size=100M",
+            "docker rm nb",
+            "ls | xargs rm",
+            "cat /etc/os-release > /tmp/x",
+            "git branch -d main",
+        ):
+            self.assertTrue(execution.needs_confirmation(command), command)
+        self.assertTrue(execution.needs_confirmation("docker ps", ["ls"]))
+
+    async def test_auto_run_all_skips_confirmation(self) -> None:
+        command = f'"{sys.executable}" -c "pass"'
+        self.assertTrue(execution.needs_confirmation(command))
+        result = self.executor.submit(SERVER, command, self.cwd, self.authorize, auto_run_all=True)
+        self.assertEqual(result["status"], "running")
+        result = await self.finish(result)
+        self.assertEqual(result["status"], "completed")
 
     def test_pending_requires_presentation_correct_session_and_valid_ttl(self) -> None:
         result = self.executor.submit(SERVER, "python -c pass", self.cwd, self.authorize)
@@ -461,11 +511,18 @@ class ToolTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("harmless", result["output"])
 
     def test_prompt_explains_natural_confirmation(self) -> None:
-        prompt = plugin._prompt(hooks.ChatHookContext(SERVER))
-        self.assertIn("server_confirm", prompt)
-        self.assertIn("明确同意", prompt)
-        self.assertIn("不要重复提交", prompt)
-        self.assertIsNone(plugin._prompt(hooks.ChatHookContext(BASE)))
+        with patch.object(plugin, "skip_confirmation", return_value=False):
+            prompt = plugin._prompt(hooks.ChatHookContext(SERVER))
+            self.assertIn("server_confirm", prompt)
+            self.assertIn("明确同意", prompt)
+            self.assertIn("不要重复提交", prompt)
+            self.assertIsNone(plugin._prompt(hooks.ChatHookContext(BASE)))
+
+    def test_prompt_switches_when_confirmation_is_skipped(self) -> None:
+        with patch.object(plugin, "skip_confirmation", return_value=True):
+            prompt = plugin._prompt(hooks.ChatHookContext(SERVER))
+        self.assertIn("免确认", prompt)
+        self.assertIn("直接执行", prompt)
 
     async def test_forged_tool_call_fails_before_submit(self) -> None:
         with (
@@ -481,6 +538,7 @@ class ToolTests(unittest.IsolatedAsyncioTestCase):
     async def test_blocked_command_is_rejected_before_submit(self) -> None:
         with (
             patch.object(plugin, "execution_allowed", return_value=True),
+            patch.object(plugin, "skip_confirmation", return_value=True),
             patch.object(plugin, "blocked_reason", return_value="rm -rf"),
             patch.object(plugin, "audit"),
             patch.object(plugin.executor, "submit") as submit,
