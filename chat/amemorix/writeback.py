@@ -28,6 +28,24 @@ from ..memory.repository import chat_repository
 from ._host.message_service import get_messages_by_time_in_chat
 
 
+def _drop_tenant(queue: asyncio.Queue, tenant: str) -> None:
+    """移除队列里属于该会话的待处理任务，其余任务保持原顺序。"""
+    kept: list[dict[str, Any]] = []
+    while True:
+        try:
+            item = queue.get_nowait()
+        except asyncio.QueueEmpty:
+            break
+        queue.task_done()
+        if str(item.get("tenant") or "") != tenant:
+            kept.append(item)
+    for item in kept:
+        try:
+            queue.put_nowait(item)
+        except asyncio.QueueFull:
+            break
+
+
 class ChatWriteback:
     def __init__(self) -> None:
         self._summary_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=256)
@@ -35,8 +53,16 @@ class ChatWriteback:
         self._summary_task: asyncio.Task | None = None
         self._fact_task: asyncio.Task | None = None
         self._states: dict[str, int] = {}
+        self._epochs: dict[str, int] = {}
         self._stopping = False
         self._fact_client = LLMServiceClient(task_name="utils", request_type="A_Memorix.person_fact_writeback")
+
+    def forget_session(self, tenant: str) -> None:
+        """会话重置后丢弃待处理写回，并让在途任务放弃落库。"""
+        self._states.pop(tenant, None)
+        self._epochs[tenant] = self._epochs.get(tenant, 0) + 1
+        _drop_tenant(self._summary_queue, tenant)
+        _drop_tenant(self._fact_queue, tenant)
 
     async def start(self) -> None:
         if self._stopping:
@@ -171,10 +197,11 @@ class ChatWriteback:
         tenant = str(item["tenant"] or "")
         if not tenant:
             return
+        epoch = self._epochs.get(tenant, 0)
         occurred_at = item.get("occurred_at")
         end_time = to_naive_utc(occurred_at) if isinstance(occurred_at, datetime) else None
         total = await count_messages(tenant, end_time)
-        if total <= 0:
+        if total <= 0 or epoch != self._epochs.get(tenant, 0):
             return
         config = amemorix_runtime.config().integration
         threshold = max(1, int(config.chat_summary_writeback_message_threshold))
@@ -187,6 +214,8 @@ class ChatWriteback:
             return
         configured = max(1, int(config.chat_summary_writeback_context_length))
         context_length = min(configured, pending)
+        if epoch != self._epochs.get(tenant, 0):
+            return
         result = await ingest_summary(
             tenant,
             external_id=f"chat_auto_summary:{tenant}:{total}",
@@ -239,6 +268,7 @@ class ChatWriteback:
         user_id = str(item["user_id"] or "")
         if not tenant or not user_id:
             return
+        epoch = self._epochs.get(tenant, 0)
         platform = str(item.get("platform") or "") or session_parts(tenant)[0]
         person_id = make_person_id(tenant, platform, user_id)
         name = str(item.get("user_name") or "").strip() or user_id
@@ -277,6 +307,8 @@ class ChatWriteback:
         if not facts:
             return
         message_ids = [row["message_id"] for row in evidence if row["message_id"]]
+        if epoch != self._epochs.get(tenant, 0):
+            return
         for fact in facts:
             digest = hashlib.md5(f"{person_id}|{tenant}|{fact}".encode()).hexdigest()
             with person_scope(tenant):

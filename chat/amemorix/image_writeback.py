@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import base64
+import shutil
 import asyncio
 import hashlib
 from typing import Any
@@ -27,6 +28,13 @@ class ImageWriteback:
         self.journal: ImageWritebackJournal | None = None
         self.task: asyncio.Task | None = None
         self.lock = asyncio.Lock()
+
+    def forget_session(self, tenant: str) -> None:
+        """会话重置后丢弃待写入任务与已缓存原图。"""
+        if self.journal is not None:
+            self.journal.delete_session(tenant)
+        folder = data_dir("ai_chat") / "message_images" / hashlib.sha256(tenant.encode("utf-8")).hexdigest()[:24]
+        shutil.rmtree(folder, ignore_errors=True)
 
     def enabled(self) -> bool:
         """配置使用原有 A_Memorix 图片开关，不新增设置。"""

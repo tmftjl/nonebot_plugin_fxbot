@@ -340,17 +340,26 @@ class ChatService:
         await self._hydrate(session_id, history_limit(chat_cfg, is_group))
 
     async def clear_session(self, session_id: str) -> None:
-        """通知插件清理会话资源，通知失败不能阻止核心清空。"""
+        """通知插件清理会话资源，保留学习与长期记忆。"""
+        await self._notify_clear(session_id, full=False)
+
+    async def reset_session(self, session_id: str) -> bool:
+        """销毁会话：清空短期历史与长期记忆，保留学习记录，再按空会话继续。"""
+        return await self._notify_clear(session_id, full=True)
+
+    async def _notify_clear(self, session_id: str, *, full: bool) -> bool:
+        """统一清空流程；返回长期记忆是否已确认清空。"""
         context = ChatHookContext(session_id, phase="clear")
         await notify("session_clear_start", context)
         try:
-            await self._clear_session(session_id)
+            memory_cleared = await self._clear_session(session_id, full=full)
         except BaseException:
             await notify("session_clear_error", context)
             raise
         await notify("session_clear_complete", context, epoch=self.session_store.epoch(session_id))
+        return memory_cleared
 
-    async def _clear_session(self, session_id: str) -> None:
+    async def _clear_session(self, session_id: str, *, full: bool = False) -> bool:
         """清空会话历史；内存、数据库、待合并批次与在途轮次一起失效。"""
         from .memory.trimmed import trimmed_learning
         from .behavior.turn_scheduler import normal_scheduler
@@ -372,14 +381,39 @@ class ChatService:
             self.session_store.clear(session_id)
             tool_result_store.clear(session_id)
             clear_summary(session_id)
-            if not memory_state.is_ready():
-                return
-            try:
-                generation = await history_module.clear_tenant(session_id)
-            except Exception:
-                logger.opt(exception=True).warning("[Chat] 清空数据库历史失败，重启后可能恢复")
-                return
-            self.session_store.set_epoch(session_id, generation)
+            persons: tuple[str, ...] = ()
+            if memory_state.is_ready():
+                try:
+                    if full:
+                        reset = await history_module.reset_tenant(session_id)
+                        generation = reset.generation
+                        persons = reset.person_ids
+                    else:
+                        generation = await history_module.clear_tenant(session_id)
+                except Exception:
+                    logger.opt(exception=True).warning("[Chat] 清空数据库历史失败，重启后可能恢复")
+                    return False
+                self.session_store.set_epoch(session_id, generation)
+        if not full:
+            return True
+        return await self._clear_durable_memory(session_id, persons)
+
+    async def _clear_durable_memory(self, session_id: str, persons: tuple[str, ...]) -> bool:
+        """清理会话目录与长期记忆；任何一步失败都只降级，不撤销已经完成的清空。"""
+        from .amemorix.service import wipe_tenant
+        from .amemorix.writeback import chat_writeback
+        from .amemorix.image_writeback import image_writeback
+
+        chat_writeback.forget_session(session_id)
+        image_writeback.forget_session(session_id)
+        try:
+            result = await wipe_tenant(session_id, persons)
+        except Exception:
+            logger.opt(exception=True).warning("[Chat] 清理长期记忆失败")
+            return False
+        if not result.get("success"):
+            logger.warning(f"[Chat] 清理长期记忆失败: {result.get('error') or result}")
+        return bool(result.get("success"))
 
     async def _hydrate(self, session_id: str, limit: int) -> None:
         """首次访问会话时从数据库恢复最近历史，不覆盖已到的新消息。"""

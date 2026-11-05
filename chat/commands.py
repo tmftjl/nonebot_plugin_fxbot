@@ -1,4 +1,4 @@
-"""AI 对话命令：人格切换和清空历史。"""
+"""AI 对话命令：人格切换和重置会话。"""
 
 from __future__ import annotations
 
@@ -239,9 +239,11 @@ async def _handle_provider(bot: Bot, event: Event, matcher: Matcher) -> None:
 
 @clear_cmd.handle()
 async def _handle_clear(bot: Bot, event: Event, matcher: Matcher) -> None:
-    """清空当前会话的 AI 历史。"""
-    await chat_service.clear_session(session_id_for_event(bot, event))
-    await matcher.finish("已清空当前对话历史")
+    """销毁当前会话，连同长期记忆一起重新开始；学习记录保留。"""
+    cleared = await chat_service.reset_session(session_id_for_event(bot, event))
+    if cleared:
+        await matcher.finish("已重置当前会话：历史与长期记忆已清空，学习记录保留")
+    await matcher.finish("已重置当前会话；长期记忆清理失败，请查看日志")
 
 
 def _switch_state(override: bool | None) -> str:

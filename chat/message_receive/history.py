@@ -625,3 +625,8 @@ async def end_turn_without_reply(request: ChatRequest, provider_name: str) -> No
 async def clear_tenant(session_id: str) -> int:
     """清空数据库历史并返回新的持久化代次。"""
     return await chat_repository.clear_tenant(session_id)
+
+
+async def reset_tenant(session_id: str) -> Any:
+    """删除该会话的全部持久化数据，返回代次与需要继续清理的人物。"""
+    return await chat_repository.reset_tenant(session_id)

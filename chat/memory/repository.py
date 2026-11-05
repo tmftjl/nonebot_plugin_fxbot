@@ -101,6 +101,14 @@ class TenantJobState:
     learn_enabled: bool | None
 
 
+@dataclass(frozen=True)
+class TenantReset:
+    """彻底重置会话后需要继续清理的外部资源。"""
+
+    generation: int
+    person_ids: tuple[str, ...]
+
+
 class ChatRepository:
     """只暴露按 tenant 隔离的读写，不跨租户查询。"""
 
@@ -391,13 +399,8 @@ class ChatRepository:
             )
         return True
 
-    @with_session
-    async def clear_tenant(self, session: AsyncSession, tenant: str) -> int:
-        """删除该租户的消息与轮次，递增代次并返回新代次。"""
-        await session.execute(delete(ChatTurnItem).where(ChatTurnItem.tenant == tenant))
-        await session.execute(delete(ChatTurn).where(ChatTurn.tenant == tenant))
-        await session.execute(delete(ChatMessage).where(ChatMessage.tenant == tenant))
-        await session.execute(delete(ChatPlannerSample).where(ChatPlannerSample.tenant == tenant))
+    async def _bump_generation(self, session: AsyncSession, tenant: str) -> int:
+        """递增持久化代次；会话代次是清空后所有在途写入的唯一有效性凭据。"""
         states = await ChatSessionState.select_rows(tenant=tenant, session=session)
         state = states[0] if states else None
         timestamp = utc_now_naive()
@@ -409,6 +412,28 @@ class ChatRepository:
             state.cleared_at = timestamp
             state.updated_at = timestamp
         return state.generation
+
+    @with_session
+    async def clear_tenant(self, session: AsyncSession, tenant: str) -> int:
+        """删除该租户的消息与轮次，递增代次并返回新代次。"""
+        await session.execute(delete(ChatTurnItem).where(ChatTurnItem.tenant == tenant))
+        await session.execute(delete(ChatTurn).where(ChatTurn.tenant == tenant))
+        await session.execute(delete(ChatMessage).where(ChatMessage.tenant == tenant))
+        await session.execute(delete(ChatPlannerSample).where(ChatPlannerSample.tenant == tenant))
+        return await self._bump_generation(session, tenant)
+
+    @with_session
+    async def reset_tenant(self, session: AsyncSession, tenant: str) -> TenantReset:
+        """删除该租户的会话与追溯数据，保留学习记录、人物身份和会话开关。"""
+        from ..amemorix.models import ChatPerson
+
+        persons = (
+            (await session.execute(select(ChatPerson.person_id).where(ChatPerson.tenant == tenant))).scalars().all()
+        )
+        for model in (ChatTurnItem, ChatTurn, ChatMessage, ChatRecallTombstone, ChatTrace):
+            await session.execute(delete(model).where(model.tenant == tenant))
+        generation = await self._bump_generation(session, tenant)
+        return TenantReset(generation=generation, person_ids=tuple(str(item) for item in persons if item))
 
     @with_session
     async def get_session_state(self, session: AsyncSession, tenant: str) -> ChatSessionState | None:

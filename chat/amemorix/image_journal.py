@@ -88,6 +88,11 @@ class ImageWritebackJournal:
         items: List[Dict[str, Any]] = [dict(row) for row in rows]
         return {"success": True, "items": items, "total": total}
 
+    def delete_session(self, session_id: str) -> int:
+        with self.connection:
+            cursor = self.connection.execute("DELETE FROM image_writeback_jobs WHERE session_id=?", (session_id,))
+        return cursor.rowcount
+
     def retry_failed(self) -> int:
         with self.connection:
             cursor = self.connection.execute(

@@ -2,13 +2,119 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
+from collections.abc import Iterable
 
 from nonebot import logger
 
 from .people import session_parts
 from .runtime import amemorix_runtime
 from ._host.person_db import person_scope, resolve_person_identifier
+
+_WIPE_BATCH = 200
+
+
+def _person_placeholders(person_ids: list[str]) -> str:
+    return ",".join("?" for _ in person_ids)
+
+
+def _tenant_paragraph_hashes(store: Any, tenant: str) -> list[str]:
+    rows = store.query(
+        "SELECT p.hash FROM paragraphs p WHERE COALESCE(p.is_deleted,0)=0 AND ("
+        "(CASE WHEN json_valid(p.metadata) THEN json_extract(p.metadata,'$.chat_id') END) = ? "
+        "OR p.source = ?)",
+        (tenant, f"chat_summary:{tenant}"),
+    )
+    return [str(row.get("hash") or "") for row in rows if str(row.get("hash") or "")]
+
+
+def _delete_tenant_records(store: Any, tenant: str, person_ids: list[str]) -> None:
+    """删除事实、画像与摘要检查点；段落由 delete_admin 负责级联和向量清理。"""
+    with store.transaction(immediate=True) as conn:
+        conn.execute(
+            "DELETE FROM fact_evidence WHERE claim_id IN "
+            "(SELECT claim_id FROM fact_claims WHERE scope_type='chat' AND scope_id=?)",
+            (tenant,),
+        )
+        conn.execute("DELETE FROM fact_claims WHERE scope_type='chat' AND scope_id=?", (tenant,))
+        conn.execute("DELETE FROM memory_fuzzy_modify_plans WHERE target_chat_id=?", (tenant,))
+        for start in range(0, len(person_ids), _WIPE_BATCH):
+            chunk = person_ids[start : start + _WIPE_BATCH]
+            marks = _person_placeholders(chunk)
+            conn.execute(
+                f"DELETE FROM fact_evidence WHERE claim_id IN "
+                f"(SELECT claim_id FROM fact_claims WHERE scope_type='person' AND scope_id IN ({marks}))",
+                chunk,
+            )
+            conn.execute(f"DELETE FROM fact_claims WHERE scope_type='person' AND scope_id IN ({marks})", chunk)
+            for table in (
+                "person_profile_snapshots",
+                "person_profile_overrides",
+                "person_profile_alias_overrides",
+                "person_profile_refresh_queue",
+                "person_profile_active_persons",
+            ):
+                conn.execute(f"DELETE FROM {table} WHERE person_id IN ({marks})", chunk)
+            conn.execute(f"DELETE FROM memory_fuzzy_modify_plans WHERE target_person_id IN ({marks})", chunk)
+        conn.execute("DELETE FROM chat_summary_checkpoints WHERE chat_id=?", (tenant,))
+        conn.execute(
+            "DELETE FROM memory_feedback_action_logs WHERE task_id IN "
+            "(SELECT id FROM memory_feedback_tasks WHERE session_id=?)",
+            (tenant,),
+        )
+        conn.execute("DELETE FROM memory_feedback_tasks WHERE session_id=?", (tenant,))
+
+
+async def _delete_tenant_images(kernel: Any, store: Any, tenant: str) -> None:
+    rows = await asyncio.to_thread(
+        store.query,
+        "SELECT occurrence_id FROM image_occurrences WHERE status='active' AND chat_id=?",
+        (tenant,),
+    )
+    for row in rows:
+        try:
+            await kernel.image_memory(action="delete_occurrence", occurrence_id=str(row.get("occurrence_id") or ""))
+        except Exception:
+            logger.opt(exception=True).debug("[A_Memorix] 会话图片记忆删除失败")
+
+
+async def wipe_tenant(tenant: str, person_ids: Iterable[str] = ()) -> dict[str, Any]:
+    """清空该会话在 A_Memorix 中的段落、人物、事实与画像。"""
+    if not amemorix_runtime.config().plugin.enabled:
+        return {"success": True, "skipped": "disabled"}
+    kernel = await amemorix_runtime.get_kernel()
+    if not _kernel_ready(kernel) or kernel.metadata_store is None:
+        return {"success": False, "error": "memory_unavailable"}
+    store = kernel.metadata_store
+    people = [str(item) for item in person_ids if str(item)]
+    deleted = 0
+    with person_scope(tenant):
+        try:
+            while True:
+                hashes = await asyncio.to_thread(_tenant_paragraph_hashes, store, tenant)
+                if not hashes:
+                    break
+                result = await kernel.memory_delete_admin(
+                    action="execute",
+                    mode="paragraph",
+                    selector={"hashes": hashes[:_WIPE_BATCH]},
+                    requested_by="fxbot_session_reset",
+                    reason="session_reset",
+                )
+                if not result.get("success"):
+                    return {"success": False, "error": str(result.get("error") or "删除段落失败")}
+                progress = int(result.get("deleted_paragraph_count") or 0)
+                if progress <= 0:
+                    return {"success": False, "error": "删除段落无进展"}
+                deleted += progress
+            await asyncio.to_thread(_delete_tenant_records, store, tenant, people)
+            if amemorix_runtime.config().image_memory.enabled:
+                await _delete_tenant_images(kernel, store, tenant)
+        except Exception as exc:
+            logger.opt(exception=True).warning("[A_Memorix] 会话长期记忆清理失败")
+            return {"success": False, "error": f"{type(exc).__name__}: {exc}"}
+    return {"success": True, "paragraphs": deleted}
 
 
 def _request_context(tenant: str, user_id: str = "", group_id: str = "") -> tuple[str, str]:
