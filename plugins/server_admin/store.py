@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
+from nonebot import logger
+
 from ...chat import personas
 from ...config import get_manager
 from ...chat.bindings import PERSONA, get_binding, set_binding
@@ -17,6 +19,7 @@ _LEGACY_SEEDS = frozenset(
         "090fcd4333c4ad1e91f574b795017e25d3b41bbb608cff2c977d419d049f2cc1",
         "bfe126c39bffae37d647760ed39e6b5612cfa66e61d0128a0d38671930fa163c",
         "0c457ce6a43b64f99d319119bc40cb408f32c5396b624ed45d0067a392a61ca6",
+        "afd30b3beeb3a615d8f47f67312ff1d1e1a610f89ff529c07897be44fe1edbbb",
     }
 )
 
@@ -78,6 +81,8 @@ def _sync_persona(entry: dict) -> None:
         not current or current_hash == entry.get("persona_hash") or current_hash in _LEGACY_SEEDS
     ):
         personas.save_persona_text(PERSONA_NAME, seed, overwrite=True)
+    elif seed_hash != current_hash:
+        logger.info("[ServerAdmin] 运维人格已被手动修改，保留现有内容")
     entry["persona_hash"] = seed_hash
 
 
