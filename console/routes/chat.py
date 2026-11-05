@@ -383,8 +383,8 @@ async def list_expressions(
 ) -> dict[str, Any]:
     """分页列出表达条目，可按状态和关键字过滤。"""
     tenant = _tenant(tenant)
-    if status not in {"all", "active", "rejected", "unchecked"}:
-        raise HTTPException(status_code=400, detail="status 只能是 all/active/rejected/unchecked")
+    if status not in {"all", "active", "rejected", "manual"}:
+        raise HTTPException(status_code=400, detail="status 只能是 all/active/rejected/manual")
     limit = max(1, min(200, int(limit)))
     offset = max(0, int(offset))
     selected = None if status == "all" else status

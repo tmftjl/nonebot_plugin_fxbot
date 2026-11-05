@@ -932,8 +932,8 @@ class ChatRepository:
             statement = statement.where(ChatExpression.rejected.is_(False))
         elif status == "rejected":
             statement = statement.where(ChatExpression.rejected.is_(True))
-        elif status == "unchecked":
-            statement = statement.where(ChatExpression.checked.is_(False))
+        elif status == "manual":
+            statement = statement.where(ChatExpression.manual_checked.is_(True), ChatExpression.rejected.is_(False))
         if manual_only:
             statement = statement.where(ChatExpression.manual_checked.is_(True))
         keyword = str(search or "").strip()

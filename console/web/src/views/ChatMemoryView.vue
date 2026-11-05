@@ -114,9 +114,11 @@ const formatTime = (value: string | null | undefined) => {
 
 const formatCount = (value: number) => Number(value || 0).toFixed(3)
 
-const expressionTag = (row: ChatExpression): { type: 'success' | 'warning' | 'info'; text: string } => {
-  if (!row.checked) return { type: 'warning', text: '待复审' }
-  return row.rejected ? { type: 'info', text: '已拒绝' } : { type: 'success', text: '生效' }
+const expressionTag = (
+  row: ChatExpression,
+): { type: 'primary' | 'success' | 'info'; text: string } => {
+  if (row.rejected) return { type: 'info', text: '已拒绝' }
+  return row.manual_checked ? { type: 'success', text: '人工生效' } : { type: 'primary', text: '自动生效' }
 }
 
 const jargonTag = (status: string): { type: 'success' | 'warning' | 'info'; text: string } => {
@@ -937,7 +939,7 @@ onMounted(() => {
                 <el-select v-model="expressionStatus" class="status-select" @change="reloadExpressions">
                   <el-option label="全部" value="all" />
                   <el-option label="生效中" value="active" />
-                  <el-option label="待复审" value="unchecked" />
+                  <el-option label="人工生效" value="manual" />
                   <el-option label="已拒绝" value="rejected" />
                 </el-select>
                 <el-input
@@ -1011,7 +1013,7 @@ onMounted(() => {
                   <el-button
                     link
                     type="success"
-                    :disabled="acting || (row.checked && !row.rejected)"
+                    :disabled="acting || (row.manual_checked && !row.rejected)"
                     @click="reviewExpression(row, false)"
                   >
                     通过
@@ -1019,7 +1021,7 @@ onMounted(() => {
                   <el-button
                     link
                     type="warning"
-                    :disabled="acting || (row.checked && row.rejected)"
+                    :disabled="acting || (row.manual_checked && row.rejected)"
                     @click="reviewExpression(row, true)"
                   >
                     驳回

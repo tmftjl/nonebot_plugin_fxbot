@@ -704,15 +704,16 @@ class ConsoleExpressionTests(_ExpressionTestCase):
         [row] = await chat_repository.list_expressions(self.tenant)
         expression_id = int(row.id or 0)
 
-        listed = await chat_routes.list_expressions(self.tenant, "unchecked")
+        listed = await chat_routes.list_expressions(self.tenant, "active")
         self.assertEqual([item["style"] for item in listed["items"]], ["笑死，又来"])
-        self.assertFalse(listed["items"][0]["checked"])
+        self.assertFalse(listed["items"][0]["manual_checked"])
+        self.assertEqual((await chat_routes.list_expressions(self.tenant, "manual"))["items"], [])
 
         reviewed = await chat_routes.review_expression(expression_id, self.tenant, False)
         self.assertEqual(reviewed, {"rejected": False})
-        active = await chat_routes.list_expressions(self.tenant, "active")
-        self.assertEqual([item["id"] for item in active["items"]], [expression_id])
-        self.assertTrue(active["items"][0]["checked"])
+        manual = await chat_routes.list_expressions(self.tenant, "manual")
+        self.assertEqual([item["id"] for item in manual["items"]], [expression_id])
+        self.assertTrue(manual["items"][0]["manual_checked"])
 
         tenants = await chat_routes.list_tenants()
         self.assertIn(self.tenant, [item["tenant"] for item in tenants["tenants"]])

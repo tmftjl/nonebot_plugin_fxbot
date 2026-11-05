@@ -332,6 +332,7 @@ export interface ChatExpression {
   type: string
   count: number
   checked: boolean
+  manual_checked: boolean
   rejected: boolean
   learn_count: number
   use_count: number
