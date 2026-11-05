@@ -814,6 +814,69 @@ def _all_config_tab() -> dict[str, Any]:
                 ],
             },
             {
+                "key": "chat.focus",
+                "title": "Focus",
+                "category": "聊天",
+                "schemas": [
+                    {
+                        "field": "enabled",
+                        "label": "启用 Focus",
+                        "component": "Switch",
+                        "default": SYSTEM_DEFAULTS["chat"]["focus"]["enabled"],
+                        "helpMessage": "同组聊天共享一个持续思考的规划器，由它决定接不接话；关闭时走普通回复链路。",
+                    },
+                    {
+                        "field": "on_private",
+                        "label": "私聊也启用",
+                        "component": "Switch",
+                        "default": SYSTEM_DEFAULTS["chat"]["focus"]["on_private"],
+                        "helpMessage": "关闭时 Focus 只接管群聊。",
+                    },
+                    {
+                        "field": "chat_whitelist",
+                        "label": "Focus 白名单",
+                        "component": "GListForm",
+                        "default": SYSTEM_DEFAULTS["chat"]["focus"]["chat_whitelist"],
+                        "helpMessage": "留空表示所有符合聊天类型的会话都进入 Focus。",
+                        "componentProps": {
+                            "schemas": [
+                                _platform_field("选择平台"),
+                                _target_field("选择聊天"),
+                                _CHAT_TYPE_FIELD,
+                            ],
+                            "titleField": "item_id",
+                            "addLabel": "添加聊天",
+                        },
+                    },
+                    {
+                        "field": "groups",
+                        "label": "Focus 共享组",
+                        "component": "GListForm",
+                        "default": SYSTEM_DEFAULTS["chat"]["focus"]["groups"],
+                        "helpMessage": "同组聊天共用一个规划器和上下文；留空时各聊天独立规划。",
+                        "componentProps": {
+                            "schemas": [
+                                {
+                                    "field": "targets",
+                                    "label": "共享聊天",
+                                    "component": "GListForm",
+                                    "componentProps": {
+                                        "schemas": [
+                                            _platform_field("选择平台"),
+                                            _target_field("选择聊天"),
+                                            _CHAT_TYPE_FIELD,
+                                        ],
+                                        "titleField": "item_id",
+                                        "addLabel": "添加聊天",
+                                    },
+                                },
+                            ],
+                            "addLabel": "添加共享组",
+                        },
+                    },
+                ],
+            },
+            {
                 "key": "chat.attention_drift",
                 "title": "注意力漂移",
                 "category": "聊天",
