@@ -19,7 +19,7 @@ from src.plugins.nonebot_plugin_fxbot.permission import checker as permission_ch
 from src.plugins.nonebot_plugin_fxbot.utils.cache import cache
 from src.plugins.nonebot_plugin_fxbot.chat.bindings import PERSONA, get_binding, set_binding
 from src.plugins.nonebot_plugin_fxbot.config.manager import ConfigManager
-from src.plugins.nonebot_plugin_fxbot.plugins.server_admin import store, access
+from src.plugins.nonebot_plugin_fxbot.plugins.server_admin import store, access, config as plugin_config
 
 execution = importlib.import_module("src.plugins.nonebot_plugin_fxbot.plugins.server_admin.executor")
 
@@ -138,7 +138,6 @@ class ModeTests(unittest.IsolatedAsyncioTestCase):
         )
         cache.clear()
         self.addCleanup(cache.clear)
-        self.enterContext(patch.object(plugin.chat_service, "ensure_hydrated", AsyncMock()))
 
     def folder(self, name):
         path = self.root / name
@@ -203,138 +202,17 @@ class ModeTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(store.enabled(BASE))
             cancel.assert_called_once_with(SERVER)
 
-    def test_removed_commands_no_longer_match(self) -> None:
-        for text in ("#开启服务器模式", "#退出服务器模式"):
+    def test_only_mode_commands_remain(self) -> None:
+        for text in ("#开启服务器模式", "#退出服务器模式", "#确认", "#取消", "执行吧"):
             self.assertIsNone(plugin._COMMAND.fullmatch(text))
-        for text in ("#服务器模式", "#聊天模式", "#确认", "#取消"):
+        for text in ("#服务器模式", "#聊天模式"):
             self.assertIsNotNone(plugin._COMMAND.fullmatch(text))
 
-    async def test_confirmation_automatically_summarizes_completed_output(self) -> None:
-        job = SimpleNamespace(id="job", status="running", output="", returncode=None, truncated=False)
-
-        async def finish():
-            job.status, job.output, job.returncode = "completed", "Memory: 3.6G total", 0
-
-        job.task = asyncio.create_task(finish())
-        fake = SimpleNamespace(
-            jobs={"job": job},
-            confirm=Mock(return_value={"job_id": "job"}),
-            pending_id=Mock(return_value="123456abcdef"),
-        )
-        with (
-            patch.object(plugin, "owner_allowed", return_value=True),
-            patch.object(plugin, "actor_base", return_value=BASE),
-            patch.object(plugin, "execution_allowed", return_value=True),
-            patch.object(plugin, "executor", fake),
-            patch.object(plugin, "_report_result", AsyncMock()) as report,
-        ):
-            actor, source, matcher = bot(), event("执行吧"), object()
-            result = await plugin.handle_mode(actor, source, matcher)
-        self.assertEqual(result, "")
-        report.assert_awaited_once_with(
-            actor, source, matcher, SERVER, job, plugin.chat_service.session_store.epoch(SERVER)
-        )
-        self.assertEqual(job.output, "Memory: 3.6G total")
-        fake.confirm.assert_called_once_with(SERVER, "123456abcdef")
-
-    def test_natural_confirmation_only_accepts_whole_unambiguous_phrases(self) -> None:
-        identifier = "123456abcdef"
-        with (
-            patch.object(plugin, "actor_base", return_value=BASE),
-            patch.object(plugin.executor, "pending_id", return_value=identifier),
-        ):
-            for phrase in ("确认执行", "执行吧", "可以执行！", f"确认执行 {identifier}"):
-                self.assertEqual(plugin._action(bot(), event(phrase)), ("确认", identifier))
-            for phrase in ("取消执行", "不要执行", "别执行了"):
-                self.assertEqual(plugin._action(bot(), event(phrase)), ("取消", identifier))
-            for phrase in ("好", "嗯", "确认执行吗", "不要确认执行", "他说：执行吧", "确认执行 000000000000"):
-                self.assertIsNone(plugin._action(bot(), event(phrase)))
-
-    def test_natural_confirmation_requires_pending_job_and_binds_event(self) -> None:
-        with (
-            patch.object(plugin, "actor_base", return_value=BASE),
-            patch.object(plugin.executor, "pending_id", side_effect=["", "123456abcdef", "000000000000"]),
-        ):
-            self.assertIsNone(plugin._action(bot(), event("执行吧")))
-            source = event("执行吧")
-            self.assertEqual(plugin._action(bot(), source), ("确认", "123456abcdef"))
-            self.assertEqual(plugin._action(bot(), source), ("确认", "123456abcdef"))
-
-    async def test_natural_confirmation_requires_owner_and_active_mode(self) -> None:
-        with (
-            patch.object(plugin, "owner_allowed", return_value=False),
-            patch.object(plugin.executor, "pending_id") as pending,
-        ):
-            self.assertFalse(await plugin._rule(bot(), event("执行吧")))
-            pending.assert_not_called()
-        with (
-            patch.object(plugin, "owner_allowed", return_value=True),
-            patch.object(plugin, "actor_base", return_value=BASE),
-            patch.object(plugin.executor, "pending_id", return_value="123456abcdef"),
-        ):
-            self.assertFalse(await plugin._rule(bot(), event("执行吧")))
-            store.set_mode(BASE, True)
-            self.assertTrue(await plugin._rule(bot(), event("执行吧")))
-
-    async def test_stale_natural_cancellation_cannot_cancel_replacement_job(self) -> None:
-        with (
-            patch.object(plugin, "owner_allowed", return_value=True),
-            patch.object(plugin, "actor_base", return_value=BASE),
-            patch.object(plugin, "execution_allowed", return_value=True),
-            patch.object(plugin.executor, "pending_id", side_effect=["123456abcdef", "000000000000"]),
-            patch.object(plugin.executor, "cancel") as cancel,
-        ):
-            self.assertIn("没有匹配", await plugin.handle_mode(bot(), event("取消执行")))
-            cancel.assert_not_called()
-
-    async def test_result_summary_uses_real_output_and_rechecks_permission_and_epoch(self) -> None:
-        result = {"status": "completed", "returncode": 1, "output": "diagnostic output", "truncated": True}
-        job = SimpleNamespace(status="completed", result=lambda: result)
-        identity = SimpleNamespace(dedupe_key="message", message_id="source", platform="onebot11")
-        with (
-            patch.object(plugin, "event_identity", return_value=identity),
-            patch.object(plugin, "execution_allowed", return_value=True) as allowed,
-            patch.object(plugin.chat_service, "is_current", return_value=True) as current,
-            patch.object(plugin.chat_service, "focus_reply", AsyncMock(return_value="summary")) as reply,
-        ):
-            self.assertEqual(await plugin._report_result(bot(), event(), object(), SERVER, job, 42), "summary")
-            request, runtime, instruction = reply.call_args.args
-            self.assertEqual((request.session_id, request.user_id, request.accepted_epoch), (SERVER, "admin", 42))
-            self.assertIn("diagnostic output", instruction)
-            self.assertIn('"returncode": 1', instruction)
-            valid = reply.call_args.kwargs["is_valid"]
-            self.assertTrue(valid())
-            allowed.return_value = False
-            self.assertFalse(valid())
-            allowed.return_value, current.return_value = True, False
-            self.assertFalse(valid())
-            current.return_value, job.status = True, "cancelled"
-            self.assertFalse(valid())
-
-    async def test_confirmation_does_not_deliver_after_permission_revoked(self) -> None:
-        job = SimpleNamespace(id="job", status="completed", output="private output", returncode=0, truncated=False)
-        job.task = asyncio.create_task(asyncio.sleep(0))
-        fake = SimpleNamespace(jobs={"job": job}, confirm=Mock(return_value={"job_id": "job"}))
-        with (
-            patch.object(plugin, "owner_allowed", return_value=True),
-            patch.object(plugin, "actor_base", return_value=BASE),
-            patch.object(plugin, "execution_allowed", side_effect=[True, False]),
-            patch.object(plugin, "executor", fake),
-        ):
-            self.assertEqual(await plugin.handle_mode(bot(), event("#确认")), "")
-
-    async def test_cancelled_confirmation_does_not_deliver_stale_output(self) -> None:
-        job = SimpleNamespace(id="job", status="cancelled", output="stale", returncode=None, truncated=False)
-        job.task = asyncio.create_task(asyncio.sleep(30))
-        job.task.cancel()
-        fake = SimpleNamespace(jobs={"job": job}, confirm=Mock(return_value={"job_id": "job"}))
-        with (
-            patch.object(plugin, "owner_allowed", return_value=True),
-            patch.object(plugin, "actor_base", return_value=BASE),
-            patch.object(plugin, "execution_allowed", return_value=True),
-            patch.object(plugin, "executor", fake),
-        ):
-            self.assertEqual(await plugin.handle_mode(bot(), event("#确认")), "")
+    async def test_mode_rule_only_checks_owner(self) -> None:
+        with patch.object(plugin, "owner_allowed", return_value=False):
+            self.assertFalse(await plugin._rule(bot(), event("#服务器模式")))
+        with patch.object(plugin, "owner_allowed", return_value=True):
+            self.assertTrue(await plugin._rule(bot(), event("#服务器模式")))
 
     def test_hooks_route_and_protect_disabled_server_sessions(self) -> None:
         store.set_mode(BASE, True)
@@ -345,6 +223,55 @@ class ModeTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(plugin, "plugin_enabled", return_value=False):
             self.assertFalse(plugin._guard(context, {}))
         self.assertFalse(plugin._tools(SimpleNamespace(session_id=BASE), {"tool_name": "server_exec"}))
+        with patch.object(plugin, "_guard", return_value=True):
+            with patch.object(plugin.executor, "pending", return_value=None):
+                self.assertFalse(plugin._tools(SimpleNamespace(session_id=SERVER), {"tool_name": "server_confirm"}))
+            with patch.object(plugin.executor, "pending", return_value={"command": "x"}):
+                self.assertTrue(plugin._tools(SimpleNamespace(session_id=SERVER), {"tool_name": "server_confirm"}))
+
+
+class BlocklistTests(unittest.TestCase):
+    """默认黑名单只拦不可恢复操作，正常清理和只读查询不受影响。"""
+
+    def setUp(self) -> None:
+        rules = plugin_config.DEFAULTS["blocked_commands"]
+        self.enterContext(
+            patch.object(
+                plugin_config,
+                "REG",
+                SimpleNamespace(load=lambda: {"blocked_commands": rules}, _last_error=None),
+            )
+        )
+
+    def test_defaults_block_irreversible_commands(self) -> None:
+        for command in (
+            "rm -rf /",
+            "sudo rm -fr /*",
+            "rm --recursive --force /",
+            "rm -rf --no-preserve-root /",
+            "mkfs.ext4 /dev/sda",
+            "wipefs -a /dev/sda",
+            "fdisk /dev/sda",
+            "dd if=/dev/zero of=/dev/sda",
+            "echo x > /dev/sda",
+            ":(){ :|:& };:",
+        ):
+            self.assertTrue(plugin_config.blocked_reason(command), command)
+
+    def test_cleanup_and_read_only_forms_are_allowed(self) -> None:
+        for command in (
+            "rm -rf /tmp/build",
+            "rm -rf ~/build",
+            "fdisk -l /dev/sda",
+            "dd if=/dev/zero of=/tmp/x bs=1M count=1",
+            "echo hi",
+            "docker ps",
+        ):
+            self.assertEqual(plugin_config.blocked_reason(command), "", command)
+
+    def test_unreadable_config_blocks_everything(self) -> None:
+        with patch.object(plugin_config, "REG", SimpleNamespace(load=lambda: {}, _last_error="corrupt")):
+            self.assertTrue(plugin_config.blocked_reason("echo hi"))
 
 
 class ExecutorTests(unittest.IsolatedAsyncioTestCase):
@@ -381,15 +308,15 @@ class ExecutorTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(execution.needs_confirmation("free -h"))
         self.assertTrue(execution.needs_confirmation("free -h; echo '---'; uptime"))
 
-    def test_pending_id_requires_presentation_correct_session_and_valid_ttl(self) -> None:
+    def test_pending_requires_presentation_correct_session_and_valid_ttl(self) -> None:
         result = self.executor.submit(SERVER, "python -c pass", self.cwd, self.authorize)
         identifier = result["job_id"]
-        self.assertEqual(self.executor.pending_id(SERVER), "")
+        self.assertIsNone(self.executor.pending(SERVER))
         self.executor.presented(SERVER, identifier)
-        self.assertEqual(self.executor.pending_id(SERVER), identifier)
-        self.assertEqual(self.executor.pending_id(BASE), "")
+        self.assertEqual(self.executor.pending(SERVER)["job_id"], identifier)
+        self.assertIsNone(self.executor.pending(BASE))
         self.executor.jobs[identifier].created -= execution.CONFIRM_TTL
-        self.assertEqual(self.executor.pending_id(SERVER), "")
+        self.assertIsNone(self.executor.pending(SERVER))
 
     async def test_safe_command_finishes_and_output_is_bounded(self) -> None:
         result = self.executor.submit(SERVER, "echo harmless", self.cwd, self.authorize)
@@ -413,8 +340,8 @@ class ExecutorTests(unittest.IsolatedAsyncioTestCase):
     async def test_revocation_terminates_running_command(self) -> None:
         command = f'"{sys.executable}" -c "import time; time.sleep(30)"'
         result = self.executor.submit(SERVER, command, self.cwd, self.authorize)
-        self.executor.presented(SERVER, result["job_id"])
-        self.executor.confirm(SERVER)
+        self.executor.presented(SERVER, result["job_id"], "m1")
+        self.executor.confirm(SERVER, "m2")
         await asyncio.sleep(0.05)
         self.authorize.return_value = False
         finished = await self.finish(result)
@@ -423,8 +350,8 @@ class ExecutorTests(unittest.IsolatedAsyncioTestCase):
     async def test_cancel_and_shutdown_terminate_running_command(self) -> None:
         command = f'"{sys.executable}" -c "import time; time.sleep(30)"'
         result = self.executor.submit(SERVER, command, self.cwd, self.authorize)
-        self.executor.presented(SERVER, result["job_id"])
-        self.executor.confirm(SERVER)
+        self.executor.presented(SERVER, result["job_id"], "m1")
+        self.executor.confirm(SERVER, "m2")
         await asyncio.sleep(0.05)
         await asyncio.wait_for(self.executor.stop(), timeout=5)
         self.assertEqual(self.executor.jobs[result["job_id"]].status, "cancelled")
@@ -442,59 +369,62 @@ class ExecutorTests(unittest.IsolatedAsyncioTestCase):
             encoding="utf-8",
         )
         result = self.executor.submit(SERVER, f'"{sys.executable}" "{script}"', self.cwd, self.authorize)
-        self.executor.presented(SERVER, result["job_id"])
+        self.executor.presented(SERVER, result["job_id"], "m1")
         with patch.object(execution, "COMMAND_TIMEOUT", 0.8):
-            self.executor.confirm(SERVER)
+            self.executor.confirm(SERVER, "m2")
             finished = await self.finish(result)
         self.assertEqual(finished["status"], "timeout")
         self.assertTrue(pid_file.exists())
         pid = int(pid_file.read_text(encoding="utf-8"))
         self.assertFalse(psutil.pid_exists(pid))
 
-    async def test_confirmation_requires_presentation_owner_and_single_use(self) -> None:
+    async def test_confirmation_requires_presentation_and_a_later_event(self) -> None:
         command = f'"{sys.executable}" -c "print(123)"'
         result = self.executor.submit(SERVER, command, self.cwd, self.authorize)
+        identifier = result["job_id"]
         self.assertEqual(result["status"], "pending")
-        self.assertIsNone(self.executor.jobs[result["job_id"]].task)
+        self.assertIsNone(self.executor.jobs[identifier].task)
         with self.assertRaises(ValueError):
-            self.executor.confirm(SERVER)
-        self.executor.presented(SERVER, result["job_id"])
+            self.executor.confirm(SERVER, "m2")
+        self.executor.presented(SERVER, identifier, "m1")
+        for source in ("", "m1"):
+            with self.assertRaises(ValueError):
+                self.executor.confirm(SERVER, source)
+        self.assertIsNone(self.executor.jobs[identifier].task)
+        self.executor.confirm(SERVER, "m2")
         with self.assertRaises(ValueError):
-            self.executor.confirm(BASE, result["job_id"])
-        self.executor.confirm(SERVER, result["job_id"])
-        with self.assertRaises(ValueError):
-            self.executor.confirm(SERVER, result["job_id"])
+            self.executor.confirm(SERVER, "m3")
         self.assertIn("123", (await self.finish(result))["output"])
 
     def test_expired_or_revoked_confirmation_does_not_start(self) -> None:
         result = self.executor.submit(SERVER, "not-run", self.cwd, self.authorize)
         job = self.executor.jobs[result["job_id"]]
-        job.shown = True
+        self.executor.presented(SERVER, job.id, "m1")
         job.created -= 121
         with self.assertRaises(ValueError):
-            self.executor.confirm(SERVER)
+            self.executor.confirm(SERVER, "m2")
         result = self.executor.submit(SERVER, "not-run", self.cwd, self.authorize)
         job = self.executor.jobs[result["job_id"]]
-        job.shown = True
+        self.executor.presented(SERVER, job.id, "m1")
         self.authorize.return_value = False
         with self.assertRaises(PermissionError):
-            self.executor.confirm(SERVER)
+            self.executor.confirm(SERVER, "m2")
         self.assertIsNone(job.task)
 
     async def test_timeout_stops_long_running_process(self) -> None:
         command = f'"{sys.executable}" -c "import time; time.sleep(30)"'
         result = self.executor.submit(SERVER, command, self.cwd, self.authorize)
-        self.executor.presented(SERVER, result["job_id"])
+        self.executor.presented(SERVER, result["job_id"], "m1")
         with patch.object(execution, "COMMAND_TIMEOUT", 0.15):
-            self.executor.confirm(SERVER)
+            self.executor.confirm(SERVER, "m2")
             finished = await self.finish(result)
         self.assertEqual(finished["status"], "timeout")
 
     async def test_continuous_output_is_drained_and_truncated(self) -> None:
         command = f'"{sys.executable}" -c "print(\'a\'*100000)"'
         result = self.executor.submit(SERVER, command, self.cwd, self.authorize)
-        self.executor.presented(SERVER, result["job_id"])
-        self.executor.confirm(SERVER)
+        self.executor.presented(SERVER, result["job_id"], "m1")
+        self.executor.confirm(SERVER, "m2")
         finished = await self.finish(result)
         self.assertEqual(finished["status"], "completed")
         self.assertEqual(len(finished["output"]), 4000)
@@ -506,11 +436,11 @@ class ExecutorTests(unittest.IsolatedAsyncioTestCase):
             self.executor.query(BASE, result["job_id"])
         self.assertTrue(self.executor.cancel(SERVER))
         with self.assertRaises(ValueError):
-            self.executor.confirm(SERVER)
+            self.executor.confirm(SERVER, "m2")
 
 
 class ToolTests(unittest.IsolatedAsyncioTestCase):
-    """独立工具入口不相信 allowed_names、调用者声明或模型代确认。"""
+    """独立工具入口不相信 allowed_names、调用者声明或同一轮的自我确认。"""
 
     async def test_simple_query_returns_ready_output_without_extra_poll(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -530,11 +460,11 @@ class ToolTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result["status"], "completed")
             self.assertIn("harmless", result["output"])
 
-    def test_prompt_keeps_protocol_without_internal_ids(self) -> None:
+    def test_prompt_explains_natural_confirmation(self) -> None:
         prompt = plugin._prompt(hooks.ChatHookContext(SERVER))
-        self.assertIn("确认执行", prompt)
-        self.assertIn("不重复提交", prompt)
-        self.assertNotIn("job_id", prompt)
+        self.assertIn("server_confirm", prompt)
+        self.assertIn("明确同意", prompt)
+        self.assertIn("不要重复提交", prompt)
         self.assertIsNone(plugin._prompt(hooks.ChatHookContext(BASE)))
 
     async def test_forged_tool_call_fails_before_submit(self) -> None:
@@ -545,6 +475,19 @@ class ToolTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ToolError):
                 await plugin.server_exec(
                     ToolContext(user_id="admin", session_id=SERVER), ToolRuntime(), command="echo x"
+                )
+        submit.assert_not_called()
+
+    async def test_blocked_command_is_rejected_before_submit(self) -> None:
+        with (
+            patch.object(plugin, "execution_allowed", return_value=True),
+            patch.object(plugin, "blocked_reason", return_value="rm -rf"),
+            patch.object(plugin, "audit"),
+            patch.object(plugin.executor, "submit") as submit,
+        ):
+            with self.assertRaises(ToolError):
+                await plugin.server_exec(
+                    ToolContext(user_id="admin", session_id=SERVER), ToolRuntime(), command="rm -rf /"
                 )
         submit.assert_not_called()
 
@@ -560,7 +503,7 @@ class ToolTests(unittest.IsolatedAsyncioTestCase):
                 ToolContext(user_id="admin", session_id=SERVER), ToolRuntime(matcher=matcher), command="not-run"
             )
         matcher.send.assert_awaited_once()
-        shown.assert_called_once_with(SERVER, "123")
+        shown.assert_called_once_with(SERVER, "123", "")
         self.assertIn("not-run", matcher.send.await_args.args[0])
 
     async def test_failed_confirmation_delivery_revokes_pending_job(self) -> None:
@@ -578,6 +521,48 @@ class ToolTests(unittest.IsolatedAsyncioTestCase):
                 )
         shown.assert_not_called()
         cancel.assert_called_once_with(SERVER)
+
+    async def test_server_confirm_runs_presented_command_after_user_reply(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runner = execution.CommandExecutor()
+            self.addAsyncCleanup(runner.stop)
+            with (
+                patch.object(plugin, "execution_allowed", return_value=True),
+                patch.object(plugin, "executor", runner),
+                patch.object(plugin, "_message_key", return_value="m2"),
+                patch.object(execution, "audit"),
+            ):
+                pending = runner.submit(
+                    SERVER, f'"{sys.executable}" -c "print(123)"', directory, Mock(return_value=True)
+                )
+                runner.presented(SERVER, pending["job_id"], "m1")
+                result = await plugin.server_confirm(
+                    ToolContext(user_id="admin", session_id=SERVER),
+                    ToolRuntime(bot=bot(), event=event("行")),
+                )
+            self.assertEqual(result["status"], "completed")
+            self.assertIn("123", result["output"])
+
+    async def test_server_confirm_rejects_same_message_as_submission(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runner = execution.CommandExecutor()
+            self.addAsyncCleanup(runner.stop)
+            with (
+                patch.object(plugin, "execution_allowed", return_value=True),
+                patch.object(plugin, "executor", runner),
+                patch.object(plugin, "_message_key", return_value="m1"),
+                patch.object(execution, "audit"),
+            ):
+                pending = runner.submit(SERVER, "not-run", directory, Mock(return_value=True))
+                runner.presented(SERVER, pending["job_id"], "m1")
+                with self.assertRaises(ToolError):
+                    await plugin.server_confirm(
+                        ToolContext(user_id="admin", session_id=SERVER),
+                        ToolRuntime(bot=bot(), event=event("行")),
+                    )
+                job = runner.jobs[pending["job_id"]]
+                self.assertEqual(job.status, "pending")
+                self.assertIsNone(job.task)
 
     async def test_clear_notification_cancels_only_server_session(self) -> None:
         with patch.object(plugin.executor, "cancel") as cancel:

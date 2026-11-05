@@ -16,6 +16,7 @@ _LEGACY_SEEDS = frozenset(
     {
         "090fcd4333c4ad1e91f574b795017e25d3b41bbb608cff2c977d419d049f2cc1",
         "bfe126c39bffae37d647760ed39e6b5612cfa66e61d0128a0d38671930fa163c",
+        "0c457ce6a43b64f99d319119bc40cb408f32c5396b624ed45d0067a392a61ca6",
     }
 )
 

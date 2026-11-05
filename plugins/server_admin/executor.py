@@ -1,4 +1,4 @@
-"""有界 shell 任务、一次性人工确认、进程清理及逐条执行审计。"""
+"""有界 shell 任务、按主人表态的一次性确认、进程清理及逐条执行审计。"""
 
 from __future__ import annotations
 
@@ -63,6 +63,7 @@ class Command:
     created: float = field(default_factory=time.monotonic)
     status: str = "pending"
     shown: bool = False
+    source: str = field(default="", repr=False)
     output: str = ""
     truncated: bool = False
     returncode: int | None = None
@@ -128,28 +129,34 @@ class CommandExecutor:
         job.status = "running"
         job.task = asyncio.create_task(self._run(job), name=f"server-admin-{job.id}")
 
-    def confirm(self, session_id: str, identifier: str = "") -> dict:
-        """只能由当前服务器会话确认已展示的原始命令，过期或重复确认不执行。"""
-        self._prune()
-        jobs = [job for job in self.jobs.values() if job.session_id == session_id and job.status == "pending"]
-        if len(jobs) != 1 or not jobs[0].shown or (identifier and jobs[0].id != identifier):
+    def confirm(self, session_id: str, source: str, reply: str = "") -> dict:
+        """只能由主人随后一轮明确表态执行；同一事件里的自我确认无效。"""
+        job = self._pending(session_id)
+        if job is None or not source or job.source == source:
             raise ValueError("没有匹配的待确认命令，或确认已过期")
-        self._start(jobs[0])
-        return jobs[0].result()
+        audit("confirmed", session_id, job_id=job.id, reply=reply[:500])
+        self._start(job)
+        return job.result()
 
-    def pending_id(self, session_id: str) -> str:
-        """仅返回本会话已展示且未过期的唯一待确认任务，供真实用户短句匹配。"""
+    def _pending(self, session_id: str) -> Command | None:
+        """本会话唯一已展示且未过期的待确认任务。"""
         self._prune()
         jobs = [
             job for job in self.jobs.values() if job.session_id == session_id and job.status == "pending" and job.shown
         ]
-        return jobs[0].id if len(jobs) == 1 else ""
+        return jobs[0] if len(jobs) == 1 else None
 
-    def presented(self, session_id: str, identifier: str) -> None:
-        """只有确认消息成功发送后才开放人工确认。"""
+    def pending(self, session_id: str) -> dict | None:
+        """返回待确认任务的公开字段，供提示词告诉模型当前在等哪条命令。"""
+        job = self._pending(session_id)
+        return job.result() if job else None
+
+    def presented(self, session_id: str, identifier: str, source: str = "") -> None:
+        """只有确认消息成功发送后才开放确认，并记下提交它的事件。"""
         job = self.jobs.get(identifier)
         if job is not None and job.session_id == session_id and job.status == "pending":
             job.shown = True
+            job.source = source
             audit("confirmation_presented", session_id, job_id=identifier)
 
     def query(self, session_id: str, identifier: str) -> dict:
