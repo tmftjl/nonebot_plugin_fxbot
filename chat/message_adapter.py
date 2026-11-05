@@ -406,11 +406,15 @@ async def collect_mentions(
 
 
 def message_text(event: Any) -> str:
-    """纯文本；消息只有合并转发时补一个占位，让 AI 知道可以展开。"""
+    """纯文本；只有合并转发或纯 @ 机器人时补占位，避免这类消息被当成空消息丢弃。"""
     text = event_plain_text(event)
     if text:
         return text
-    return "[合并转发消息]" if extract_forward_ids(event_message(event)) else ""
+    if extract_forward_ids(event_message(event)):
+        return "[合并转发消息]"
+    if event_group_id(event) and event_is_tome(event):
+        return "[@了你]"
+    return ""
 
 
 def platform_for_bot(bot: Any) -> str:

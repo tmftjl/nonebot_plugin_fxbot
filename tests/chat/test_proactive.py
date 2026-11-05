@@ -405,6 +405,25 @@ class RouterEnforcementTests(RouterUnitTests):
                     self.assertTrue(await router._context_rule(_make_bot(), _make_event()))
                 self.assertEqual(gate.triggered, 0)
 
+    async def test_bare_mention_is_a_mention_trigger(self) -> None:
+        """只有 @、没有正文的消息不能被当成空消息丢掉，要按提及强制进入回复。"""
+        gate = _Gate()
+        patches = self._patches(gate)
+        with (
+            patches[0],
+            patches[1],
+            patches[2],
+            patches[3],
+            patches[4],
+            patches[5],
+            patches[6],
+            patches[7],
+        ):
+            event = _make_event(text="")
+            event.is_tome = lambda: True
+            self.assertFalse(await router._context_rule(_make_bot(), event))
+            self.assertTrue(await router._ai_fallback_rule(_make_bot(), event))
+
     async def test_handle_uses_proactive_trigger_without_forced_expectation(self) -> None:
         gate = _Gate()
         service = SimpleNamespace(

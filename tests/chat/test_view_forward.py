@@ -95,6 +95,19 @@ class MessageTextTest(unittest.TestCase):
         event = _event(SimpleNamespace(type="forward", data={"id": "fw1"}))
         self.assertEqual(message_text(event), "[合并转发消息]")
 
+    def test_bare_mention_gets_placeholder(self) -> None:
+        event = SimpleNamespace(
+            get_plaintext=lambda: "",
+            get_message=lambda: [SimpleNamespace(type="at", data={"qq": "bot"})],
+            group_id="g1",
+            is_tome=lambda: True,
+        )
+        self.assertEqual(message_text(event), "[@了你]")
+
+    def test_empty_group_message_without_mention_stays_empty(self) -> None:
+        event = SimpleNamespace(get_plaintext=lambda: "", get_message=lambda: [], group_id="g1", is_tome=lambda: False)
+        self.assertEqual(message_text(event), "")
+
     def test_plain_text_unchanged(self) -> None:
         event = SimpleNamespace(get_plaintext=lambda: "你好", get_message=lambda: [])
         self.assertEqual(message_text(event), "你好")
