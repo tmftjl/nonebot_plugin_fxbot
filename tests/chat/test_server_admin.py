@@ -138,6 +138,7 @@ class ModeTests(unittest.IsolatedAsyncioTestCase):
         )
         cache.clear()
         self.addCleanup(cache.clear)
+        self.enterContext(patch.object(plugin.chat_service, "ensure_hydrated", AsyncMock()))
 
     def folder(self, name):
         path = self.root / name
@@ -190,10 +191,137 @@ class ModeTests(unittest.IsolatedAsyncioTestCase):
         for text in ("#服务器模式", "#聊天模式", "#确认", "#取消"):
             self.assertIsNotNone(plugin._COMMAND.fullmatch(text))
 
+    async def test_confirmation_automatically_summarizes_completed_output(self) -> None:
+        job = SimpleNamespace(id="job", status="running", output="", returncode=None, truncated=False)
+
+        async def finish():
+            job.status, job.output, job.returncode = "completed", "Memory: 3.6G total", 0
+
+        job.task = asyncio.create_task(finish())
+        fake = SimpleNamespace(
+            jobs={"job": job},
+            confirm=Mock(return_value={"job_id": "job"}),
+            pending_id=Mock(return_value="123456abcdef"),
+        )
+        with (
+            patch.object(plugin, "owner_allowed", return_value=True),
+            patch.object(plugin, "actor_base", return_value=BASE),
+            patch.object(plugin, "execution_allowed", return_value=True),
+            patch.object(plugin, "executor", fake),
+            patch.object(plugin, "_report_result", AsyncMock()) as report,
+        ):
+            actor, source, matcher = bot(), event("执行吧"), object()
+            result = await plugin.handle_mode(actor, source, matcher)
+        self.assertEqual(result, "")
+        report.assert_awaited_once_with(
+            actor, source, matcher, SERVER, job, plugin.chat_service.session_store.epoch(SERVER)
+        )
+        self.assertEqual(job.output, "Memory: 3.6G total")
+        fake.confirm.assert_called_once_with(SERVER, "123456abcdef")
+
+    def test_natural_confirmation_only_accepts_whole_unambiguous_phrases(self) -> None:
+        identifier = "123456abcdef"
+        with (
+            patch.object(plugin, "actor_base", return_value=BASE),
+            patch.object(plugin.executor, "pending_id", return_value=identifier),
+        ):
+            for phrase in ("确认执行", "执行吧", "可以执行！", f"确认执行 {identifier}"):
+                self.assertEqual(plugin._action(bot(), event(phrase)), ("确认", identifier))
+            for phrase in ("取消执行", "不要执行", "别执行了"):
+                self.assertEqual(plugin._action(bot(), event(phrase)), ("取消", identifier))
+            for phrase in ("好", "嗯", "确认执行吗", "不要确认执行", "他说：执行吧", "确认执行 000000000000"):
+                self.assertIsNone(plugin._action(bot(), event(phrase)))
+
+    def test_natural_confirmation_requires_pending_job_and_binds_event(self) -> None:
+        with (
+            patch.object(plugin, "actor_base", return_value=BASE),
+            patch.object(plugin.executor, "pending_id", side_effect=["", "123456abcdef", "000000000000"]),
+        ):
+            self.assertIsNone(plugin._action(bot(), event("执行吧")))
+            source = event("执行吧")
+            self.assertEqual(plugin._action(bot(), source), ("确认", "123456abcdef"))
+            self.assertEqual(plugin._action(bot(), source), ("确认", "123456abcdef"))
+
+    async def test_natural_confirmation_requires_owner_and_active_mode(self) -> None:
+        with (
+            patch.object(plugin, "owner_allowed", return_value=False),
+            patch.object(plugin.executor, "pending_id") as pending,
+        ):
+            self.assertFalse(await plugin._rule(bot(), event("执行吧")))
+            pending.assert_not_called()
+        with (
+            patch.object(plugin, "owner_allowed", return_value=True),
+            patch.object(plugin, "actor_base", return_value=BASE),
+            patch.object(plugin.executor, "pending_id", return_value="123456abcdef"),
+        ):
+            self.assertFalse(await plugin._rule(bot(), event("执行吧")))
+            store.set_mode(BASE, True)
+            self.assertTrue(await plugin._rule(bot(), event("执行吧")))
+
+    async def test_stale_natural_cancellation_cannot_cancel_replacement_job(self) -> None:
+        with (
+            patch.object(plugin, "owner_allowed", return_value=True),
+            patch.object(plugin, "actor_base", return_value=BASE),
+            patch.object(plugin, "execution_allowed", return_value=True),
+            patch.object(plugin.executor, "pending_id", side_effect=["123456abcdef", "000000000000"]),
+            patch.object(plugin.executor, "cancel") as cancel,
+        ):
+            self.assertIn("没有匹配", await plugin.handle_mode(bot(), event("取消执行")))
+            cancel.assert_not_called()
+
+    async def test_result_summary_uses_real_output_and_rechecks_permission_and_epoch(self) -> None:
+        result = {"status": "completed", "returncode": 1, "output": "diagnostic output", "truncated": True}
+        job = SimpleNamespace(status="completed", result=lambda: result)
+        identity = SimpleNamespace(dedupe_key="message", message_id="source", platform="onebot11")
+        with (
+            patch.object(plugin, "event_identity", return_value=identity),
+            patch.object(plugin, "execution_allowed", return_value=True) as allowed,
+            patch.object(plugin.chat_service, "is_current", return_value=True) as current,
+            patch.object(plugin.chat_service, "focus_reply", AsyncMock(return_value="summary")) as reply,
+        ):
+            self.assertEqual(await plugin._report_result(bot(), event(), object(), SERVER, job, 42), "summary")
+            request, runtime, instruction = reply.call_args.args
+            self.assertEqual((request.session_id, request.user_id, request.accepted_epoch), (SERVER, "admin", 42))
+            self.assertIn("diagnostic output", instruction)
+            self.assertIn('"returncode": 1', instruction)
+            valid = reply.call_args.kwargs["is_valid"]
+            self.assertTrue(valid())
+            allowed.return_value = False
+            self.assertFalse(valid())
+            allowed.return_value, current.return_value = True, False
+            self.assertFalse(valid())
+            current.return_value, job.status = True, "cancelled"
+            self.assertFalse(valid())
+
+    async def test_confirmation_does_not_deliver_after_permission_revoked(self) -> None:
+        job = SimpleNamespace(id="job", status="completed", output="private output", returncode=0, truncated=False)
+        job.task = asyncio.create_task(asyncio.sleep(0))
+        fake = SimpleNamespace(jobs={"job": job}, confirm=Mock(return_value={"job_id": "job"}))
+        with (
+            patch.object(plugin, "owner_allowed", return_value=True),
+            patch.object(plugin, "actor_base", return_value=BASE),
+            patch.object(plugin, "execution_allowed", side_effect=[True, False]),
+            patch.object(plugin, "executor", fake),
+        ):
+            self.assertEqual(await plugin.handle_mode(bot(), event("#确认")), "")
+
+    async def test_cancelled_confirmation_does_not_deliver_stale_output(self) -> None:
+        job = SimpleNamespace(id="job", status="cancelled", output="stale", returncode=None, truncated=False)
+        job.task = asyncio.create_task(asyncio.sleep(30))
+        job.task.cancel()
+        fake = SimpleNamespace(jobs={"job": job}, confirm=Mock(return_value={"job_id": "job"}))
+        with (
+            patch.object(plugin, "owner_allowed", return_value=True),
+            patch.object(plugin, "actor_base", return_value=BASE),
+            patch.object(plugin, "execution_allowed", return_value=True),
+            patch.object(plugin, "executor", fake),
+        ):
+            self.assertEqual(await plugin.handle_mode(bot(), event("#确认")), "")
+
     def test_hooks_route_and_protect_disabled_server_sessions(self) -> None:
         store.set_mode(BASE, True)
         self.assertEqual(plugin._resolve(bot(), event(), BASE), SERVER)
-        self.assertEqual(plugin._policy(SERVER), session_hooks.SessionPolicy(False, False))
+        self.assertEqual(plugin._policy(SERVER), session_hooks.SessionPolicy(False, False, False, False, False))
         request = ChatRequest(SERVER, "admin", None, "hi", "turn", "msg", "private")
         context = hooks.hook_context(request)
         with patch.object(plugin, "plugin_enabled", return_value=False):
@@ -232,6 +360,18 @@ class ExecutorTests(unittest.IsolatedAsyncioTestCase):
         ):
             self.assertTrue(execution.needs_confirmation(command))
         self.assertFalse(execution.needs_confirmation("echo harmless"))
+        self.assertFalse(execution.needs_confirmation("free -h"))
+        self.assertTrue(execution.needs_confirmation("free -h; echo '---'; uptime"))
+
+    def test_pending_id_requires_presentation_correct_session_and_valid_ttl(self) -> None:
+        result = self.executor.submit(SERVER, "python -c pass", self.cwd, self.authorize)
+        identifier = result["job_id"]
+        self.assertEqual(self.executor.pending_id(SERVER), "")
+        self.executor.presented(SERVER, identifier)
+        self.assertEqual(self.executor.pending_id(SERVER), identifier)
+        self.assertEqual(self.executor.pending_id(BASE), "")
+        self.executor.jobs[identifier].created -= execution.CONFIRM_TTL
+        self.assertEqual(self.executor.pending_id(SERVER), "")
 
     async def test_safe_command_finishes_and_output_is_bounded(self) -> None:
         result = self.executor.submit(SERVER, "echo harmless", self.cwd, self.authorize)
@@ -353,6 +493,29 @@ class ExecutorTests(unittest.IsolatedAsyncioTestCase):
 
 class ToolTests(unittest.IsolatedAsyncioTestCase):
     """独立工具入口不相信 allowed_names、调用者声明或模型代确认。"""
+
+    async def test_simple_query_returns_ready_output_without_extra_poll(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runner = execution.CommandExecutor()
+            self.addAsyncCleanup(runner.stop)
+            with (
+                patch.object(plugin, "execution_allowed", return_value=True),
+                patch.object(plugin, "executor", runner),
+                patch.object(execution, "audit"),
+            ):
+                result = await plugin.server_exec(
+                    ToolContext(user_id="admin", session_id=SERVER),
+                    ToolRuntime(),
+                    command="echo harmless",
+                    cwd=directory,
+                )
+            self.assertEqual(result["status"], "completed")
+            self.assertIn("harmless", result["output"])
+
+    def test_prompt_prefers_single_read_only_command(self) -> None:
+        self.assertIn("free -h", plugin._prompt(hooks.ChatHookContext(SERVER)))
+        self.assertIn("pending", plugin._prompt(hooks.ChatHookContext(SERVER)))
+        self.assertIsNone(plugin._prompt(hooks.ChatHookContext(BASE)))
 
     async def test_forged_tool_call_fails_before_submit(self) -> None:
         with (

@@ -29,6 +29,7 @@ from ..utils.tz import now
 from .providers import LLMResponse
 from .heart_flow import plan_flow, conversation
 from .memory.inject import learning_context
+from .session_hooks import session_policy
 from .work_schedule import can_reply
 from .behavior.quote import forget_counter
 from .amemorix.inject import memory_block
@@ -775,6 +776,8 @@ class ChatService:
             response.content = filter_reply_text(hook_context(request, phase="reply"), response.content or "")
             post_cfg = chat_cfg.get("response_post_process") or {}
             splitter_cfg = chat_cfg.get("response_splitter")
+            if not session_policy(request.session_id).allow_split:
+                splitter_cfg = {**(splitter_cfg if isinstance(splitter_cfg, dict) else {}), "enable": False}
             # 上游快速任务未分配时使用 utils，规则断句不额外租用模型。
             splitter_scope = (
                 fallback_provider(routed_task("fast_model", "utils"), request.session_id)

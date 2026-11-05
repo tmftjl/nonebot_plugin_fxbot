@@ -23,6 +23,7 @@ from ..memory import state as memory_state
 from ..session import history_enabled
 from ...adapter import build_message, supports_reply, build_reply_segment, build_message_segment
 from ..memory.models import ChatTurnItem, utc_now_naive
+from ..session_hooks import session_policy
 from ..work_schedule import can_reply
 from ..behavior.quote import decide_quote, quote_counter, quote_frequency
 from ..behavior.mentions import split_mentions, reply_at_enabled
@@ -243,7 +244,8 @@ async def send_correction(
     context: ChatHookContext | None = None,
 ) -> None:
     """在错字消息后补一条纠正；等待期间轮次失效或发送失败都只跳过。"""
-    await asyncio.sleep(typing_time(text))
+    if context is None or session_policy(context.session_id).allow_typing:
+        await asyncio.sleep(typing_time(text))
     if not (alive or _always_alive)():
         return
     if not await guard("send_guard", context or ChatHookContext("", phase="send"), kind="correction", text=text):
@@ -453,7 +455,7 @@ async def _send_parts(
     sent_texts: list[str] = []
     async with service.session_store.send_lock(request.session_id):
         for index, part in enumerate(send_queue):
-            if index > 0:
+            if index > 0 and session_policy(request.session_id).allow_typing:
                 await asyncio.sleep(typing_time(part))
             if not alive():
                 delivery["cancelled"] = True

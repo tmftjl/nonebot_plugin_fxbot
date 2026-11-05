@@ -13,6 +13,7 @@ from src.plugins.nonebot_plugin_fxbot.chat.types import MentionRef, ChatRequest
 from src.plugins.nonebot_plugin_fxbot.chat.service import ChatService
 from src.plugins.nonebot_plugin_fxbot.chat.session import ChatSessionStore
 from src.plugins.nonebot_plugin_fxbot.chat.behavior import debounce
+from src.plugins.nonebot_plugin_fxbot.chat.session_hooks import SessionPolicy, register_session_policy
 from src.plugins.nonebot_plugin_fxbot.chat.behavior.debounce import (
     BATCH_MAX_SECONDS,
     BATCH_MAX_MESSAGES,
@@ -51,6 +52,21 @@ class _NaturalMode(unittest.IsolatedAsyncioTestCase):
 
 class BatchMergeTests(_NaturalMode):
     """窗口、上限与合并内容。"""
+
+    async def test_session_policy_skips_only_selected_session_wait(self) -> None:
+        self.addCleanup(
+            register_session_policy(
+                "instant-test", lambda session: SessionPolicy(allow_debounce=False) if session == "instant" else None
+            )
+        )
+        registry = DebounceRegistry()
+        instant = registry.create(_request(session_id="instant", trigger_kind="private"))
+        ordinary = registry.create(_request(session_id="ordinary", trigger_kind="private"))
+        self.assertLessEqual(instant.deadline, debounce._now())
+        self.assertGreater(ordinary.deadline, debounce._now())
+        instant.accept(_request(session_id="instant", trigger_kind="private"), trigger=True)
+        self.assertLessEqual(instant.deadline, debounce._now())
+        await asyncio.wait_for(instant.wait(), 0.1)
 
     def test_mode_profiles(self) -> None:
         self.assertEqual(debounce.WAIT_PROFILES["fast"], debounce.WaitTimes(1.0, 3.0, 1.0, 0.5))

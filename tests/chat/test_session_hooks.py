@@ -34,6 +34,35 @@ class SessionResolverTests(unittest.TestCase):
     def test_without_hooks_preserves_default(self) -> None:
         self.assertEqual(hooks.resolve_session_id(self.bot, self.event, BASE), BASE)
 
+    def test_platform_spaces_are_preserved_in_derived_sessions(self) -> None:
+        self.register("server", lambda bot, event, base: base.replace(":3878466282:", ":3878466282#server:"))
+        for platform in ("OneBot V11", "OneBot V12", "QQ"):
+            for kind in ("private", "group"):
+                base = f"{platform}:3878466282:{kind}:3226795632"
+                expected = f"{platform}:3878466282#server:{kind}:3226795632"
+                with self.subTest(platform=platform, kind=kind):
+                    event = SimpleNamespace()
+                    self.assertEqual(hooks.resolve_session_id(self.bot, event, base), expected)
+                    self.assertEqual(hooks.resolve_session_id(self.bot, event, base), expected)
+
+    def test_platform_spaces_do_not_allow_invalid_namespace_or_identity(self) -> None:
+        base = "OneBot V11:bot:private:user"
+        for candidate in (
+            "OneBot V11:bot#bad name:private:user",
+            "OneBot V11:bot#bad\tname:private:user",
+            "OneBot V11:bot#bad\nname:private:user",
+            "OneBot V11:bot#bad\u3000name:private:user",
+            " OneBot V11:bot#server:private:user",
+            "OneBot V11:bot#server:private:user ",
+            "OneBot V12:bot#server:private:user",
+            "OneBot V11:bot#server:group:user",
+            "OneBot V11:bot#server:private:other",
+        ):
+            with self.subTest(candidate=candidate):
+                self.register("invalid", lambda *args: candidate)
+                with self.assertRaises(ValueError):
+                    hooks.resolve_session_id(self.bot, SimpleNamespace(), base)
+
     def test_registration_during_event_does_not_change_already_resolved_default(self) -> None:
         self.assertEqual(hooks.resolve_session_id(self.bot, self.event, BASE), BASE)
         self.register("plugin", lambda *args: ISOLATED)
@@ -139,7 +168,11 @@ class SessionResolverTests(unittest.TestCase):
             hooks.resolve_session_id(self.bot, object(), BASE)
 
     def test_adapters_preserve_target_identity_and_freeze_namespace(self) -> None:
-        for adapter in (OneBotV11MessageAdapter(), OneBotV12MessageAdapter(), QQOfficialMessageAdapter()):
+        for adapter, platform in (
+            (OneBotV11MessageAdapter(), "OneBot V11"),
+            (OneBotV12MessageAdapter(), "OneBot V12"),
+            (QQOfficialMessageAdapter(), "QQ"),
+        ):
             for group_id in (None, "group"):
                 with self.subTest(adapter=type(adapter).__name__, group=group_id):
                     event = SimpleNamespace(user_id="user", group_id=group_id, message_id="m1", id="m1")
@@ -150,7 +183,7 @@ class SessionResolverTests(unittest.TestCase):
                     )
                     with (
                         patch.object(message_adapter, "get_platform_adapter", return_value=adapter),
-                        patch.object(message_adapter, "platform_for_bot", return_value="onebot11"),
+                        patch.object(message_adapter, "platform_for_bot", return_value=platform),
                     ):
                         first = message_adapter.event_identity(self.bot, event)
                         mode["enabled"] = False
@@ -194,6 +227,16 @@ class SessionPolicyTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(resolver=resolver):
                 self.register("bad", resolver)
                 self.assertEqual(hooks.session_policy(BASE), hooks.SessionPolicy(False, False))
+
+    def test_response_timing_is_opt_in_dynamic_and_intersected(self) -> None:
+        state = {"instant": False}
+        self.register(
+            "timing", lambda sid: hooks.SessionPolicy(allow_debounce=not state["instant"], allow_typing=False)
+        )
+        self.register("defaults", lambda sid: hooks.SessionPolicy())
+        self.assertEqual(hooks.session_policy(BASE), hooks.SessionPolicy(allow_typing=False))
+        state["instant"] = True
+        self.assertEqual(hooks.session_policy(BASE), hooks.SessionPolicy(allow_debounce=False, allow_typing=False))
 
     def test_learning_sharing_blocks_both_directions(self) -> None:
         self.register("isolate", lambda sid: hooks.SessionPolicy(allow_sharing=False) if sid == ISOLATED else None)

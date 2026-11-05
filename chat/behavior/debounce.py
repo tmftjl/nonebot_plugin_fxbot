@@ -13,6 +13,7 @@ from dataclasses import field, replace, dataclass
 
 from ..types import ChatRequest, speaker_label
 from ...config import get_manager as get_config_manager
+from ..session_hooks import session_policy
 
 FORCED_FLUSH_SECONDS = 0.5
 BATCH_MAX_MESSAGES = 10
@@ -121,7 +122,7 @@ class PendingBatch:
         if extend:
             if trigger and (urgent := _urgent_at(request, now)):
                 self.urgent = min(self.urgent, urgent) if self.urgent is not None else urgent
-            mode = _mode()
+            mode = _mode() if session_policy(self.tenant).allow_debounce else "off"
             if mode == "off":
                 self.deadline = now
             else:
@@ -143,7 +144,9 @@ class PendingBatch:
     async def wait(self) -> None:
         """等到窗口结束；期间的新消息会顺延，配置改为关闭时立即结束。"""
         while not self.cancelled:
-            remaining = self.deadline - _now() if _mode() != "off" else 0.0
+            remaining = (
+                self.deadline - _now() if _mode() != "off" and session_policy(self.tenant).allow_debounce else 0.0
+            )
             if remaining <= 0:
                 return
             self.changed.clear()
@@ -216,7 +219,7 @@ class DebounceRegistry:
         """首个触发消息创建批次。"""
         now = _now()
         previous = self._history.get(request.session_id)
-        mode = _mode()
+        mode = _mode() if session_policy(request.session_id).allow_debounce else "off"
         urgent = _urgent_at(request, now)
         if mode == "off":
             deadline = now

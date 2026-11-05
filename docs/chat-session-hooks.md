@@ -47,6 +47,10 @@ unregister_policy = register_session_policy("my_plugin", policy)
 
 - `allow_focus=False` 禁止 Focus 接管该会话，包括直接注册入口。
 - `allow_sharing=False` 禁止表达、黑话的双向跨会话共享，仍允许读取本会话；Focus 也不把它并入配置的共享组。
+- `allow_debounce=False` 跳过该会话普通消息的防抖等待，创建、续发和等待期间均检查；不更改全局档位。
+- `allow_typing=False` 跳过该会话分段和纠错消息的模拟打字；发送守卫、目标与历史写入不变。
+- `allow_split=False` 保留回复段落，禁用规则和模型分段；普通聊天默认不变。
+- 响应节奏默认均为 True；未声明策略的群聊和私聊保持原有等待。取消等待不跳过 Planner、模型或真实任务执行。
 - 未注册策略或回调返回 `None` 时保留现有行为。多个策略取布尔交集，不能覆盖其他插件的拒绝。
 - 策略每次使用重新计算，支持配置热更新；异常或返回值类型错误时，Focus 和共享均拒绝。
 - 策略不是权限授权，也不是 shell 沙箱。敏感工具必须独立检查实际调用者、场景、插件开关与会话身份。

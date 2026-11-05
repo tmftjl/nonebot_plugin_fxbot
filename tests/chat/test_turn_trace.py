@@ -18,6 +18,7 @@ from src.plugins.nonebot_plugin_fxbot.chat.memory import state as memory_state, 
 from src.plugins.nonebot_plugin_fxbot.chat.session import ChatSessionStore
 from src.plugins.nonebot_plugin_fxbot.chat.providers import LLMResponse, routing, provider_manager
 from src.plugins.nonebot_plugin_fxbot.chat.heart_flow import conversation
+from src.plugins.nonebot_plugin_fxbot.chat.session_hooks import SessionPolicy
 from src.plugins.nonebot_plugin_fxbot.chat.memory.repository import chat_repository
 from src.plugins.nonebot_plugin_fxbot.config.system_defaults import SYSTEM_DEFAULTS
 
@@ -37,21 +38,37 @@ class TurnTraceTests(unittest.IsolatedAsyncioTestCase):
         self.tenant = "test:turn-trace:" + uuid4().hex
         self.addAsyncCleanup(chat_repository.clear_tenant, self.tenant)
 
-    async def run_conversation(self, *, count: int = 1, failed: bool = False, focus: bool = False):
+    async def run_conversation(
+        self,
+        *,
+        count: int = 1,
+        failed: bool = False,
+        focus: bool = False,
+        split_mode: str | None = None,
+        allow_split: bool = True,
+        content: str | None = None,
+    ):
         config = deepcopy(SYSTEM_DEFAULTS["chat"])
         config["provider"] = "test"
         config["providers"] = {"test": {"provider_type": "chat", "model": "test"}}
         config["response_splitter"]["enable"] = False
+        if split_mode:
+            config["response_splitter"].update(enable=True, mode=split_mode)
         manager = SimpleNamespace(get_system=lambda: {"chat": config})
         provider = SimpleNamespace(
             provider_id="test", config={"model": "test"}, get_model=lambda: "test", chat=AsyncMock()
         )
-        replies = [LLMResponse(content=f"测试回复{index}") for index in range(count)]
+        replies = [LLMResponse(content=content or f"测试回复{index}") for index in range(count)]
         provider.chat.side_effect = (
             replies
             if focus
             else [
-                LLMResponse(tool_calls=[call("reply", msg_id="source", reply_reference="接话") for _ in range(count)]),
+                LLMResponse(
+                    tool_calls=[
+                        call("reply", msg_id="source" if index == 0 else f"source-{index}", reply_reference="接话")
+                        for index in range(count)
+                    ]
+                ),
                 *replies,
                 LLMResponse(tool_calls=[call("stop")]),
             ]
@@ -68,8 +85,10 @@ class TurnTraceTests(unittest.IsolatedAsyncioTestCase):
         request = ChatRequest(
             self.tenant, "user", None, "你好", uuid4().hex, uuid4().hex, "private", message_id="source"
         )
+        request.source_message_ids = ["source" if index == 0 else f"source-{index}" for index in range(count)]
         with (
             patch.object(service_module, "get_config_manager", return_value=manager),
+            patch.object(service_module, "session_policy", return_value=SessionPolicy(allow_split=allow_split)),
             patch.object(routing, "get_config_manager", return_value=manager),
             patch.object(provider_manager, "lease", lease),
             patch.object(service_module, "_memory_block", AsyncMock(return_value="")),
@@ -129,6 +148,17 @@ class TurnTraceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([stage["kind"] for stage in budget["stages"]], ["replyer", "send"])
         self.assertEqual(budget["send"]["sent_parts"], 1)
         self.assertEqual(rows[0].latency_ms, budget["timings"]["total_ms"])
+
+    async def test_session_split_policy_preserves_summary_layout_in_both_splitters(self) -> None:
+        content = "检查完成，当前内存充足。\n\n- 总量：8 GiB\n- 可用：5 GiB\n\n暂时不用扩容。"
+        for mode in ("rule", "llm"):
+            with self.subTest(mode=mode):
+                _, matcher = await self.run_conversation(
+                    focus=True, split_mode=mode, allow_split=False, content=content
+                )
+                self.assertEqual(matcher.send.await_count, 1)
+                self.assertIn("可用：5 GiB", str(matcher.send.call_args))
+                self.assertIn("\n\n- 总量：8 GiB\n- 可用：5 GiB\n\n", str(matcher.send.call_args.args[0]))
 
     async def test_wait_updates_same_record_without_truncating_stage_json(self) -> None:
         arguments = dict(

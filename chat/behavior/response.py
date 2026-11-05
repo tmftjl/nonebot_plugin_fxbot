@@ -291,7 +291,7 @@ def process_response(
 
     value = cleaned_text.strip()
     if get_western_ratio(value) < 0.1 and len(value) > max_length:
-        return [ProcessedResponseSegment(default_reply(nickname, rng))]
+        return [ProcessedResponseSegment(recover_kaomoji([value], kaomoji_mapping)[0])]
 
     if splitter_cfg.get("enable", True):
         split_sentences = _split_into_sentence_segments(value, rng)
@@ -302,8 +302,7 @@ def process_response(
     if len(segments) > max_sentence_num:
         if splitter_cfg.get("enable_overflow_return_all"):
             segments = [ProcessedResponseSegment(value)]
-        else:
-            return [ProcessedResponseSegment(default_reply(nickname, rng))]
+        # 超限只压缩交付段数，不能用随机闲聊句替换真实结果。
 
     segments = _merge_segments_to_max_count(segments, max_split_num)
     if splitter_cfg.get("enable_kaomoji_protection"):
@@ -448,7 +447,6 @@ async def process_response_async(
     if len(segments) > int(splitter_cfg.get("max_sentence_num", 8)):
         if splitter_cfg.get("enable_overflow_return_all"):
             return [ProcessedResponseSegment(text)]
-        return [ProcessedResponseSegment(default_reply(nickname, rng))]
     return _merge_segments_to_max_count(segments, int(splitter_cfg.get("max_split_num", 3)))
 
 

@@ -12,6 +12,7 @@ from src.plugins.nonebot_plugin_fxbot.chat import service as service_module
 from src.plugins.nonebot_plugin_fxbot.chat.tools import ToolRuntime
 from src.plugins.nonebot_plugin_fxbot.chat.types import ChatRequest, ChatResponse
 from src.plugins.nonebot_plugin_fxbot.chat.session import ChatSessionStore
+from src.plugins.nonebot_plugin_fxbot.chat.session_hooks import SessionPolicy
 from src.plugins.nonebot_plugin_fxbot.chat.message_receive import sender as sender_module
 from src.plugins.nonebot_plugin_fxbot.chat.behavior.response import (
     ProcessedResponseSegment,
@@ -19,6 +20,7 @@ from src.plugins.nonebot_plugin_fxbot.chat.behavior.response import (
     protect_kaomoji,
     recover_kaomoji,
     process_response,
+    process_response_async,
 )
 
 
@@ -53,17 +55,33 @@ class ResponsePipelineTests(unittest.TestCase):
         merged = process_response(text, splitter={"max_split_num": 1}, rng=_NoMerge())
         self.assertEqual([item.text for item in merged], [text])
 
-    def test_too_many_sentences_falls_back_or_returns_all(self) -> None:
+    def test_too_many_sentences_merge_or_return_all_without_losing_content(self) -> None:
         text = "你好。" * 12
         default = process_response(text, splitter={"max_sentence_num": 8}, rng=_NoMerge())
-        self.assertEqual(len(default), 1)
-        self.assertNotIn("你好", default[0].text)
+        self.assertLessEqual(len(default), 3)
+        self.assertEqual("".join(item.text + item.separator for item in default), text)
         overflow = process_response(
             text,
             splitter={"max_sentence_num": 8, "enable_overflow_return_all": True},
             rng=_NoMerge(),
         )
         self.assertEqual(overflow, [ProcessedResponseSegment(text)])
+
+    def test_long_chinese_reply_preserves_body(self) -> None:
+        text = "服务器内存检查结果" * 200
+        result = process_response(text, splitter={"max_length": 10}, rng=_NoMerge())
+        self.assertEqual([part.text for part in result], [text])
+
+    def test_long_reply_recovers_protected_kaomoji(self) -> None:
+        text = "服务器内存检查结果" * 200 + "(｡･ω･｡)"
+        result = process_response(text, splitter={"max_length": 10, "enable_kaomoji_protection": True})
+        self.assertEqual([part.text for part in result], [text])
+
+    def test_memory_report_is_not_replaced_by_fallback(self) -> None:
+        text = "内存总 3.6G，已用 2.4G，可用 1.3G，缓存 1.2G；Swap 4G 已用 1G；负载 1.14。机器已跑 42 天。"
+        result = process_response(text, splitter={"max_sentence_num": 8, "max_split_num": 3}, rng=_NoMerge())
+        self.assertLessEqual(len(result), 3)
+        self.assertEqual("".join(part.text + part.separator for part in result), text)
 
     def test_kaomoji_is_protected(self) -> None:
         text = "(｡･ω･｡) 你好，今天怎么样？"
@@ -119,6 +137,31 @@ class SenderReceiptTests(unittest.TestCase):
         self.assertIsNone(sender_module._receipt_id({}))
 
 
+class AsyncResponsePipelineTests(unittest.IsolatedAsyncioTestCase):
+    """模型断句超限仍保留完整正文。"""
+
+    async def test_llm_overflow_merges_instead_of_fallback(self) -> None:
+        text = "一。二。三。四。五。六。七。八。九。"
+        pieces = [(word, "。") for word in "一二三四五六七八九"]
+        with patch(
+            "src.plugins.nonebot_plugin_fxbot.chat.behavior.response.split_text_with_llm",
+            AsyncMock(return_value=pieces),
+        ):
+            result = await process_response_async(
+                text,
+                provider=object(),
+                nickname="运维",
+                splitter={
+                    "mode": "llm",
+                    "max_sentence_num": 8,
+                    "max_split_num": 3,
+                    "enable_overflow_return_all": False,
+                },
+            )
+        self.assertLessEqual(len(result), 3)
+        self.assertEqual("".join(part.text + part.separator for part in result), text)
+
+
 class SenderAliveTests(unittest.IsolatedAsyncioTestCase):
     """表情、语音、纠错与正文共用同一轮次令牌。"""
 
@@ -132,6 +175,34 @@ class SenderAliveTests(unittest.IsolatedAsyncioTestCase):
             dedupe_key="msg:1",
             trigger_kind="mention",
         )
+
+    async def test_session_policy_skips_typing_only_for_selected_session(self) -> None:
+        service = SimpleNamespace(
+            session_store=ChatSessionStore(),
+            is_current=lambda *args: True,
+            is_latest=lambda *args: True,
+            mark_sending=AsyncMock(),
+            mark_sent=AsyncMock(),
+            mark_send_failed=AsyncMock(),
+            mark_send_aborted=AsyncMock(),
+        )
+        for enabled in (False, True):
+            with (
+                self.subTest(allow_typing=enabled),
+                patch.object(sender_module, "session_policy", return_value=SessionPolicy(allow_typing=enabled)),
+                patch.object(sender_module, "parts", return_value=["第一段", "第二段"]),
+                patch.object(sender_module, "typing_time", return_value=3),
+                patch.object(sender_module.asyncio, "sleep", AsyncMock()) as sleep,
+                patch.object(
+                    sender_module, "apply_typo", side_effect=lambda text: SimpleNamespace(text=text, correction="")
+                ),
+            ):
+                matcher = SimpleNamespace(send=AsyncMock())
+                await sender_module._send_parts(
+                    service, self._request(), ChatResponse(text="正文"), None, matcher, {"sent_parts": 0}
+                )
+                self.assertEqual(matcher.send.await_count, 2)
+                self.assertEqual(sleep.await_count, int(enabled))
 
     async def test_first_segment_is_sent_before_typing_wait(self) -> None:
         events = []

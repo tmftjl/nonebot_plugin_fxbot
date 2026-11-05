@@ -88,6 +88,58 @@ class ConversationTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(response.metadata["planner_sent"])
         self.service._process_locked.assert_not_awaited()
 
+    async def test_repeated_target_without_new_information_stops(self) -> None:
+        self.provider.chat.side_effect = [
+            LLMResponse(tool_calls=[call("reply", msg_id="m1", reply_reference="回答")]),
+            LLMResponse(tool_calls=[call("reply", msg_id="m1", reply_reference="换种说法再回答")]),
+        ]
+        await conversation.run(self.service, self.context)
+        self.service._send_generated.assert_awaited_once()
+        self.assertEqual(self.provider.chat.await_count, 2)
+
+    async def test_new_tool_result_allows_supplement_but_same_result_does_not(self) -> None:
+        self.provider.chat.side_effect = [
+            LLMResponse(tool_calls=[call("reply", msg_id="m1", reply_reference="先说明进度")]),
+            LLMResponse(tool_calls=[call("lookup", query="内存")]),
+            LLMResponse(tool_calls=[call("reply", msg_id="m1", reply_reference="汇报新结果")]),
+            LLMResponse(tool_calls=[call("lookup", query="内存")]),
+            LLMResponse(tool_calls=[call("reply", msg_id="m1", reply_reference="重复结果")]),
+        ]
+        await conversation.run(self.service, self.context)
+        self.assertEqual(self.service._send_generated.await_count, 2)
+        self.assertEqual(self.execute.await_count, 2)
+
+    async def test_different_targets_still_allow_multiple_replies(self) -> None:
+        self.enterContext(
+            patch.object(conversation.chat_repository, "message_by_identity", AsyncMock(return_value=None))
+        )
+        self.store.append("tenant-a", {"role": "user", "content": "另一条", "_source_ids": ["m2"]})
+        self.provider.chat.side_effect = [
+            LLMResponse(
+                tool_calls=[
+                    call("reply", msg_id="m1", reply_reference="回复第一条"),
+                    call("reply", msg_id="m2", reply_reference="回复第二条"),
+                ]
+            ),
+            LLMResponse(tool_calls=[call("stop")]),
+        ]
+        await conversation.run(self.service, self.context)
+        self.assertEqual(self.service._send_generated.await_count, 2)
+
+    async def test_new_incoming_message_during_reply_allows_supplement(self) -> None:
+        async def send(*args):
+            self.store.mark_seen("tenant-a", "new-message")
+            return True
+
+        self.service._send_generated.side_effect = send
+        self.provider.chat.side_effect = [
+            LLMResponse(tool_calls=[call("reply", msg_id="m1", reply_reference="先回答")]),
+            LLMResponse(tool_calls=[call("reply", msg_id="m1", reply_reference="针对新信息补充")]),
+            LLMResponse(tool_calls=[call("stop")]),
+        ]
+        await conversation.run(self.service, self.context)
+        self.assertEqual(self.service._send_generated.await_count, 2)
+
     async def test_repeated_target_gets_upstream_supplement_reminder(self) -> None:
         self.store.append(
             "tenant-a", {"role": "assistant", "content": "之前的回答", "_self_message": True, "_quote_ids": ["m1"]}

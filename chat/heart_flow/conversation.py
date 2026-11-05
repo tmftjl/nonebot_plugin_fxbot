@@ -183,6 +183,14 @@ async def run(service: Any, context: Any) -> ChatResponse:
     ]
     messages.extend(request.metadata["planner_instruction"])
     post_messages: list[dict[str, Any]] = []
+    reply_states = request.metadata.setdefault("planner_reply_states", {})
+    evidence = request.metadata.setdefault("planner_tool_evidence", {})
+
+    def information_state() -> tuple[int, str]:
+        """只用新入站活动和实质工具结果判断能否补充，模型改写指导不算新信息。"""
+        return service.session_store.activity(request.session_id), json.dumps(
+            evidence, sort_keys=True, ensure_ascii=False
+        )
 
     def remember_internal(message: dict[str, Any]) -> None:
         """按真实执行顺序保存 Planner 协议，不能在所有聊天消息之后补写。"""
@@ -220,6 +228,9 @@ async def run(service: Any, context: Any) -> ChatResponse:
             known_ids.update(str(value) for value in message.get("_source_ids", []))
         if target not in known_ids or not isinstance(reference, str) or not reference.strip():
             return {"ok": False, "error": "请提供本会话有效的 msg_id 和非空 reply_reference"}, None
+        current_information = information_state()
+        if reply_states.get(target) == current_information:
+            return {"ok": False, "duplicate_reply": True, "content": "该消息已回复且没有新信息，结束本轮"}, None
         authors = {str(message_id): request.user_id for message_id in target_ids}
         source_senders = request.metadata.get("source_senders", {})
         authors.update({str(identity): str(sender["user_id"]) for identity, sender in source_senders.items()})
@@ -339,6 +350,8 @@ async def run(service: Any, context: Any) -> ChatResponse:
         sent = await service._send_generated(reply_request, response, context.runtime)
         sent_any = sent_any or sent
         request.metadata["planner_sent"] = sent_any
+        if sent:
+            reply_states[target] = current_information
         return {"ok": sent, "content": response.text if sent else "回复未成功发送"}, None
 
     async with fallback_provider("planner", request.session_id) as provider:
@@ -430,6 +443,7 @@ async def run(service: Any, context: Any) -> ChatResponse:
                         result = {"ok": False, "error": "本轮已暂停或结束，工具未执行"}
                     elif name == "reply" and not passive:
                         result, generated = await reply(arguments)
+                        stopped = bool(result.get("duplicate_reply"))
                     elif name == "stop":
                         request.metadata.pop("planner_reply_options", None)
                         stopped = True
@@ -465,6 +479,9 @@ async def run(service: Any, context: Any) -> ChatResponse:
                             metadata={**request.metadata, "allowed_tools": sorted(names)},
                         )
                         result = await execute_tool(name, arguments, tool_context, context.runtime, allowed_names=names)
+                        if name != "tool_search":
+                            key = name + ":" + json.dumps(arguments, sort_keys=True, ensure_ascii=False)
+                            evidence[key] = json.dumps(result, sort_keys=True, ensure_ascii=False, default=str)
                         result, additions = tool_media(result, str(call.get("id") or name))
                         post_messages.extend(additions)
                 except (ValueError, TypeError):

@@ -14,10 +14,13 @@ SessionResolver = Callable[[Any, Any, str], str | None]
 
 @dataclass(frozen=True)
 class SessionPolicy:
-    """Focus 和跨会话学习共享限制，多个插件取交集，不改变长期记忆读写。"""
+    """会话能力与响应节奏，多个插件取交集，不改变权限和长期记忆读写。"""
 
     allow_focus: bool = True
     allow_sharing: bool = True
+    allow_debounce: bool = True
+    allow_typing: bool = True
+    allow_split: bool = True
 
 
 PolicyResolver = Callable[[str], SessionPolicy | None]
@@ -68,12 +71,22 @@ def session_policy(session_id: str) -> SessionPolicy:
             if policy is None:
                 continue
             if not isinstance(policy, SessionPolicy) or any(
-                type(value) is not bool for value in (policy.allow_focus, policy.allow_sharing)
+                type(value) is not bool
+                for value in (
+                    policy.allow_focus,
+                    policy.allow_sharing,
+                    policy.allow_debounce,
+                    policy.allow_typing,
+                    policy.allow_split,
+                )
             ):
                 raise TypeError("会话策略必须返回 SessionPolicy 或 None")
             result = SessionPolicy(
                 result.allow_focus and policy.allow_focus,
                 result.allow_sharing and policy.allow_sharing,
+                result.allow_debounce and policy.allow_debounce,
+                result.allow_typing and policy.allow_typing,
+                result.allow_split and policy.allow_split,
             )
         except Exception:
             logger.opt(exception=True).error(f"[ChatSession] 会话策略失败: {name}")
@@ -120,7 +133,8 @@ def resolve_session_id(bot: Any, event: Any, base_session_id: str) -> str:
                 or not parts[0]
                 or ":" not in parts[0]
                 or candidate != candidate.strip()
-                or any(char.isspace() for char in candidate)
+                # 平台名可包含空格（如 OneBot V11），其余部分仍禁止空白。
+                or any(char.isspace() for char in candidate.partition(":")[2])
                 or parts[-2:] != base_session_id.rsplit(":", 2)[-2:]
                 or parts[0].split(":", 1)[0] != base_session_id.split(":", 1)[0]
             ):

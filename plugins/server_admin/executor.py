@@ -137,6 +137,14 @@ class CommandExecutor:
         self._start(jobs[0])
         return jobs[0].result()
 
+    def pending_id(self, session_id: str) -> str:
+        """仅返回本会话已展示且未过期的唯一待确认任务，供真实用户短句匹配。"""
+        self._prune()
+        jobs = [
+            job for job in self.jobs.values() if job.session_id == session_id and job.status == "pending" and job.shown
+        ]
+        return jobs[0].id if len(jobs) == 1 else ""
+
     def presented(self, session_id: str, identifier: str) -> None:
         """只有确认消息成功发送后才开放人工确认。"""
         job = self.jobs.get(identifier)
