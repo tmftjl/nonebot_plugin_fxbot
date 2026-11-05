@@ -27,26 +27,27 @@ const SECTION_KEYS: Record<string, 'personality' | 'behavior_style' | 'reply_sty
   回复风格: 'reply_style',
 }
 
-const emptyForm = (): PersonaForm => ({
-  key: '',
+const emptyFields = (): Omit<PersonaForm, 'key'> => ({
   intro: '',
   personality: '',
   behavior_style: '',
   reply_style: '',
 })
 
+const emptyForm = (): PersonaForm => ({ key: '', ...emptyFields() })
+
 const parsePersona = (text: string): { form: Omit<PersonaForm, 'key'>; raw: boolean } => {
   const matches = [...text.matchAll(/^#{1,6}[ \t]+(.+?)[ \t]*$/gm)]
   if (!matches.length) {
-    return { form: { ...emptyForm(), personality: text.trim() }, raw: false }
+    return { form: { ...emptyFields(), personality: text.trim() }, raw: false }
   }
-  const form = { ...emptyForm(), intro: text.slice(0, matches[0].index ?? 0).trim() }
+  const form = { ...emptyFields(), intro: text.slice(0, matches[0].index ?? 0).trim() }
   const seen = new Set<string>()
   for (let index = 0; index < matches.length; index += 1) {
     const key = SECTION_KEYS[matches[index][1].trim()]
     if (!key || seen.has(key)) {
       // 自定义小节映射不到三段表单：按原文编辑、原样保存，避免被反复套壳
-      return { form: { ...emptyForm(), personality: text.trim() }, raw: true }
+      return { form: { ...emptyFields(), personality: text.trim() }, raw: true }
     }
     seen.add(key)
     const end = matches[index + 1]?.index ?? text.length
@@ -145,7 +146,7 @@ const openEditDialog = (item: PersonaItem) => {
 }
 
 const savePersona = async () => {
-  if (!form.value.key.trim()) {
+  if (!(editingKey.value || form.value.key.trim())) {
     ElMessage.warning('请输入人格名称')
     return
   }
