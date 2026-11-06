@@ -51,5 +51,10 @@ def database_path() -> Path:
     return data_dir("db") / "fxbot.db"
 
 
+def startup_marker_path() -> Path:
+    """当前进程的启动记录，每次启动（含 execv 重启）重写。"""
+    return data_dir("system") / "startup.json"
+
+
 def built_in_plugins_dir() -> Path:
     return package_root() / "plugins"

@@ -26,7 +26,7 @@ from .registry import P
 from ..utils.tz import now_str, today_str
 from ..permission import PermLevel, PermScene
 from ..utils.http import get_shared_async_client
-from ..utils.paths import data_dir
+from ..utils.paths import data_dir, startup_marker_path
 from .stats_patches import install_receive_hook, install_send_patches
 from .status_monitor import get_monitor
 
@@ -36,6 +36,9 @@ _DEFAULT_BG_FILE = "1.jpg"
 
 # ========== 消息统计缓存文件 ==========
 _MESSAGE_CACHE_FILE = data_dir("system") / "status_message_cache.json"
+
+# ========== 启动记录 ==========
+_STARTUP_FILE = startup_marker_path()
 
 # ========== 浏览器资源管理 ==========
 # 渲染用完即关，不留常驻浏览器，所以只需要限制并发启动数。
@@ -1228,11 +1231,24 @@ async def _ensure_today_cache() -> None:
             _MESSAGE_CACHE_DIRTY = True
 
 
+def _write_startup_record() -> None:
+    """重写启动记录，供运维会话判断进程是否真的重启过。
+
+    #重启/#更新 用 execv 原地换进程镜像，PID 和 ps 启动时间都不变，只能看 started_epoch。
+    """
+    record = {"pid": os.getpid(), "started_at": now_str(), "started_epoch": int(time.time())}
+    try:
+        _STARTUP_FILE.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as exc:
+        logger.error(f"[bot_status] 写入启动记录失败: {exc}")
+
+
 @_driver.on_startup
 async def _setup_driver():
     """启动时设置驱动启动时间"""
     global _MESSAGE_CACHE_DATE, _MESSAGE_CACHE_DIRTY, _flush_task
     _driver._start_time = time.time()
+    _write_startup_record()
 
     # 读取消息统计缓存
     if _MESSAGE_CACHE_FILE.exists():

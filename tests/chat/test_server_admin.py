@@ -569,7 +569,10 @@ class ToolTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("harmless", result["output"])
 
     def test_prompt_explains_natural_confirmation(self) -> None:
-        with patch.object(plugin, "skip_confirmation", return_value=False):
+        with (
+            patch.object(plugin, "skip_confirmation", return_value=False),
+            patch.object(plugin, "startup_marker_path", return_value=Path("/tmp/startup.json")),
+        ):
             prompt = plugin._prompt(hooks.ChatHookContext(SERVER))
             self.assertIn("server_confirm", prompt)
             self.assertIn("明确同意", prompt)
@@ -577,10 +580,60 @@ class ToolTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(plugin._prompt(hooks.ChatHookContext(BASE)))
 
     def test_prompt_switches_when_confirmation_is_skipped(self) -> None:
-        with patch.object(plugin, "skip_confirmation", return_value=True):
+        with (
+            patch.object(plugin, "skip_confirmation", return_value=True),
+            patch.object(plugin, "startup_marker_path", return_value=Path("/tmp/startup.json")),
+        ):
             prompt = plugin._prompt(hooks.ChatHookContext(SERVER))
         self.assertIn("免确认", prompt)
         self.assertIn("直接执行", prompt)
+
+    def test_prompt_carries_restart_facts(self) -> None:
+        with (
+            patch.object(plugin, "skip_confirmation", return_value=False),
+            patch.object(plugin, "startup_marker_path", return_value=Path("/tmp/startup.json")),
+        ):
+            prompt = plugin._prompt(hooks.ChatHookContext(SERVER))
+        self.assertIn("execv", prompt)
+        self.assertIn("启动记录不存在", prompt)
+        self.assertIn("数据目录", prompt)
+
+    def test_prompt_reports_startup_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            marker = Path(folder) / "startup.json"
+            marker.write_text(
+                '{"pid": 42, "started_at": "2026-11-06 15:30:02", "started_epoch": 1793940602}',
+                encoding="utf-8",
+            )
+            with (
+                patch.object(plugin, "skip_confirmation", return_value=False),
+                patch.object(plugin, "startup_marker_path", return_value=marker),
+            ):
+                prompt = plugin._prompt(hooks.ChatHookContext(SERVER))
+        self.assertIn("pid=42", prompt)
+        self.assertIn("1793940602", prompt)
+
+    def test_prompt_lists_empty_service_file_path(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            with (
+                patch.object(plugin, "skip_confirmation", return_value=False),
+                patch.object(plugin, "startup_marker_path", return_value=Path(folder) / "startup.json"),
+                patch.object(plugin, "data_dir", side_effect=lambda name=None: Path(folder)),
+            ):
+                prompt = plugin._prompt(hooks.ChatHookContext(SERVER))
+        self.assertIn("服务清单", prompt)
+        self.assertIn("services.md", prompt)
+
+    def test_prompt_injects_filled_service_list(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            (Path(folder) / "services.md").write_text("- nb: 监听 8080", encoding="utf-8")
+            with (
+                patch.object(plugin, "skip_confirmation", return_value=False),
+                patch.object(plugin, "startup_marker_path", return_value=Path(folder) / "startup.json"),
+                patch.object(plugin, "data_dir", side_effect=lambda name=None: Path(folder)),
+            ):
+                prompt = plugin._prompt(hooks.ChatHookContext(SERVER))
+        self.assertIn("监听 8080", prompt)
 
     async def test_forged_tool_call_fails_before_submit(self) -> None:
         with (

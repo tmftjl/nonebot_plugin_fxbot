@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import json
 import asyncio
 from typing import Any
 
@@ -21,6 +22,7 @@ from ...adapter import event_user_id, event_plain_text
 from ...chat.hooks import register_chat_hook
 from ...chat.tools import ToolError, ToolContext, ToolRuntime, tool
 from ...permission import PermLevel, PermScene, is_superuser
+from ...utils.paths import data_dir, config_dir, startup_marker_path
 from ...chat.session_hooks import SessionPolicy, register_session_policy, register_session_resolver
 from ...chat.message_adapter import event_identity
 
@@ -83,25 +85,53 @@ def _tools(context, details):
     return False if name in {"server_exec", "server_confirm"} else None
 
 
+def _runtime_facts() -> str:
+    """本进程的启动时刻和目录：PID 与 ps 启动时间在 execv 重启后不变，只有这里能看出重启。"""
+    try:
+        record = json.loads(startup_marker_path().read_text(encoding="utf-8"))
+        head = (
+            f"本进程 pid={record.get('pid')}，启动于 {record.get('started_at')}"
+            f"（started_epoch={record.get('started_epoch')}）。"
+        )
+    except Exception:
+        head = "本进程的启动记录不存在，说明还没加载写启动记录的版本。"
+    return (
+        f"{head}#重启/#更新 用 execv 原地换进程镜像，PID 和 ps 的启动时间都不变，"
+        "别用它们判断有没有重启过。\n"
+        f"数据目录 {data_dir()}，配置目录 {config_dir()}。"
+    )
+
+
+def _services_note() -> str:
+    """服务清单文件路径；有内容就一并注入。"""
+    path = data_dir("server_admin") / "services.md"
+    try:
+        content = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        content = ""
+    return f"服务清单 {path}\n{content}".strip()
+
+
 def _prompt(context) -> str | None:
     """提示工作环境和确认方式，不覆盖用户通过 #人格 设置的绑定。"""
     if not store.is_server_session(context.session_id):
         return None
     if skip_confirmation():
-        return (
+        note = (
             "这是服务器运维私聊。命令用 server_exec 执行，未结束用 job_id 查，别重复提交。"
             "全部命令免确认已开启：直接执行，破坏性操作先讲清影响。被禁用规则拒绝就如实说，别绕过。"
         )
-    note = (
-        "这是服务器运维私聊。命令用 server_exec 执行，未结束用 job_id 查，别重复提交。"
-        "需要确认的命令先展示，对方明确同意后再调 server_confirm，否则 cancel。"
-        "被禁用规则拒绝就如实说，别绕过。"
-    )
+    else:
+        note = (
+            "这是服务器运维私聊。命令用 server_exec 执行，未结束用 job_id 查，别重复提交。"
+            "需要确认的命令先展示，对方明确同意后再调 server_confirm，否则 cancel。"
+            "被禁用规则拒绝就如实说，别绕过。"
+        )
     if job := executor.pending(context.session_id):
         command = job["command"]
         tail = "…" if len(command) > 600 else ""
         note += f"\n待确认命令：\n{command[:600]}{tail}"
-    return note
+    return f"{note}\n{_runtime_facts()}\n{_services_note()}"
 
 
 async def _observe(event: str, context, details) -> None:
