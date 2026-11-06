@@ -50,7 +50,6 @@ class _RecallContext:
 class HeuristicRecall:
     def __init__(self) -> None:
         self._states: dict[str, _RecallState] = {}
-        self._client = LLMServiceClient(task_name="utils", request_type="heuristic_memory_impression")
 
     async def build(self, request: ChatRequest) -> str:
         config = amemorix_runtime.config().integration
@@ -129,7 +128,10 @@ class HeuristicRecall:
             chat_identity="\n".join(identity),
             message_window="\n".join(window) or "no text messages available",
         )
-        completion = await self._client.generate_response(prompt)
+        client = LLMServiceClient(
+            task_name="utils", request_type="heuristic_memory_impression", session_id=context.tenant
+        )
+        completion = await client.generate_response(prompt)
         return str(getattr(completion, "response", "") or "").strip()
 
     async def _reference(self, impression: str, context: _RecallContext) -> str:

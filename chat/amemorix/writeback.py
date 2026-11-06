@@ -55,7 +55,6 @@ class ChatWriteback:
         self._states: dict[str, int] = {}
         self._epochs: dict[str, int] = {}
         self._stopping = False
-        self._fact_client = LLMServiceClient(task_name="utils", request_type="A_Memorix.person_fact_writeback")
 
     def forget_session(self, tenant: str) -> None:
         """会话重置后丢弃待处理写回，并让在途任务放弃落库。"""
@@ -302,7 +301,8 @@ class ChatWriteback:
         prompt = learning_prompt(
             "person_fact_writeback", person_name=name, evidence=evidence_text, reply=item["reply_text"]
         )
-        completion = await self._fact_client.generate_response(prompt)
+        client = LLMServiceClient(task_name="utils", request_type="A_Memorix.person_fact_writeback", session_id=tenant)
+        completion = await client.generate_response(prompt)
         facts = _parse_facts(str(getattr(completion, "response", "") or ""))
         if not facts:
             return

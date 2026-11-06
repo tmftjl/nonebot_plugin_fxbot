@@ -60,7 +60,7 @@ class PersonFactEvidenceTests(unittest.IsolatedAsyncioTestCase):
     async def test_model_fabricated_evidence_id_is_not_persisted(self) -> None:
         await self.append("answer", "target", "我住在杭州")
         bridge = writeback.ChatWriteback()
-        bridge._fact_client = SimpleNamespace(
+        client = SimpleNamespace(
             generate_response=AsyncMock(
                 return_value=SimpleNamespace(
                     response='[{"fact":"目标用户住在杭州","evidence_message_id":"fabricated"}]'
@@ -68,6 +68,7 @@ class PersonFactEvidenceTests(unittest.IsolatedAsyncioTestCase):
             )
         )
         with (
+            patch.object(writeback, "LLMServiceClient", return_value=client) as client_cls,
             patch.object(writeback, "remember_person", AsyncMock()),
             patch.object(writeback, "ingest_text", AsyncMock()) as ingest,
         ):
@@ -75,3 +76,4 @@ class PersonFactEvidenceTests(unittest.IsolatedAsyncioTestCase):
                 {"tenant": self.tenant, "user_id": "target", "reply_text": "知道了", "reply_to_message_id": "answer"}
             )
         self.assertEqual(ingest.await_args.kwargs["metadata"]["evidence_message_ids"], ["answer"])
+        self.assertEqual(client_cls.call_args.kwargs["session_id"], self.tenant)

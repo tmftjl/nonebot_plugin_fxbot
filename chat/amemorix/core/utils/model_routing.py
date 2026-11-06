@@ -138,6 +138,7 @@ async def generate_with_resolved_model(
     request_type: str,
     prompt: str,
     *,
+    session_id: str = "",
     temperature: Optional[float] = None,
     max_tokens: Optional[int] = None,
 ) -> LLMServiceResult:
@@ -151,10 +152,11 @@ async def generate_with_resolved_model(
                 prompt=prompt,
                 temperature=temperature,
                 max_tokens=max_tokens,
+                session_id=session_id,
             )
         )
 
-    client = llm_api.LLMServiceClient(task_name=model.task_name, request_type=request_type)
+    client = llm_api.LLMServiceClient(task_name=model.task_name, request_type=request_type, session_id=session_id)
     client._orchestrator.model_for_task = model.task_config
     client._orchestrator.model_usage = {model.selected_model_name: (0, 0, 0)}
 

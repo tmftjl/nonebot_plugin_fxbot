@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 from dataclasses import field, dataclass
 
 from ....config import get_manager
+from .person_db import current_scope
 from .host_config import TaskConfig
 from ...providers.usage import track_model_task_usage
 from ...providers.manager import provider_manager
@@ -61,6 +62,7 @@ class LLMServiceRequest:
     prompt: str = ""
     temperature: Optional[float] = None
     max_tokens: Optional[int] = None
+    session_id: str = ""
 
 
 @dataclass
@@ -203,9 +205,10 @@ class LLMServiceClient:
             max_tokens = int(getattr(task_config, "max_tokens", 0) or 0) or None
 
         chat_messages = messages or [{"role": "user", "content": prompt or ""}]
+        session_id = self.session_id or current_scope()
         async with (
             asyncio.timeout(task_config.hard_timeout),
-            fallback_provider(resolve_route(self.task_name), self.session_id) as provider,
+            fallback_provider(resolve_route(self.task_name), session_id) as provider,
         ):
             response = await provider.chat(
                 chat_messages,
@@ -220,7 +223,9 @@ class LLMServiceClient:
 
 
 async def generate(request: LLMServiceRequest) -> LLMServiceResult:
-    client = LLMServiceClient(task_name=request.task_name, request_type=request.request_type)
+    client = LLMServiceClient(
+        task_name=request.task_name, request_type=request.request_type, session_id=request.session_id
+    )
     try:
         completion = await client.generate_response(
             request.prompt,

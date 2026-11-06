@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import unittest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from src.plugins.nonebot_plugin_fxbot.chat.providers import routing
 from src.plugins.nonebot_plugin_fxbot.chat.amemorix._host import llm
+from src.plugins.nonebot_plugin_fxbot.chat.amemorix._host.person_db import person_scope
 
 
 class _ConfigManager:
@@ -140,6 +142,51 @@ class HostEmbeddingTests(unittest.IsolatedAsyncioTestCase):
         ):
             results = await llm.embed_texts(["ab", "c"])
         self.assertEqual([item.embedding for item in results], [[2.0], [1.0]])
+
+
+class HostSessionBindingTests(unittest.IsolatedAsyncioTestCase):
+    """文本生成把会话 ID 带进 Provider 选择，后台任务也能跟随 # provider。"""
+
+    def _lease(self, seen: list[tuple[str, str]]):
+        class _Lease:
+            async def __aenter__(self):
+                return SimpleNamespace(name="bound", chat=AsyncMock(return_value=SimpleNamespace(content="ok")))
+
+            async def __aexit__(self, *exc):
+                return False
+
+        def factory(task: str, session_id: str = ""):
+            seen.append((task, session_id))
+            return _Lease()
+
+        return factory
+
+    async def test_request_session_is_forwarded(self) -> None:
+        seen: list[tuple[str, str]] = []
+        with patch.object(llm, "fallback_provider", self._lease(seen)):
+            await llm.generate(llm.LLMServiceRequest(task_name="memory", prompt="hi", session_id="conversation"))
+        self.assertEqual([session for _, session in seen], ["conversation"])
+
+    async def test_person_scope_supplies_missing_session(self) -> None:
+        seen: list[tuple[str, str]] = []
+        with patch.object(llm, "fallback_provider", self._lease(seen)), person_scope("group-session"):
+            await llm.LLMServiceClient(task_name="utils").generate_response("hi")
+        self.assertEqual([session for _, session in seen], ["group-session"])
+
+    async def test_explicit_session_wins_over_scope(self) -> None:
+        seen: list[tuple[str, str]] = []
+        with patch.object(llm, "fallback_provider", self._lease(seen)), person_scope("scope-session"):
+            await llm.LLMServiceClient(task_name="utils", session_id="explicit").generate_response("hi")
+        self.assertEqual([session for _, session in seen], ["explicit"])
+
+    async def test_heuristic_impression_uses_tenant(self) -> None:
+        from src.plugins.nonebot_plugin_fxbot.chat.amemorix import inject
+
+        context = inject._RecallContext(tenant="group-session", platform="onebot11", group_id="1", user_id="2")
+        with patch.object(inject, "LLMServiceClient") as client_cls:
+            client_cls.return_value.generate_response = AsyncMock(return_value=SimpleNamespace(response="印象"))
+            self.assertEqual(await inject.HeuristicRecall()._impression(context), "印象")
+        self.assertEqual(client_cls.call_args.kwargs["session_id"], "group-session")
 
 
 if __name__ == "__main__":

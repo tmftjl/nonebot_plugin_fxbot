@@ -738,6 +738,7 @@ class SummaryImporter:
                     prompt=prompt,
                     temperature=model_config_to_use.temperature,
                     max_tokens=model_config_to_use.max_tokens,
+                    session_id=stream_id,
                 )
             )
             success = bool(result.success)

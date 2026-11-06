@@ -299,10 +299,12 @@ class EpisodeSegmentationService:
             window_end=window_end,
             paragraphs=paragraphs,
         )
+        session_id = source.split(":", 1)[1] if source.startswith("chat_summary:") else ""
         result = await generate_with_resolved_model(
             resolved_model,
             request_type="A_Memorix.EpisodeSegmentation",
             prompt=prompt,
+            session_id=session_id,
             temperature=getattr(resolved_model.task_config, "temperature", None),
             max_tokens=getattr(resolved_model.task_config, "max_tokens", None),
         )

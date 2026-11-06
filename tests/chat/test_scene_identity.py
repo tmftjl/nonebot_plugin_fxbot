@@ -71,8 +71,8 @@ class RecallSceneTests(unittest.IsolatedAsyncioTestCase):
             request = ChatRequest(tenant, "u1", group_id, "你好", "turn", "msg", "private", platform="OneBot V11")
             instance = recall.HeuristicRecall()
             client = SimpleNamespace(generate_response=AsyncMock(return_value=SimpleNamespace(response="印象")))
-            instance._client = client
             with (
+                patch.object(recall, "LLMServiceClient", return_value=client) as client_cls,
                 patch.object(recall.amemorix_runtime, "config", return_value=config),
                 patch.object(recall, "count_messages", AsyncMock(return_value=1)),
                 patch.object(
@@ -89,6 +89,7 @@ class RecallSceneTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(await instance.build(request), "参考")
             context = reference.await_args.args[1]
             self.assertEqual(context.group_id, group_id or "")
+            self.assertEqual(client_cls.call_args.kwargs["session_id"], tenant)
             text = client.generate_response.await_args.args[0]
             self.assertIn("chat_type: group" if group_id else "chat_type: private", text)
             if not group_id:
