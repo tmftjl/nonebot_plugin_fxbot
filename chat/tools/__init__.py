@@ -1,5 +1,6 @@
 """AI 工具系统导出。"""
 
+from .file import send_file_tool
 from .store import StoredToolResult, tool_result_store
 from .types import ToolSpec, ToolError, ToolContext
 from .result import MAX_TOOL_RESULT_CHARS, tool_result_content, prepare_tool_result_content
@@ -39,6 +40,7 @@ __all__ = [
     "execute_tool",
     "prepare_tool_result_content",
     "read_tool_result_tool",
+    "send_file_tool",
     "subagent_status_tool",
     "subagent_stop_tool",
     "subagent_tool",

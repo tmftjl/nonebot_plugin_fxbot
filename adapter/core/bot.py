@@ -105,6 +105,10 @@ class PlatformAdapter(ABC):
         message = self.build_message(bot, [self.build_segment(bot, "text", text)])
         return await self.send_message_to_target(bot, target, message)
 
+    async def send_file_to_target(self, bot: Any, target: dict[str, Any], path: Any, name: str) -> Any:
+        """向持久化目标发送本地文件；平台不支持时抛 UnsupportedCapability。"""
+        return await self._unsupported("发送文件")
+
     async def send_forward_messages(
         self, bot: Any, event: Any, messages: list[Any], *, nickname: str = "FxBot"
     ) -> bool:

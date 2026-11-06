@@ -232,6 +232,11 @@ class QQOfficialMessageAdapter(PlatformAdapter):
     async def send_private_message(self, bot, user_id, message):
         return await bot.send_to_c2c(openid=str(user_id), message=message)
 
+    async def send_file_to_target(self, bot: Bot, target: dict[str, Any], path: Path, name: str) -> Any:
+        """QQ 官方用 file_file 上传本地文件，群聊和私聊分别走各自的文件接口。"""
+        message = self.build_message(bot, [MessageSegment.file_file(path, name)])
+        return await self.send_message_to_target(bot, target, message)
+
     async def delete_message(self, bot, message_id, *, group_id=None, user_id=None):
         if group_id is not None:
             return await bot.delete_group_message(group_openid=str(group_id), message_id=str(message_id))

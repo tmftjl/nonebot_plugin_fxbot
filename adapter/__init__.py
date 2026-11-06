@@ -272,6 +272,11 @@ async def send_text_to_target(bot, target, text):
     return await get_platform_adapter(bot).send_text_to_target(bot, target, text)
 
 
+async def send_file_to_target(bot, target, path, name):
+    """发送本地文件；平台不支持时抛 UnsupportedCapability。"""
+    return await get_platform_adapter(bot).send_file_to_target(bot, target, path, name)
+
+
 async def send_forward_messages(bot, event, messages, *, nickname="FxBot"):
     return await get_platform_adapter(bot).send_forward_messages(bot, event, messages, nickname=nickname)
 
@@ -330,6 +335,7 @@ __all__ = [
     "image_sources_from_event_or_reply",
     "move_non_text_segments_to_end",
     "register_message_adapter",
+    "send_file_to_target",
     "send_forward_messages",
     "send_forward_texts",
     "send_message_to_target",

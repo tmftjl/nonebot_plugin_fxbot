@@ -228,11 +228,13 @@ class ModeTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(plugin, "plugin_enabled", return_value=False):
             self.assertFalse(plugin._guard(context, {}))
         self.assertFalse(plugin._tools(SimpleNamespace(session_id=BASE), {"tool_name": "server_exec"}))
+        self.assertIsNone(plugin._tools(SimpleNamespace(session_id=BASE), {"tool_name": "send_file"}))
         with patch.object(plugin, "_guard", return_value=True):
             with patch.object(plugin.executor, "pending", return_value=None):
                 self.assertFalse(plugin._tools(SimpleNamespace(session_id=SERVER), {"tool_name": "server_confirm"}))
             with patch.object(plugin.executor, "pending", return_value={"command": "x"}):
                 self.assertTrue(plugin._tools(SimpleNamespace(session_id=SERVER), {"tool_name": "server_confirm"}))
+            self.assertTrue(plugin._tools(SimpleNamespace(session_id=SERVER), {"tool_name": "send_file"}))
 
 
 class BlocklistTests(unittest.TestCase):

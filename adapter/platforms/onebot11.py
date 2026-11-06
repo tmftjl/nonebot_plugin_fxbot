@@ -120,6 +120,18 @@ class OneBotV11MessageAdapter(PlatformAdapter):
             return await self._api(bot, "send_private_msg", user_id=int(target["user_id"]), message=message)
         raise RuntimeError("无法识别消息目标")
 
+    async def send_file_to_target(self, bot: Bot, target: dict[str, Any], path: Path, name: str) -> Any:
+        """OneBot V11 用 upload_*_file 发文件，要求 OneBot 实现能读到这个路径。"""
+        if target.get("group_id") is not None:
+            return await self._api(
+                bot, "upload_group_file", group_id=int(target["group_id"]), file=str(path), name=name
+            )
+        if target.get("user_id") is not None:
+            return await self._api(
+                bot, "upload_private_file", user_id=int(target["user_id"]), file=str(path), name=name
+            )
+        raise RuntimeError("无法识别消息目标")
+
     async def _api(self, bot: Bot, name: str, **kwargs: Any) -> Any:
         method = getattr(bot, name, None)
         if callable(method):

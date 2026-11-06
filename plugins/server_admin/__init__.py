@@ -73,7 +73,7 @@ def _guard(context, details):
 
 
 def _tools(context, details):
-    """shell 与确认工具只在服务器会话可发现；确认工具只在有待确认命令时出现。"""
+    """shell 和确认只在服务器会话可发现；确认工具只在有待确认命令时出现。"""
     name = details["tool_name"]
     if store.is_server_session(context.session_id):
         allowed = bool(_guard(context, {}))
@@ -81,7 +81,7 @@ def _tools(context, details):
             return allowed
         if name == "server_confirm":
             return allowed and bool(executor.pending(context.session_id))
-        return name in {"tool_search", "read_tool_result", "query_memory", "query_person_profile"}
+        return name in {"tool_search", "read_tool_result", "query_memory", "query_person_profile", "send_file"}
     return False if name in {"server_exec", "server_confirm"} else None
 
 
