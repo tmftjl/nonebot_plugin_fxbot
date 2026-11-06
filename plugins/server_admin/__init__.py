@@ -55,6 +55,7 @@ def _policy(session_id: str) -> SessionPolicy | None:
         allow_debounce=flags["allow_debounce"],
         allow_typing=flags["allow_typing"],
         allow_split=flags["allow_split"],
+        allow_typo=False,
     )
 
 

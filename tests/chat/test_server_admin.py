@@ -222,7 +222,9 @@ class ModeTests(unittest.IsolatedAsyncioTestCase):
             "allow_split": False,
         }
         with patch.object(plugin, "policy_switches", return_value=flags):
-            self.assertEqual(plugin._policy(SERVER), session_hooks.SessionPolicy(False, True, False, False, False))
+            self.assertEqual(
+                plugin._policy(SERVER), session_hooks.SessionPolicy(False, True, False, False, False, False)
+            )
         request = ChatRequest(SERVER, "admin", None, "hi", "turn", "msg", "private")
         context = hooks.hook_context(request)
         with patch.object(plugin, "plugin_enabled", return_value=False):
@@ -347,7 +349,7 @@ class PolicySwitchTests(unittest.TestCase):
             "allow_split": True,
         }
         with patch.object(plugin, "policy_switches", return_value=flags):
-            self.assertEqual(plugin._policy(SERVER), session_hooks.SessionPolicy(False, True, True, True, True))
+            self.assertEqual(plugin._policy(SERVER), session_hooks.SessionPolicy(False, True, True, True, True, False))
 
 
 class ExecutorTests(unittest.IsolatedAsyncioTestCase):

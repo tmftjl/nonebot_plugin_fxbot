@@ -13,7 +13,7 @@ from functools import partial
 
 from nonebot import logger
 
-from ..typo import apply_typo, typo_config
+from ..typo import TypoText, apply_typo, typo_config
 from ..emoji import mark_used, emoji_by_hash
 from ..hooks import ChatHookContext, guard, notify, hook_context
 from ..trace import turn_trace
@@ -474,7 +474,7 @@ async def _send_parts(
                     user_ids = request.metadata.get("reply_at_users", []) if reply_at_enabled() else []
                 else:
                     user_ids, body = split_mentions(part, request)
-            typo = apply_typo(body)
+            typo = apply_typo(body) if session_policy(request.session_id).allow_typo else TypoText(body)
             if (
                 not await guard(
                     "send_guard", hook_context(request, phase="send"), kind="text", text=typo.text, part_index=index

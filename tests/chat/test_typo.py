@@ -14,6 +14,7 @@ from src.plugins.nonebot_plugin_fxbot.chat.tools import ToolRuntime
 from src.plugins.nonebot_plugin_fxbot.chat.types import ChatRequest, ChatResponse
 from src.plugins.nonebot_plugin_fxbot.chat.service import ChatService
 from src.plugins.nonebot_plugin_fxbot.chat.session import ChatSessionStore
+from src.plugins.nonebot_plugin_fxbot.chat.session_hooks import SessionPolicy
 from src.plugins.nonebot_plugin_fxbot.chat.message_receive import sender as sender_module
 from src.plugins.nonebot_plugin_fxbot.config.system_defaults import (
     SYSTEM_DEFAULTS,
@@ -240,6 +241,16 @@ class SendTypoTests(unittest.IsolatedAsyncioTestCase):
                 {"role": "assistant", "content": "错字文本。"},
             ],
         )
+
+    async def test_policy_disables_typo_and_correction(self) -> None:
+        matcher = _Matcher()
+        await self._send(
+            matcher,
+            TypoText("错字文本。", "正"),
+            session_policy=lambda _session_id: SessionPolicy(allow_typo=False),
+        )
+
+        self.assertEqual(matcher.sent, ["干净文本。"])
 
     async def test_correction_is_sent_as_extra_message(self) -> None:
         matcher = _Matcher()

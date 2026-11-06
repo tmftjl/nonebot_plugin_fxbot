@@ -21,6 +21,7 @@ class SessionPolicy:
     allow_debounce: bool = True
     allow_typing: bool = True
     allow_split: bool = True
+    allow_typo: bool = True
 
 
 PolicyResolver = Callable[[str], SessionPolicy | None]
@@ -78,6 +79,7 @@ def session_policy(session_id: str) -> SessionPolicy:
                     policy.allow_debounce,
                     policy.allow_typing,
                     policy.allow_split,
+                    policy.allow_typo,
                 )
             ):
                 raise TypeError("会话策略必须返回 SessionPolicy 或 None")
@@ -87,6 +89,7 @@ def session_policy(session_id: str) -> SessionPolicy:
                 result.allow_debounce and policy.allow_debounce,
                 result.allow_typing and policy.allow_typing,
                 result.allow_split and policy.allow_split,
+                result.allow_typo and policy.allow_typo,
             )
         except Exception:
             logger.opt(exception=True).error(f"[ChatSession] 会话策略失败: {name}")

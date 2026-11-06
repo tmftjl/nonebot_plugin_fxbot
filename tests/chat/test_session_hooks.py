@@ -238,6 +238,10 @@ class SessionPolicyTests(unittest.IsolatedAsyncioTestCase):
         state["instant"] = True
         self.assertEqual(hooks.session_policy(BASE), hooks.SessionPolicy(allow_debounce=False, allow_typing=False))
 
+    def test_typo_is_intersected(self) -> None:
+        self.register("typo", lambda sid: hooks.SessionPolicy(allow_typo=False))
+        self.assertEqual(hooks.session_policy(BASE), hooks.SessionPolicy(allow_typo=False))
+
     def test_learning_sharing_blocks_both_directions(self) -> None:
         self.register("isolate", lambda sid: hooks.SessionPolicy(allow_sharing=False) if sid == ISOLATED else None)
         targets = [{"platform": "onebot11", "item_id": "*", "type": "private"}]
