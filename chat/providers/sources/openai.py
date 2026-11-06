@@ -13,6 +13,8 @@ from ..base import STTProvider, TTSProvider, ChatProvider, EmbeddingProvider, lo
 from ..entities import LLMResponse, ProviderType
 from ..register import register_provider
 
+EMBED_BATCH_LIMIT = 25
+
 
 @register_provider(
     "openai_chat",
@@ -190,7 +192,12 @@ class OpenAIProvider(ChatProvider):
     "openai_embedding",
     "OpenAI Embedding",
     provider_type=ProviderType.EMBEDDING,
-    default_config={"base_url": "https://api.openai.com/v1", "timeout": 60, "embedding_dim": 1536},
+    default_config={
+        "base_url": "https://api.openai.com/v1",
+        "timeout": 60,
+        "embedding_dim": 1536,
+        "embed_batch_limit": EMBED_BATCH_LIMIT,
+    },
 )
 class OpenAIEmbeddingProvider(EmbeddingProvider):
     """OpenAI 嵌入 Provider。"""
@@ -213,10 +220,15 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
             logger.opt(exception=True).warning(f"[{self.provider_id}] 关闭客户端失败")
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
-        """批量获取文本嵌入向量。"""
+        """批量获取文本嵌入向量；服务端单次条数上限各不相同，按配置切分后合并。"""
+        limit = max(1, int(self.config.get("embed_batch_limit") or EMBED_BATCH_LIMIT))
+        vectors: list[list[float]] = []
         try:
-            resp = await self.client.embeddings.create(input=texts, model=self.model_name)
-            return [data.embedding for data in resp.data]
+            for start in range(0, len(texts), limit):
+                batch = texts[start : start + limit]
+                resp = await self.client.embeddings.create(input=batch, model=self.model_name)
+                vectors.extend(data.embedding for data in resp.data)
+            return vectors
         except Exception as exc:
             logger.error(f"[{self.provider_id}] Embed 请求失败: {exc}")
             raise

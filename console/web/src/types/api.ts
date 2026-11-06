@@ -217,6 +217,7 @@ export interface ProviderTypeOption {
   default_base_url?: string
   default_timeout?: number
   default_embedding_dim?: number | null
+  default_embed_batch_limit?: number | null
   default_voice?: string | null
 }
 
@@ -229,6 +230,7 @@ export interface ProviderItem {
   model: string
   timeout: number
   embedding_dim?: number | null
+  embed_batch_limit?: number | null
   voice?: string | null
   has_api_key: boolean
   is_default: boolean
@@ -249,6 +251,7 @@ export interface ProviderPayload {
   model: string
   timeout: number
   embedding_dim?: number | null
+  embed_batch_limit?: number | null
   voice?: string | null
 }
 

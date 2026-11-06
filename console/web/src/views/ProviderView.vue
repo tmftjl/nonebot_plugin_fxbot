@@ -24,6 +24,7 @@ interface ProviderForm {
   model: string
   timeout: number
   embedding_dim: number | null
+  embed_batch_limit: number | null
   voice: string
 }
 
@@ -105,6 +106,7 @@ function emptyForm(): ProviderForm {
     model: '',
     timeout: 60,
     embedding_dim: null,
+    embed_batch_limit: null,
     voice: '',
   }
 }
@@ -248,6 +250,8 @@ const applyTypeDefaults = (option?: ProviderTypeOption) => {
   form.value.timeout = option.default_timeout || 60
   form.value.embedding_dim =
     form.value.provider_type === 'embedding' ? (option.default_embedding_dim ?? 1536) : null
+  form.value.embed_batch_limit =
+    form.value.provider_type === 'embedding' ? (option.default_embed_batch_limit ?? 25) : null
   form.value.voice = form.value.provider_type === 'tts' ? (option.default_voice ?? 'alloy') : ''
 }
 
@@ -445,6 +449,7 @@ const openEditDialog = (item: ProviderItem) => {
     model: item.model,
     timeout: item.timeout || 60,
     embedding_dim: item.embedding_dim ?? null,
+    embed_batch_limit: item.embed_batch_limit ?? (item.provider_type === 'embedding' ? 25 : null),
     voice: item.voice || '',
   }
   dialogVisible.value = true
@@ -482,6 +487,13 @@ const saveProvider = async () => {
     ElMessage.warning('请输入向量维度')
     return
   }
+  if (
+    form.value.provider_type === 'embedding' &&
+    (!form.value.embed_batch_limit || form.value.embed_batch_limit <= 0)
+  ) {
+    ElMessage.warning('请输入单次批量上限')
+    return
+  }
 
   saving.value = true
   try {
@@ -494,6 +506,7 @@ const saveProvider = async () => {
       model: form.value.model.trim(),
       timeout: form.value.timeout,
       embedding_dim: form.value.embedding_dim,
+      embed_batch_limit: form.value.embed_batch_limit,
       voice: form.value.voice.trim(),
     }
     const res = editingName.value
@@ -905,6 +918,16 @@ onMounted(() => {
               controls-position="right"
               style="width: 100%"
             />
+          </el-form-item>
+          <el-form-item v-if="form.provider_type === 'embedding'" label="单次批量上限">
+            <el-input-number
+              v-model="form.embed_batch_limit"
+              :min="1"
+              :max="2048"
+              controls-position="right"
+              style="width: 100%"
+            />
+            <div class="form-hint">服务端单次最多接受的文本条数，超过会被拒绝。</div>
           </el-form-item>
           <el-form-item v-if="form.provider_type === 'tts'" label="音色">
             <el-input v-model="form.voice" placeholder="alloy" />

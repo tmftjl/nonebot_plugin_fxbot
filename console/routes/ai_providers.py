@@ -18,6 +18,7 @@ _CAPABILITIES = {"chat", "embedding", "stt", "tts"}
 _NAME_PATTERN = re.compile(r"[\w.-]{1,64}")
 _DEFAULT_TIMEOUT = 60
 _DEFAULT_EMBEDDING_DIM = 1536
+_DEFAULT_EMBED_BATCH_LIMIT = 25
 _DEFAULT_TTS_VOICE = "alloy"
 
 
@@ -62,6 +63,7 @@ def _type_options() -> list[dict[str, Any]]:
                 "default_base_url": str(defaults.get("base_url") or ""),
                 "default_timeout": defaults.get("timeout", _DEFAULT_TIMEOUT),
                 "default_embedding_dim": defaults.get("embedding_dim"),
+                "default_embed_batch_limit": defaults.get("embed_batch_limit"),
                 "default_voice": defaults.get("voice"),
             }
         )
@@ -173,6 +175,17 @@ def _parse_provider(payload: dict[str, Any], *, existing: dict[str, Any] | None)
         if not 1 <= embedding_dim <= 65536:
             raise ValueError("向量维度需在 1-65536 之间")
         config["embedding_dim"] = embedding_dim
+
+        raw_limit = payload.get("embed_batch_limit")
+        if raw_limit in (None, ""):
+            raw_limit = option.get("default_embed_batch_limit") or _DEFAULT_EMBED_BATCH_LIMIT
+        try:
+            embed_batch_limit = int(raw_limit)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("单次批量上限格式不正确") from exc
+        if not 1 <= embed_batch_limit <= 2048:
+            raise ValueError("单次批量上限需在 1-2048 之间")
+        config["embed_batch_limit"] = embed_batch_limit
     else:
         config.pop("embedding_dim", None)
 
@@ -197,6 +210,7 @@ def _parse_provider(payload: dict[str, Any], *, existing: dict[str, Any] | None)
     merged = {**existing, **config}
     if capability != "embedding":
         merged.pop("embedding_dim", None)
+        merged.pop("embed_batch_limit", None)
     if capability != "tts":
         merged.pop("voice", None)
     return merged
@@ -224,6 +238,7 @@ async def get_ai_providers() -> dict[str, Any]:
                 "model": str(config.get("model") or ""),
                 "timeout": config.get("timeout", _DEFAULT_TIMEOUT),
                 "embedding_dim": config.get("embedding_dim"),
+                "embed_batch_limit": config.get("embed_batch_limit"),
                 "voice": config.get("voice"),
                 "has_api_key": bool(str(config.get("api_key") or "").strip()),
                 "is_default": name == default_name,

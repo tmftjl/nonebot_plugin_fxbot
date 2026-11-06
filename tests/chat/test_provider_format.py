@@ -14,6 +14,10 @@ if importlib.util.find_spec("anthropic") is None:
 
 from src.plugins.nonebot_plugin_fxbot.chat.providers.base import local_http_client
 from src.plugins.nonebot_plugin_fxbot.chat.providers.entities import LLMResponse
+from src.plugins.nonebot_plugin_fxbot.chat.providers.sources.openai import (
+    EMBED_BATCH_LIMIT,
+    OpenAIEmbeddingProvider,
+)
 from src.plugins.nonebot_plugin_fxbot.chat.providers.sources.vertex import VertexAIProvider
 from src.plugins.nonebot_plugin_fxbot.chat.providers.sources.anthropic import AnthropicProvider
 
@@ -44,6 +48,39 @@ class SystemMergeTests(unittest.TestCase):
         messages = [{"role": "user", "content": "你好"}]
         self.assertEqual(object.__new__(AnthropicProvider)._convert_to_anthropic_format(messages)[0], "")
         self.assertNotIn("systemInstruction", object.__new__(VertexAIProvider)._convert_to_vertex_format(messages))
+
+
+class EmbeddingBatchTests(unittest.IsolatedAsyncioTestCase):
+    """服务端单次输入条数上限各不相同，Provider 必须自行分批。"""
+
+    async def _embed(self, config: dict[str, object], count: int) -> tuple[list[int], list[list[float]]]:
+        provider = object.__new__(OpenAIEmbeddingProvider)
+        provider.provider_id = "embed"
+        provider.model_name = "qwen3-embedding"
+        provider.config = dict(config)
+        calls: list[int] = []
+
+        async def create(*, input: list[str], model: str) -> types.SimpleNamespace:
+            del model
+            calls.append(len(input))
+            return types.SimpleNamespace(
+                data=[types.SimpleNamespace(embedding=[float(index)]) for index in range(len(input))]
+            )
+
+        provider.client = types.SimpleNamespace(embeddings=types.SimpleNamespace(create=create))
+        vectors = await provider.embed([f"t{index}" for index in range(count)])
+        return calls, vectors
+
+    async def test_embed_uses_default_limit(self) -> None:
+        calls, vectors = await self._embed({}, 30)
+        self.assertEqual(calls, [EMBED_BATCH_LIMIT, 5])
+        self.assertEqual(vectors[0], [0.0])
+        self.assertEqual(vectors[-1], [4.0])
+
+    async def test_embed_uses_configured_limit(self) -> None:
+        calls, vectors = await self._embed({"embed_batch_limit": 10}, 30)
+        self.assertEqual(calls, [10, 10, 10])
+        self.assertEqual(len(vectors), 30)
 
 
 class LocalProxyBypassTests(unittest.IsolatedAsyncioTestCase):
