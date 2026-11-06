@@ -232,6 +232,7 @@ export interface ProviderItem {
   embedding_dim?: number | null
   embed_batch_limit?: number | null
   voice?: string | null
+  api_key?: string
   has_api_key: boolean
   is_default: boolean
 }

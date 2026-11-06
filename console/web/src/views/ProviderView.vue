@@ -444,7 +444,7 @@ const openEditDialog = (item: ProviderItem) => {
     name: item.name,
     provider_type: item.provider_type,
     type: item.type,
-    api_key: '',
+    api_key: item.api_key || '',
     base_url: item.base_url,
     model: item.model,
     timeout: item.timeout || 60,
@@ -849,16 +849,23 @@ onMounted(() => {
     <el-dialog
       v-model="dialogVisible"
       :title="editingName ? '编辑 Provider' : '添加 Provider'"
-      width="620"
+      width="560"
       align-center
     >
       <el-form :model="form" label-position="top">
-        <el-form-item label="名称">
-          <el-input v-model="form.name" :disabled="!!editingName" placeholder="例如：main" />
-          <div class="form-hint">
-            {{ editingName ? '名称创建后不可修改。' : '支持中英文、数字、下划线、点和短横线。' }}
-          </div>
-        </el-form-item>
+        <div class="form-row">
+          <el-form-item label="名称">
+            <el-input v-model="form.name" :disabled="!!editingName" placeholder="例如：main" />
+            <div class="form-hint">
+              {{ editingName ? '名称创建后不可修改。' : '中英文、数字、_ . - 均可' }}
+            </div>
+          </el-form-item>
+          <el-form-item label="接口类型">
+            <el-select v-model="form.type" style="width: 100%" @change="onTypeChange">
+              <el-option v-for="opt in availableTypeOptions" :key="opt.type" :label="opt.label" :value="opt.type" />
+            </el-select>
+          </el-form-item>
+        </div>
 
         <el-form-item label="能力">
           <el-radio-group v-model="form.provider_type" @change="onCapabilityChange">
@@ -874,33 +881,26 @@ onMounted(() => {
           </el-radio-group>
         </el-form-item>
 
-        <el-form-item label="接口类型">
-          <el-select v-model="form.type" style="width: 100%" @change="onTypeChange">
-            <el-option v-for="opt in availableTypeOptions" :key="opt.type" :label="opt.label" :value="opt.type" />
-          </el-select>
-        </el-form-item>
-
         <el-form-item label="API Key">
           <el-input
             v-model="form.api_key"
-            type="password"
-            show-password
             :placeholder="editingName ? '留空则保持原密钥不变' : 'sk-...'"
           />
         </el-form-item>
 
-        <el-form-item label="Base URL">
-          <el-input v-model="form.base_url" :placeholder="baseUrlPlaceholder" />
-          <div v-if="form.type === 'vertex'" class="form-hint">
-            Vertex 需填写到 projects/{project}/locations/{region}。
-          </div>
-        </el-form-item>
-
-        <el-form-item label="模型">
-          <el-input v-model="form.model" placeholder="例如：gpt-4o-mini" />
-        </el-form-item>
-
         <div class="form-row">
+          <el-form-item label="Base URL">
+            <el-input v-model="form.base_url" :placeholder="baseUrlPlaceholder" />
+            <div v-if="form.type === 'vertex'" class="form-hint">
+              Vertex 需填写到 projects/{project}/locations/{region}。
+            </div>
+          </el-form-item>
+          <el-form-item label="模型">
+            <el-input v-model="form.model" placeholder="例如：gpt-4o-mini" />
+          </el-form-item>
+        </div>
+
+        <div class="form-row" :class="{ 'form-row-triple': form.provider_type === 'embedding' }">
           <el-form-item label="超时时间（秒）">
             <el-input-number
               v-model="form.timeout"
@@ -927,7 +927,7 @@ onMounted(() => {
               controls-position="right"
               style="width: 100%"
             />
-            <div class="form-hint">服务端单次最多接受的文本条数，超过会被拒绝。</div>
+            <div class="form-hint">超过会被服务端拒绝。</div>
           </el-form-item>
           <el-form-item v-if="form.provider_type === 'tts'" label="音色">
             <el-input v-model="form.voice" placeholder="alloy" />
@@ -957,13 +957,7 @@ onMounted(() => {
           </el-select>
         </el-form-item>
         <el-form-item label="API Key">
-          <el-input
-            v-model="webDraft.api_key"
-            type="password"
-            show-password
-            autocomplete="new-password"
-            placeholder="粘贴服务密钥"
-          />
+          <el-input v-model="webDraft.api_key" placeholder="粘贴服务密钥" />
         </el-form-item>
         <el-form-item label="API 地址">
           <el-input v-model="webDraft.base_url" :placeholder="`${webBaseUrlPlaceholder}（留空用官方地址）`" />
@@ -1405,8 +1399,12 @@ onMounted(() => {
 
 .form-row {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
+}
+
+.form-row-triple {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .tab-swap-enter-active,

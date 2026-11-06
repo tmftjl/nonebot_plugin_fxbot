@@ -240,6 +240,7 @@ async def get_ai_providers() -> dict[str, Any]:
                 "embedding_dim": config.get("embedding_dim"),
                 "embed_batch_limit": config.get("embed_batch_limit"),
                 "voice": config.get("voice"),
+                "api_key": str(config.get("api_key") or ""),
                 "has_api_key": bool(str(config.get("api_key") or "").strip()),
                 "is_default": name == default_name,
             }
