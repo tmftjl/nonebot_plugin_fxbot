@@ -13,6 +13,7 @@ from src.plugins.nonebot_plugin_fxbot.chat.tools import file as send_file
 from src.plugins.nonebot_plugin_fxbot.chat.tools.types import ToolError, ToolContext
 from src.plugins.nonebot_plugin_fxbot.chat.tools.runtime import ToolRuntime
 from src.plugins.nonebot_plugin_fxbot.chat.tools.registry import default_registry
+from src.plugins.nonebot_plugin_fxbot.adapter.platforms.onebot11 import OneBotV11MessageAdapter
 
 
 def _runtime(event=None) -> ToolRuntime:
@@ -71,3 +72,17 @@ class SendFileToolTest(unittest.IsolatedAsyncioTestCase):
         with patch.object(send_file, "send_file_to_target", AsyncMock(side_effect=UnsupportedCapability("发送文件"))):
             with self.assertRaises(ToolError):
                 await send_file.send_file_tool(ToolContext(), _runtime(), name="a.md", content="x")
+
+
+class OneBotUploadTest(unittest.IsolatedAsyncioTestCase):
+    """文件名走 name 参数，不能和 _api 的 api 名参数撞在一起。"""
+
+    async def test_group_upload_keeps_file_name(self) -> None:
+        bot = SimpleNamespace(call_api=AsyncMock(return_value=None))
+        await OneBotV11MessageAdapter().send_file_to_target(bot, {"group_id": 123}, Path("x.md"), "x.md")
+        bot.call_api.assert_awaited_once_with("upload_group_file", group_id=123, file="x.md", name="x.md")
+
+    async def test_private_upload_keeps_file_name(self) -> None:
+        bot = SimpleNamespace(call_api=AsyncMock(return_value=None))
+        await OneBotV11MessageAdapter().send_file_to_target(bot, {"user_id": 456}, Path("x.md"), "x.md")
+        bot.call_api.assert_awaited_once_with("upload_private_file", user_id=456, file="x.md", name="x.md")

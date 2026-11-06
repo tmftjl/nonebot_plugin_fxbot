@@ -132,11 +132,11 @@ class OneBotV11MessageAdapter(PlatformAdapter):
             )
         raise RuntimeError("无法识别消息目标")
 
-    async def _api(self, bot: Bot, name: str, **kwargs: Any) -> Any:
-        method = getattr(bot, name, None)
+    async def _api(self, bot: Bot, api: str, **kwargs: Any) -> Any:
+        method = getattr(bot, api, None)
         if callable(method):
             return await method(**kwargs)
-        return await bot.call_api(name, **kwargs)
+        return await bot.call_api(api, **kwargs)
 
     async def delete_message(self, bot, message_id, *, group_id=None, user_id=None):
         return await self._api(bot, "delete_msg", message_id=message_id)
