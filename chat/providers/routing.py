@@ -12,12 +12,14 @@ from ..bindings import PROVIDER, get_binding
 
 
 def candidate_providers(task: str, session_id: str = "") -> list[str]:
-    """任务分配优先，其次会话绑定，最后使用默认 Provider。"""
+    """会话绑定优先，其次任务分配，最后使用默认 Provider。"""
     chat = get_config_manager().get_system()["chat"]
     routing = chat.get("model_routing") or {}
-    primary = str(routing.get(task) or "") or get_binding(PROVIDER, session_id)
     available = set(provider_manager.list_providers_by_type("chat"))
-    return [primary if not primary or primary in available else ""]
+    for primary in (get_binding(PROVIDER, session_id), str(routing.get(task) or "")):
+        if primary in available:
+            return [primary]
+    return [""]
 
 
 def routed_task(task: str, fallback: str = "") -> str:
@@ -81,5 +83,5 @@ class TaskProvider:
 
 
 def fallback_provider(task: str, session_id: str = "") -> TaskProvider:
-    """按任务分配及会话绑定构造单一模型上下文。"""
+    """按会话绑定、任务分配构造单一模型上下文。"""
     return TaskProvider(candidate_providers(task, session_id), task=task)

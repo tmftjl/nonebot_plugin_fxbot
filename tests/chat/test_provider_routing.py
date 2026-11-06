@@ -59,15 +59,35 @@ def _lease_factory(providers: dict[str, _Provider], used: list[str]):
 class RoutingTests(unittest.IsolatedAsyncioTestCase):
     """任务与会话选择单一模型，请求失败不切换其他 Provider。"""
 
-    def test_task_and_session_binding_select_one_provider(self) -> None:
+    def test_session_binding_wins_over_task_routing(self) -> None:
         config = _FakeConfigManager({"model_routing": {"reply": "primary"}})
         with (
             patch.object(routing, "get_config_manager", return_value=config),
             patch.object(routing, "get_binding", return_value="bound"),
             patch.object(routing.provider_manager, "list_providers_by_type", return_value=["primary", "bound"]),
         ):
-            self.assertEqual(routing.candidate_providers("reply", "own"), ["primary"])
+            self.assertEqual(routing.candidate_providers("reply", "own"), ["bound"])
             self.assertEqual(routing.candidate_providers("utils", "own"), ["bound"])
+
+    def test_task_routing_wins_over_default_without_binding(self) -> None:
+        config = _FakeConfigManager({"model_routing": {"reply": "primary"}})
+        with (
+            patch.object(routing, "get_config_manager", return_value=config),
+            patch.object(routing, "get_binding", return_value=""),
+            patch.object(routing.provider_manager, "list_providers_by_type", return_value=["primary"]),
+        ):
+            self.assertEqual(routing.candidate_providers("reply", "own"), ["primary"])
+            self.assertEqual(routing.candidate_providers("utils", "own"), [""])
+
+    def test_unavailable_binding_falls_back_to_task_routing(self) -> None:
+        config = _FakeConfigManager({"model_routing": {"reply": "primary"}})
+        with (
+            patch.object(routing, "get_config_manager", return_value=config),
+            patch.object(routing, "get_binding", return_value="removed"),
+            patch.object(routing.provider_manager, "list_providers_by_type", return_value=["primary"]),
+        ):
+            self.assertEqual(routing.candidate_providers("reply", "own"), ["primary"])
+            self.assertEqual(routing.candidate_providers("utils", "own"), [""])
 
     async def test_failed_request_does_not_lease_a_different_provider(self) -> None:
         used = []
