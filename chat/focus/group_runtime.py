@@ -17,7 +17,7 @@ from collections.abc import Callable
 from nonebot import logger
 
 from .tools import WAIT_TOOL, FocusToolRouter, _failure
-from ..hooks import ChatHookError, guard, notify, hook_context, prompt_notes
+from ..hooks import ChatHookError, ChatHookContext, guard, notify, hook_context, prompt_notes, system_prompt_sections
 from ..tools import ToolRuntime
 from ..types import ChatRequest, speaker_label
 from .context import FocusEntry, FocusCheckpointStore, closed_entry, restore_entries
@@ -658,7 +658,11 @@ class FocusGroupRuntime:
 
         chat = get_config_manager().get_system()["chat"]
         lines = [
-            focus_planner_prompt(chat.get("behavior") or {}, name=str(chat.get("persona") or DEFAULT_PERSONA)),
+            focus_planner_prompt(
+                chat.get("behavior") or {},
+                name=str(chat.get("persona") or DEFAULT_PERSONA),
+                system_sections=system_prompt_sections(ChatHookContext(self.scope_id, phase="focus_planner")),
+            ),
             "",
             "参与共享的聊天：",
         ]
@@ -684,7 +688,9 @@ class FocusGroupRuntime:
             request = member.request
             try:
                 request.metadata["bot_group_role"] = await get_bot_group_role(member.bot, request.group_id)
-                _, persona_text = build_persona_text(request, chat_cfg, behavior, hook_phase="focus_planner")
+                _, persona_text = build_persona_text(
+                    request, chat_cfg, behavior, hook_phase="focus_planner", include_system_sections=False
+                )
                 memory = await _memory_block(request, recall_query(request, []))
                 history = chat_service.session_store.get(session_id)
                 learning = await _learning_reference(request, history)

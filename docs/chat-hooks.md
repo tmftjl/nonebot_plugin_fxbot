@@ -28,13 +28,16 @@ remove_guard = register_chat_hook("tool_guard", "my_plugin", restrict_tools)
 |---|---|---|
 | `request_guard` | context, details | True/None 不干预；False 拒绝。普通 Planner、回复器生成前及 Focus 共享规划请求前检查 |
 | `persona` | context, current_name, current_text | None 或 PersonaOverride。生成本次人格前替换，不改配置、绑定或真实聊天场景 |
+| `system_prompt` | context | None 或 SystemPromptSection(text, order=100)。人格解析完成后、阶段任务规则之前插入独立系统段 |
 | `prompt` | context | None 或字符串。追加独立 user 参考，不提供可改写的聊天历史或工具协议 |
 | `tool_guard` | context, details | True/None 不干预；False 拒绝。工具候选构建、tool_search 和执行入口均检查 |
 | `reply_text` | context, text | None 保持，字符串替换；空串抑制正文。在断句、生成持久化之前执行，不处理 Planner 的思考或工具参数 |
 | `send_guard` | context, details | True/None 不干预；False 拒绝。逐段正文、附图、表情、语音及错字纠正发送前检查 |
 | `observer` | event, context, details | 返回值忽略。审计和资源清理通知，不决定流程放行 |
 
-`persona`、`prompt`、`reply_text` 必须同步，按注册顺序依次应用；禁止进行网络请求或其他阻塞操作。其他回调支持同步与异步，异步回调单次超时为 5 秒。需要长任务时由插件自行调度，并管理取消与关闭。
+`persona`、`system_prompt`、`prompt`、`reply_text` 必须同步；禁止进行网络请求或其他阻塞操作。系统段按有限数值 `order` 升序、再按注册名排序，用空行拼接；其余过滤器按注册顺序依次应用。其他回调支持同步与异步，异步回调单次超时为 5 秒。需要长任务时由插件自行调度，并管理取消与关闭。
+
+`system_prompt` 接收只读身份快照，不能修改原始人格、历史或工具声明。普通规划（含被动规划）的 phase 为 `planner`，回复为 `reply`。Focus 共享规划以 `phase="focus_planner"`、`session_id=共享组 scope_id` 的组级快照组装一次，用户、群组、平台和轮次字段留空，不借用任一成员身份；各聊天的 user 参考中不重复插入系统段。此扩展不接入独立子代理等非聊天模型调用。开关在组装时读取，不会追溯修改已经组装好的请求。
 
 每种类型按名称保持注册顺序，同名替换不改变优先级。注册返回注销函数，重复调用安全，旧函数不能注销新实现。插件在自己的停用/卸载流程调用它；核心不会推测插件开关。
 
@@ -71,7 +74,7 @@ Focus 共享规划的 request_guard 会检查所有成员，任一拒绝阻止�
 ## 错误与安全边界
 
 - 守卫拒绝优先，异常、超时和非法返回都拒绝；后续 hook 不能覆盖拒绝。
-- 人格、提示、正文过滤器异常会中止本次生成，不退回到另一种人格或未脱敏正文。
+- 人格、系统段、提示、正文过滤器异常会中止本次生成，不退回到另一种人格或未脱敏正文。
 - 通知异常只记日志，不能阻止其他订阅者和核心清理；外部任务取消不吞掉。
 - 不开放任意改写 session/user/group、发送目的地、权限结果、原始历史、数据库事务或已发送结果的 hook。
 - 不改变 A_Memorix 的会话记忆/公共知识检索语义，也不提供 shell 执行、命令确认或业务持久化。

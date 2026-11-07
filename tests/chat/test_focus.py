@@ -12,7 +12,7 @@ from pathlib import Path
 from dataclasses import replace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from src.plugins.nonebot_plugin_fxbot.chat import service as service_module
+from src.plugins.nonebot_plugin_fxbot.chat import hooks, service as service_module
 from src.plugins.nonebot_plugin_fxbot.chat.focus import (
     tools as tools_module,
     context as context_module,
@@ -71,6 +71,45 @@ def _focus_config(**values: object) -> dict[str, object]:
     }
     config.update(values)
     return config
+
+
+class FocusSystemPromptTests(unittest.IsolatedAsyncioTestCase):
+    """共享规划只贡献一次系统段，参考资料不混入系统指令。"""
+
+    async def test_shared_request_has_one_group_scoped_section(self) -> None:
+        from src.plugins.nonebot_plugin_fxbot.chat.heart_flow import prompts
+
+        seen = []
+
+        def contribute(context):
+            seen.append(context)
+            return hooks.SystemPromptSection("独立系统段", 100)
+
+        chat = {"persona": "小鱼", "behavior": {}}
+        manager = SimpleNamespace(get_system=lambda: {"chat": chat})
+        group = FocusGroupRuntime("shared-test")
+        group.members = {SESSION: _member(_request()), OTHER: _member(_request(session_id=OTHER))}
+        with (
+            patch.object(hooks, "_hooks", {}),
+            patch.object(group_runtime_module, "get_config_manager", return_value=manager),
+            patch.object(prompts, "get_persona_text", return_value="# 人格特征\n友好"),
+            patch.object(group_runtime_module, "get_bot_group_role", AsyncMock(return_value="member")),
+            patch.object(group_runtime_module, "_memory_block", AsyncMock(return_value="")),
+            patch.object(group_runtime_module, "_learning_reference", AsyncMock(return_value="")),
+            patch.object(group, "_has_unconsidered", return_value=True),
+            patch.object(group_runtime_module.chat_service.session_store, "get", return_value=[]),
+        ):
+            hooks.register_chat_hook("system_prompt", "test", contribute)
+            references = await group._build_references()
+            self.assertEqual(len(references), 2)
+            self.assertEqual(seen, [])
+            messages = group._build_messages(references)
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen[0], hooks.ChatHookContext("shared-test", phase="focus_planner"))
+        self.assertEqual(messages[0]["role"], "system")
+        self.assertEqual(messages[0]["content"].count("独立系统段"), 1)
+        self.assertNotIn("独立系统段", str(messages[1:]))
+        self.assertIn("每次工具调用必须填写非空 session_id", messages[0]["content"])
 
 
 class FocusConfigTests(unittest.TestCase):

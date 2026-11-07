@@ -22,8 +22,13 @@ class SourcePromptTests(unittest.TestCase):
         if not source.is_dir():
             self.skipTest("本地 MaiBot 对照源码未提供")
         for template in (root / "chat/prompts").glob("*.prompt"):
-            if template.stem in {"maisaka_chat", "maisaka_chat_passive", "learn_style", "learn_jargon"}:
-                # 宿主同时支持私聊与群聊，这些模板明确移除了上游的群聊场景假设。
+            if template.stem in {
+                "maisaka_chat",
+                "maisaka_chat_passive",
+                "learn_style",
+                "learn_jargon",
+            }:
+                # 普通聊天模板适配真实场景与系统段。
                 continue
             if template.name == "person_fact_writeback.prompt":
                 code = (root / "temp/MaiBot/src/services/memory_flow_service.py").read_text(encoding="utf-8")
@@ -32,8 +37,13 @@ class SourcePromptTests(unittest.TestCase):
                 self.assertEqual(template.read_text(encoding="utf-8").strip(), original.strip())
                 continue
             with self.subTest(template=template.name):
+                adapted = template.read_text(encoding="utf-8").strip()
+                if template.stem == "maisaka_chat_focus":
+                    # 独立段插在人格后；仅还原任务说明的位置及新增插槽后对比上游。
+                    identity, task, rest = adapted.replace("{system_sections}", "").split("\n\n", 2)
+                    adapted = "\n\n".join((task, identity, rest))
                 self.assertEqual(
-                    template.read_text(encoding="utf-8").strip(),
+                    adapted,
                     (source / template.name).read_text(encoding="utf-8").strip(),
                 )
 

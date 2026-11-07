@@ -83,7 +83,9 @@ def _split_sections(text: str) -> tuple[str, dict[str, str]] | None:
     return text[: headings[0].start()].strip(), sections
 
 
-def compose_persona_prompt(name: str, text: str, *, scene_prompt: str = "", planner: bool = False) -> str:
+def compose_persona_prompt(
+    name: str, text: str, *, scene_prompt: str = "", planner: bool = False, system_sections: str = ""
+) -> str:
     """从人格文件读取当前配置，使用 MaiBot 原版回复模板。"""
     from .memory.prompts import learning_prompt
 
@@ -99,7 +101,7 @@ def compose_persona_prompt(name: str, text: str, *, scene_prompt: str = "", plan
         return "\n".join([*lines, attention]).strip()
     return learning_prompt(
         "maisaka_replyer",
-        identity="\n".join(lines),
+        identity="\n".join(lines) + (f"\n\n{system_sections}" if system_sections else ""),
         reply_style=sections.get("reply_style", ""),
         group_chat_attention_block=attention,
         replyer_output_instruction=_REPLY_TAIL,

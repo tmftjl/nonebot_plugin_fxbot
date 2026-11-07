@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 from copy import deepcopy
+from math import isfinite
 from types import MappingProxyType
 from typing import Any
 from dataclasses import dataclass
@@ -14,7 +15,9 @@ from nonebot import logger
 
 HOOK_TIMEOUT_SECONDS = 5.0
 _hooks: dict[str, dict[str, Callable[..., Any]]] = {}
-_KINDS = frozenset({"request_guard", "persona", "prompt", "tool_guard", "reply_text", "send_guard", "observer"})
+_KINDS = frozenset(
+    {"request_guard", "persona", "system_prompt", "prompt", "tool_guard", "reply_text", "send_guard", "observer"}
+)
 
 
 def _snapshot(value: Any) -> Any:
@@ -49,6 +52,14 @@ class PersonaOverride:
     text: str | None = None
 
 
+@dataclass(frozen=True)
+class SystemPromptSection:
+    """人格解析后、阶段任务规则前的独立系统段，按数值及注册名排序。"""
+
+    text: str
+    order: float = 100
+
+
 class ChatHookError(RuntimeError):
     """阻止有风险的回调失败继续生成或发送。"""
 
@@ -73,7 +84,7 @@ def register_chat_hook(kind: str, name: str, callback: Callable[..., Any]) -> Ca
     """按类型和插件名称注册，稳定排序、同名替换并返回精确注销句柄。"""
     if kind not in _KINDS or not isinstance(name, str) or not name.strip() or not callable(callback):
         raise ValueError("聊天 hook 类型、名称或回调无效")
-    if kind in {"persona", "prompt", "reply_text"} and inspect.iscoroutinefunction(callback):
+    if kind in {"persona", "system_prompt", "prompt", "reply_text"} and inspect.iscoroutinefunction(callback):
         raise ValueError("人格、提示和正文过滤器必须同步")
     entries = _hooks.setdefault(kind, {})
     entries[name] = callback
@@ -145,6 +156,30 @@ def resolve_persona(context: ChatHookContext, name: str, text: str) -> tuple[str
             logger.opt(exception=True).warning(f"[ChatHook] 人格覆盖失败: {label}")
             raise ChatHookError("人格扩展失败") from exc
     return name, text
+
+
+def system_prompt_sections(context: ChatHookContext) -> str:
+    """独立解析并排序系统段，空贡献不改变原模板，失败时中止生成。"""
+    sections: list[tuple[float, str, str]] = []
+    for name, callback in tuple(_hooks.get("system_prompt", {}).items()):
+        try:
+            section = _sync(callback, context)
+            if section is None:
+                continue
+            if not isinstance(section, SystemPromptSection) or not isinstance(section.text, str):
+                raise TypeError("系统提示词 hook 必须返回 SystemPromptSection 或 None")
+            if (
+                isinstance(section.order, bool)
+                or not isinstance(section.order, (int, float))
+                or not isfinite(section.order)
+            ):
+                raise ValueError("系统提示词段 order 必须是有限数值")
+            if section.text.strip():
+                sections.append((section.order, name, section.text))
+        except Exception as exc:
+            logger.opt(exception=True).warning(f"[ChatHook] 系统提示词段失败: {name}")
+            raise ChatHookError("系统提示词扩展失败") from exc
+    return "\n\n".join(text for _, _, text in sorted(sections))
 
 
 def prompt_notes(context: ChatHookContext) -> list[str]:

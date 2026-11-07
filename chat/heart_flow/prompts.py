@@ -10,7 +10,15 @@ from ..capabilities import capabilities_config
 from ..memory.prompts import learning_prompt
 
 
-def planner_prompt(name: str, text: str, behavior: dict[str, Any], *, is_group: bool, focus: bool = False) -> str:
+def planner_prompt(
+    name: str,
+    text: str,
+    behavior: dict[str, Any],
+    *,
+    is_group: bool,
+    focus: bool = False,
+    system_sections: str = "",
+) -> str:
     """人格、行为和任务规则按宿主配置映射到上游模板参数。"""
     parsed = _split_sections(text)
     intro, sections = parsed if parsed is not None else (text, {})
@@ -58,9 +66,14 @@ def planner_prompt(name: str, text: str, behavior: dict[str, Any], *, is_group: 
         group_chat_attention_block=f"在该聊天中的注意事项：\n{attention}" if attention else "",
         query_memory_rule="\n" + query_rule,
         subagent_rule="\n" + subagent_rule if subagent_rule else "",
+        system_sections=f"\n\n{system_sections}" if system_sections else "",
     ).strip()
 
 
-def focus_planner_prompt(behavior: dict[str, Any], *, name: str = DEFAULT_PERSONA, is_group: bool = True) -> str:
+def focus_planner_prompt(
+    behavior: dict[str, Any], *, name: str = DEFAULT_PERSONA, is_group: bool = True, system_sections: str = ""
+) -> str:
     """共享 Planner 保留同一份人格和上游共享决策规则。"""
-    return planner_prompt(name, get_persona_text(name), behavior, is_group=is_group, focus=True)
+    return planner_prompt(
+        name, get_persona_text(name), behavior, is_group=is_group, focus=True, system_sections=system_sections
+    )
