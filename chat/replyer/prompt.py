@@ -312,13 +312,19 @@ def attention_drift_block(settings: Any) -> str:
     return "\n".join([_ATTENTION_DRIFT_HEADER, *rules])
 
 
-def build_persona_text(request: ChatRequest, chat_cfg: dict[str, Any], behavior: dict[str, Any]) -> tuple[str, str]:
+def build_persona_text(
+    request: ChatRequest,
+    chat_cfg: dict[str, Any],
+    behavior: dict[str, Any],
+    *,
+    hook_phase: str | None = None,
+) -> tuple[str, str]:
     """返回本轮生效的人格名与完整人格提示。"""
     persona_name = request.metadata.get("persona_name") if isinstance(request.metadata, dict) else None
     bound_persona = get_binding(PERSONA, request.session_id)
     effective_persona = str(persona_name or bound_persona or chat_cfg["persona"] or DEFAULT_PERSONA)
     effective_persona, persona_details = resolve_persona(
-        hook_context(request), effective_persona, get_persona_text(effective_persona)
+        hook_context(request, phase=hook_phase), effective_persona, get_persona_text(effective_persona)
     )
     scene_prompt = behavior.get("group_chat_prompt" if request.is_group else "private_chat_prompts")
     persona_text = compose_persona_prompt(

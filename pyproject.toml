@@ -45,4 +45,4 @@ where = [".."]
 include = ["nonebot_plugin_fxbot*"]
 
 [tool.setuptools.package-data]
-nonebot_plugin_fxbot = ["resources/**/*", "chat/prompts/*.prompt", "chat/amemorix/prompts/**/*.prompt"]
+nonebot_plugin_fxbot = ["resources/**/*", "chat/prompts/*.prompt", "chat/amemorix/prompts/**/*.prompt", "plugins/infinite_gen2/LICENSE"]

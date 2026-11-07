@@ -684,7 +684,7 @@ class FocusGroupRuntime:
             request = member.request
             try:
                 request.metadata["bot_group_role"] = await get_bot_group_role(member.bot, request.group_id)
-                _, persona_text = build_persona_text(request, chat_cfg, behavior)
+                _, persona_text = build_persona_text(request, chat_cfg, behavior, hook_phase="focus_planner")
                 memory = await _memory_block(request, recall_query(request, []))
                 history = chat_service.session_store.get(session_id)
                 learning = await _learning_reference(request, history)
