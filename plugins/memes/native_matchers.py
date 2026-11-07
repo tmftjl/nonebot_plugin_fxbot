@@ -17,7 +17,7 @@ from nonebot.rule import Rule
 from nonebot.params import CommandArg
 from nonebot.typing import T_State
 from nonebot.matcher import Matcher
-from nonebot.adapters import Event, Message, MessageSegment
+from nonebot.adapters import Bot, Event, Message, MessageSegment
 from dateutil.relativedelta import relativedelta
 
 from .plot import plot_duration_counts, plot_meme_and_duration_counts
@@ -46,7 +46,7 @@ from .recorder import (
     get_meme_generation_times,
     get_meme_generation_records,
 )
-from ...adapter import Uninfo, QryItrface, selfBot, fetch_image_bytes
+from ...adapter import Uninfo, QryItrface, selfBot, fetch_image_bytes, get_platform_adapter
 from .exception import MemeGeneratorException
 from .protection import protection_manager
 from ...permission import PermLevel, PermScene
@@ -121,8 +121,16 @@ def _match_prefix(text: str) -> Optional[str]:
     return None
 
 
+def _is_mention_segment(bot: Bot, segment: MessageSegment) -> bool:
+    """规则校验阶段无 selfBot 上下文，直接用当前事件 Bot 判定 @ 段。"""
+    try:
+        return get_platform_adapter(bot).is_mention_segment(segment)
+    except Exception:
+        return False
+
+
 def meme_trigger_rule() -> Rule:
-    async def checker(event: Event, state: T_State) -> bool:
+    async def checker(bot: Bot, event: Event, state: T_State) -> bool:
         if not _trigger_map:
             return False
 
@@ -139,7 +147,7 @@ def meme_trigger_rule() -> Rule:
         if getattr(event, "message_type", None) == 103 and getattr(event, "reply", None) is None:
             while index < len(msg) and msg[index].is_text() and not str(msg[index]).strip():
                 index += 1
-            if index < len(msg) and selfBot.adapter.is_mention_segment(msg[index]):
+            if index < len(msg) and _is_mention_segment(bot, msg[index]):
                 index += 1
         if index >= len(msg):
             return False
