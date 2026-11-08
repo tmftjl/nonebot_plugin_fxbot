@@ -21,7 +21,10 @@ FAILURE_THRESHOLD = 3
 def focus_config() -> dict[str, Any]:
     """读取 chat.focus；缺失或损坏时按关闭处理。"""
     try:
-        value = get_config_manager().get_system()["chat"].get("focus")
+        chat = get_config_manager().get_system()["chat"]
+        if chat.get("direct_llm", False):
+            return dict(_DEFAULTS)
+        value = chat.get("focus")
     except Exception:
         return dict(_DEFAULTS)
     if not isinstance(value, dict):

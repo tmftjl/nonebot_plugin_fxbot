@@ -125,6 +125,8 @@ async def _track_message(
 
 async def _prepare_image_memory(request: ChatRequest) -> None:
     """原始图片缓存只准备一次，避免等待后重新规划反复下载。"""
+    if request.metadata.get("_direct_llm"):
+        return
     if request.metadata.get("image_memory") or request.metadata.get("history_recorded"):
         return
     from ..amemorix.image_writeback import image_writeback
@@ -136,7 +138,7 @@ async def _prepare_image_memory(request: ChatRequest) -> None:
 
 async def _enqueue_image_memory(request: ChatRequest) -> None:
     """原图和原始消息均已持久化后登记可恢复的图片任务。"""
-    if not request.metadata.get("image_memory"):
+    if request.metadata.get("_direct_llm") or not request.metadata.get("image_memory"):
         return
     from ..amemorix.image_writeback import image_writeback
 
@@ -217,7 +219,7 @@ async def persist_turn_start(request: ChatRequest, content: str, epoch: int) -> 
     except Exception:
         logger.opt(exception=True).warning("[Chat] 轮次落库失败，本轮仅用内存历史")
         return None
-    if message_id is not None:
+    if message_id is not None and not request.metadata.get("_direct_llm"):
         await _track_message(
             request.session_id,
             request.platform,

@@ -499,7 +499,9 @@ def message_occurred_at(event: Any, received_at: datetime | None = None) -> date
     return occurred_at
 
 
-async def adapt_message_event(bot: Any, event: Any, *, trigger_kind: TriggerKind) -> ChatRequest:
+async def adapt_message_event(
+    bot: Any, event: Any, *, trigger_kind: TriggerKind, include_quote: bool = True
+) -> ChatRequest:
     """适配 NoneBot 消息事件。"""
     received_at = to_naive_utc(now())
     occurred_at = message_occurred_at(event, received_at)
@@ -512,11 +514,17 @@ async def adapt_message_event(bot: Any, event: Any, *, trigger_kind: TriggerKind
             segments.append(InboundSegment(type=str(seg.type), data=dict(seg.data)))
     except Exception:
         pass
-    reply, mentions, voice_text = await asyncio.gather(
-        _reply_info(bot, event),
-        collect_mentions(bot, event, group_id),
-        transcribe_event(event),
-    )
+    if include_quote:
+        reply, mentions, voice_text = await asyncio.gather(
+            _reply_info(bot, event),
+            collect_mentions(bot, event, group_id),
+            transcribe_event(event),
+        )
+    else:
+        reply = None
+        mentions, voice_text = await asyncio.gather(
+            collect_mentions(bot, event, group_id, resolve_names=False), transcribe_event(event)
+        )
     text = " ".join(part for part in (message_text(event), voice_text) if part)
     return ChatRequest(
         session_id=identity.session_id,

@@ -105,6 +105,8 @@ _PROACTIVE_ATTR = "_fxbot_proactive_pass"
 
 async def _proactive_gate(bot: Any, event: Any, *, text: str, has_image: bool, has_voice: bool = False) -> bool:
     """普通群消息只采样一次；群级开关开启时才可能转为主动回复。"""
+    if _chat_cfg().get("direct_llm", False):
+        return False
     identity = event_identity(bot, event)
     gate = default_reply_gate_registry.get(identity.session_id)
     sample = text or ("[图片]" if has_image else "[语音]" if has_voice else "")
@@ -199,6 +201,8 @@ async def _ai_fallback_rule(bot: Bot, event: Event) -> bool:
     cfg = _chat_cfg()
     if not can_reply(cfg) or _message_filtered(cfg, event):
         return False
+    if cfg.get("direct_llm", False) and getattr(event, _PROACTIVE_ATTR, False):
+        return False
     if not getattr(event, _PROACTIVE_ATTR, False) and not _match_context(cfg, bot, event):
         return False
     text = message_text(event)
@@ -234,6 +238,8 @@ ai_router = on_message(rule=Rule(_ai_fallback_rule), priority=99, block=True)
 @context_router.handle()
 async def _handle_context(bot: Bot, event: Event) -> None:
     """把群聊或私聊的上下文消息写入 AI 会话历史。"""
+    if _chat_cfg().get("direct_llm", False):
+        return
     identity = event_identity(bot, event)
     if not chat_service.session_store.mark_seen(identity.session_id, identity.dedupe_key):
         return
@@ -320,7 +326,8 @@ async def _handle_ai_fallback(bot: Bot, event: Event, matcher: Matcher) -> None:
         logger.debug("[Chat] 忽略重复投递的 AI 消息")
         return
     quote_counter(identity.session_id).record(identity.message_id or "", normalize_id(event_user_id(event)) or "")
-    emoji_module.collect_in_background(identity.session_id, event)
+    if not _chat_cfg().get("direct_llm", False):
+        emoji_module.collect_in_background(identity.session_id, event)
     if getattr(event, _PROACTIVE_ATTR, False):
         trigger_kind: TriggerKind = "proactive"
     else:
@@ -331,7 +338,10 @@ async def _handle_ai_fallback(bot: Bot, event: Event, matcher: Matcher) -> None:
     trigger_seq = chat_service.session_store.next_seq(identity.session_id, seq_owner)
     accepted_epoch = chat_service.session_store.epoch(identity.session_id)
     activity_seq = chat_service.session_store.activity(identity.session_id)
-    request = await adapt_message_event(bot, event, trigger_kind=trigger_kind)
+    if _chat_cfg().get("direct_llm", False):
+        request = await adapt_message_event(bot, event, trigger_kind=trigger_kind, include_quote=False)
+    else:
+        request = await adapt_message_event(bot, event, trigger_kind=trigger_kind)
     if await _focus_or_detach(bot, event, request, is_at=trigger_kind in {"mention", "persona", "private"}):
         # 共享组自己负责防抖、规划与发送，这里不再走普通轮次
         return
@@ -344,6 +354,12 @@ async def _handle_ai_fallback(bot: Bot, event: Event, matcher: Matcher) -> None:
     request.accepted_epoch = accepted_epoch
     request.activity_seq = activity_seq
     runtime = default_runtime_factory.create(bot=bot, event=event, matcher=matcher)
+    if _chat_cfg().get("direct_llm", False):
+        try:
+            await chat_service.process_and_send(request, runtime)
+        except Exception:
+            logger.opt(exception=True).warning("[Chat] 纯人格直聊生成或发送失败")
+        return
     await chat_service.record_group_message(
         request.session_id,
         request.user_id,

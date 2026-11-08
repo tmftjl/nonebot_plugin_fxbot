@@ -25,6 +25,7 @@ from ..config import get_manager as get_config_manager
 from .replyer import prompt, generator
 from .session import ChatSessionStore, history_limit, default_session_store
 from ..adapter import get_bot_group_role
+from .personas import get_persona_text, effective_persona_name
 from ..utils.tz import now
 from .providers import LLMResponse
 from .heart_flow import plan_flow, conversation
@@ -143,7 +144,11 @@ class ChatService:
     async def queue_message(self, request: ChatRequest, runtime: ToolRuntime | None = None) -> bool:
         """运行中的会话接收后续消息，由同一个 Planner 消费。"""
         active = self._active_requests.get(request.session_id)
-        if active is None:
+        if (
+            active is None
+            or active.metadata.get("_direct_llm")
+            or get_config_manager().get_system()["chat"].get("direct_llm", False)
+        ):
             return False
         active.metadata["planner_latest_request"] = request
         if runtime is not None:
@@ -291,13 +296,23 @@ class ChatService:
         chat_cfg = get_config_manager().get_system()["chat"]
         if not can_reply(chat_cfg):
             return ChatResponse(text="", epoch=self.session_store.epoch(request.session_id))
+        # 本轮固定模式，避免异步生成期间热更新导致提示与发送走不同分支。
+        request.metadata["_direct_llm"] = bool(chat_cfg.get("direct_llm", False))
+        if request.metadata["_direct_llm"] and (
+            is_proactive(request) or request.batched or focus_instruction is not None
+        ):
+            return ChatResponse(text="", epoch=self.session_store.epoch(request.session_id))
+        if request.metadata["_direct_llm"]:
+            request.metadata.pop("planner_loop", None)
         await self._hydrate(request.session_id, history_limit(chat_cfg, request.is_group))
         if request.accepted_epoch is None:
             request.accepted_epoch = self.session_store.epoch(request.session_id)
         if not self.is_current(request.session_id, request.accepted_epoch):
             logger.debug(f"[Chat] 清空后跳过排队轮次: session={request.session_id}")
             return ChatResponse(text="", epoch=request.accepted_epoch)
-        hook = hook_context(request, phase="planner" if focus_instruction is None else "reply")
+        hook = hook_context(
+            request, phase="planner" if focus_instruction is None and not request.metadata["_direct_llm"] else "reply"
+        )
         if not await guard("request_guard", hook, text=request.text, trigger_kind=request.trigger_kind):
             await notify("request_rejected", hook)
             return ChatResponse(text="", epoch=request.accepted_epoch)
@@ -613,7 +628,7 @@ class ChatService:
             raise
         finally:
             provider_name = providers.name if providers is not None else candidates[0]
-            if focus_instruction is not None:
+            if focus_instruction is not None or request.metadata.get("_direct_llm"):
                 state.add_stage(
                     "replyer",
                     "回复生成",
@@ -633,6 +648,85 @@ class ChatService:
                 )
                 state.saved = True
 
+    async def _direct_reply(self, request: ChatRequest, runtime: ToolRuntime | None, provider: Any) -> ChatResponse:
+        """只用人格原文、可见短期历史与当前消息调用回复模型。"""
+        chat_cfg = get_config_manager().get_system()["chat"]
+        epoch = (
+            request.accepted_epoch
+            if request.accepted_epoch is not None
+            else self.session_store.epoch(request.session_id)
+        )
+        if not self._alive(request, epoch):
+            return ChatResponse(text="", epoch=epoch)
+        name = str(
+            request.metadata.get("persona_name") or effective_persona_name(request.session_id, chat_cfg.get("persona"))
+        )
+        request.metadata["bot_name"] = name
+        request.metadata["bot_id"] = str(getattr(getattr(runtime, "bot", None), "self_id", "") or "")
+        content: str | list[dict[str, Any]] = request.text
+        if request.images:
+            content = [{"type": "text", "text": request.text}] if request.text else []
+            content.extend({"type": "image_url", "image_url": {"url": url}} for url in request.images)
+        limit = history_limit(chat_cfg, request.is_group)
+        async with self.session_store.lock(request.session_id):
+            if not self._alive(request, epoch):
+                return ChatResponse(text="", epoch=epoch)
+            # 只重放真实用户消息和已发送正文，不能把旧模式的内部规划/参考带回直聊。
+            source_ids = set(request.source_message_ids or [request.message_id or request.dedupe_key])
+            history = (
+                [
+                    {"role": item["role"], "content": item["content"]}
+                    for item in self.session_store.get(request.session_id)
+                    if item.get("role") in {"user", "assistant"}
+                    and (item.get("_sender_id") if item["role"] == "user" else item.get("_self_message"))
+                    and not item.get("_planner_internal")
+                    and not item.get("_reference")
+                    and not item.get("tool_calls")
+                    and not item.get("tool_call_id")
+                    and isinstance(item.get("content"), str)
+                    and item["content"]
+                    and not source_ids.intersection(item.get("_source_ids") or [])
+                ][-limit:]
+                if limit > 0
+                else []
+            )
+            if not request.metadata.get("history_recorded") and not request.metadata.get("history_appended"):
+                entry = {"role": "user", "content": request.text, "_sender_id": request.user_id}
+                entry.update(
+                    message_metadata(
+                        timestamp=request.occurred_at, sender_id=request.user_id, sender_name=request.user_name
+                    )
+                )
+                entry["_source_ids"] = [request.message_id or request.dedupe_key]
+                self.session_store.append(request.session_id, entry, limit=limit)
+                request.metadata["history_appended"] = True
+        messages = [
+            {"role": "system", "content": get_persona_text(name)},
+            *history,
+            {"role": "user", "content": content},
+        ]
+        persisted = await self._persist_turn_start(request, request.text, epoch)
+        if not self._alive(request, epoch):
+            await self._mark_turn_aborted(request, "生成前已失效")
+            return ChatResponse(text="", epoch=epoch)
+        response = await generator.generate(
+            self, request, runtime or ToolRuntime(), provider, messages, None, set(), epoch, limit
+        )
+        if not self._alive(request, epoch):
+            await self._mark_turn_aborted(request, "生成期间已失效")
+            return ChatResponse(text="", epoch=epoch)
+        text = response.content or ""
+        parts = [text] if text else []
+        item_ids = await self._persist_turn_end(
+            request, persisted, response, str(getattr(provider, "provider_id", "")), request.text, [], parts, text
+        )
+        result = ChatResponse(text=text, raw=response, epoch=epoch, metadata={"direct_llm": True, "reply_parts": parts})
+        if item_ids is not None:
+            result.metadata["turn_item_ids"] = item_ids
+        if persisted is not None:
+            result.metadata["turn_db_id"] = persisted[0]
+        return result
+
     async def _process_with_provider(
         self,
         request: ChatRequest,
@@ -644,6 +738,8 @@ class ChatService:
         focus_instruction: str | None = None,
     ) -> ChatResponse:
         chat_cfg = get_config_manager().get_system()["chat"]
+        if request.metadata.get("_direct_llm"):
+            return await self._direct_reply(request, runtime, provider)
         if focus_instruction is None:
             request.metadata["planner_loop"] = True
         behavior = chat_cfg.get("behavior") or {}

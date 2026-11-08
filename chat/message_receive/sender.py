@@ -449,6 +449,7 @@ async def _send_parts(
 ) -> str:
     """逐段发送；同租户发送期间不交错，任何一段失效后不再继续。"""
     send_queue = parts(response)
+    direct = bool(response.metadata.get("direct_llm"))
     if not send_queue:
         return ""
     alive = partial(_alive, service, request, response)
@@ -469,12 +470,12 @@ async def _send_parts(
                 break
             user_ids: list[str] = []
             body = part
-            if index == 0:
+            if index == 0 and not direct:
                 if request.metadata.get("planner_reply"):
                     user_ids = request.metadata.get("reply_at_users", []) if reply_at_enabled() else []
                 else:
                     user_ids, body = split_mentions(part, request)
-            typo = apply_typo(body) if session_policy(request.session_id).allow_typo else TypoText(body)
+            typo = apply_typo(body) if not direct and session_policy(request.session_id).allow_typo else TypoText(body)
             if (
                 not await guard(
                     "send_guard", hook_context(request, phase="send"), kind="text", text=typo.text, part_index=index
@@ -484,7 +485,11 @@ async def _send_parts(
                 delivery["cancelled"] = True
                 await service.mark_send_aborted(request, response, index)
                 break
-            payload = first_payload(service, request, runtime, typo.text, user_ids) if index == 0 else typo.text
+            payload = (
+                first_payload(service, request, runtime, typo.text, user_ids)
+                if index == 0 and not direct
+                else typo.text
+            )
             try:
                 receipt = await matcher.send(payload)
             except Exception as exc:
@@ -503,17 +508,18 @@ async def _send_parts(
                 quote_counter(request.session_id).record(receipt_id, _bot_id(runtime))
             sent_texts.append(typo.text)
             await notify("part_sent", hook_context(request, phase="send"), text=typo.text, part_index=index)
-            await send_voice(runtime, matcher, body, alive, context=hook_context(request, phase="send"))
+            if not direct:
+                await send_voice(runtime, matcher, body, alive, context=hook_context(request, phase="send"))
             if typo.correction:
                 await send_correction(
                     runtime, matcher, typo.correction, receipt_id, alive, context=hook_context(request, phase="send")
                 )
-        if sent_texts:
+        if sent_texts and not direct:
             if delivery.get("failed_index") is None and not delivery.get("cancelled"):
                 await send_pictures(service, request, response, runtime, matcher)
             await send_emoji(service, request, response, runtime, matcher, len(sent_texts), alive)
     reply_text = "\n".join(sent_texts)
-    if sent_texts and history_enabled(request.is_group):
+    if sent_texts and not direct and history_enabled(request.is_group):
         chat_writeback.on_reply(
             request.session_id,
             platform=request.platform,
