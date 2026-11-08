@@ -15,7 +15,7 @@ from collections.abc import Callable
 
 from nonebot import logger
 
-from .hooks import ChatHookContext, guard, notify, hook_context, filter_reply_text
+from .hooks import ChatHookContext, guard, notify, hook_context, filter_reply_text, system_prompt_sections
 from .tools import ToolRuntime, subagent as subagent_module, tool_result_store
 from .trace import TurnTrace, turn_trace
 from .types import MentionRef, ChatRequest, ChatResponse, is_proactive
@@ -649,7 +649,7 @@ class ChatService:
                 state.saved = True
 
     async def _direct_reply(self, request: ChatRequest, runtime: ToolRuntime | None, provider: Any) -> ChatResponse:
-        """只用人格原文、可见短期历史与当前消息调用回复模型。"""
+        """只用人格原文、直聊系统段、可见短期历史与当前消息调用回复模型。"""
         chat_cfg = get_config_manager().get_system()["chat"]
         epoch = (
             request.accepted_epoch
@@ -700,8 +700,12 @@ class ChatService:
                 entry["_source_ids"] = [request.message_id or request.dedupe_key]
                 self.session_store.append(request.session_id, entry, limit=limit)
                 request.metadata["history_appended"] = True
+        # 独立阶段允许插件显式参与直聊，不恢复普通回复模板与其他增强。
+        system_text = get_persona_text(name)
+        if sections := system_prompt_sections(hook_context(request, phase="direct_reply")):
+            system_text = f"{system_text}\n\n{sections}"
         messages = [
-            {"role": "system", "content": get_persona_text(name)},
+            {"role": "system", "content": system_text},
             *history,
             {"role": "user", "content": content},
         ]

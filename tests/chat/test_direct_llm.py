@@ -18,7 +18,7 @@ from src.plugins.nonebot_plugin_fxbot.config.system_defaults import SYSTEM_DEFAU
 
 
 class DirectLLMTests(unittest.IsolatedAsyncioTestCase):
-    """默认路径保持不变，直聊路径不读取任何提示增强。"""
+    """默认路径保持不变，直聊只保留显式支持直聊的插件系统段。"""
 
     def setUp(self) -> None:
         self.chat = deepcopy(SYSTEM_DEFAULTS["chat"])
@@ -57,7 +57,7 @@ class DirectLLMTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
         self.request.quoted_text = "不能注入的引用"
-        for kind in ("persona", "system_prompt", "prompt", "reply_text"):
+        for kind in ("persona", "prompt", "reply_text"):
             self.addCleanup(hooks.register_chat_hook(kind, "must-not-run", Mock(side_effect=AssertionError(kind))))
         with (
             patch.object(service_module.prompt, "build_persona_text", side_effect=AssertionError("prompt")),
@@ -87,6 +87,79 @@ class DirectLLMTests(unittest.IsolatedAsyncioTestCase):
         self.name.assert_called_once_with(self.request.session_id, self.chat["persona"])
         self.assertNotIn("planner_loop", self.request.metadata)
         self.assertEqual(self.end.await_args.args[6], [response.text])
+
+    async def test_infinite_gen2_toggle_controls_complete_direct_system_prompt(self) -> None:
+        from src.plugins.nonebot_plugin_fxbot.plugins.infinite_gen2 import integration
+
+        integration.install()
+        integration.install()
+        self.service.session_store.append_many(
+            self.request.session_id,
+            [
+                {"role": "user", "content": "上条问题", "_sender_id": "u"},
+                {"role": "assistant", "content": "上条已发回复", "_self_message": True},
+            ],
+        )
+        for enabled in (False, True, False, True):
+            with self.subTest(enabled=enabled), patch.object(integration, "is_enabled", return_value=enabled):
+                await self.service.process(self.request)
+                messages = self.provider.chat.await_args.kwargs["messages"]
+                expected_system = "# 人格特征\n原始人格"
+                if enabled:
+                    expected_system += "\n\n" + integration.PROMPT_TEXT
+                self.assertEqual(
+                    messages,
+                    [
+                        {"role": "system", "content": expected_system},
+                        {"role": "user", "content": "上条问题"},
+                        {"role": "assistant", "content": "上条已发回复"},
+                        {"role": "user", "content": self.request.text},
+                    ],
+                )
+                self.assertEqual(messages[0]["content"].count(integration.PROMPT_TEXT), int(enabled))
+                self.assertFalse(any(integration.PROMPT_TEXT in str(item) for item in messages[1:]))
+                self.assertIsNone(self.provider.chat.await_args.kwargs["tools"])
+
+    async def test_direct_system_sections_have_explicit_phase_identity_and_order(self) -> None:
+        contexts = []
+
+        def contribute(context):
+            contexts.append(context)
+            if context.phase == "direct_reply":
+                return hooks.SystemPromptSection("直聊段", order=100)
+            return None
+
+        self.addCleanup(hooks.register_chat_hook("system_prompt", "direct", contribute))
+        self.addCleanup(
+            hooks.register_chat_hook(
+                "system_prompt",
+                "reply-only",
+                lambda context: hooks.SystemPromptSection("普通回复段") if context.phase == "reply" else None,
+            )
+        )
+        self.addCleanup(
+            hooks.register_chat_hook(
+                "system_prompt",
+                "earlier",
+                lambda context: (
+                    hooks.SystemPromptSection("较早直聊段", order=0) if context.phase == "direct_reply" else None
+                ),
+            )
+        )
+        await self.service.process(self.request)
+        messages = self.provider.chat.await_args.kwargs["messages"]
+        self.assertEqual(messages[0], {"role": "system", "content": "# 人格特征\n原始人格\n\n较早直聊段\n\n直聊段"})
+        self.assertEqual(len(contexts), 1)
+        self.assertEqual(contexts[0].phase, "direct_reply")
+        self.assertEqual(contexts[0].session_id, self.request.session_id)
+        self.assertEqual(contexts[0].user_id, self.request.user_id)
+        self.assertEqual(contexts[0].turn_id, self.request.turn_id)
+
+    async def test_direct_system_section_error_stops_provider_call(self) -> None:
+        self.addCleanup(hooks.register_chat_hook("system_prompt", "broken", lambda context: "invalid"))
+        with patch.object(self.service, "_mark_turn_failed", AsyncMock()), self.assertRaises(hooks.ChatHookError):
+            await self.service.process(self.request)
+        self.provider.chat.assert_not_awaited()
 
     async def test_history_excludes_internal_unsent_and_other_session_messages(self) -> None:
         store = self.service.session_store

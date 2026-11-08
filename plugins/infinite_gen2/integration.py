@@ -11,8 +11,8 @@ PROMPT_TEXT = (Path(__file__).parents[2] / "resources" / "infinite_gen2.prompt")
 
 
 def prompt_section(context: ChatHookContext) -> SystemPromptSection | None:
-    """普通规划、共享规划和回复均按原版顺序贡献独立系统段。"""
-    if context.phase not in {"reply", "planner", "focus_planner"} or not is_enabled():
+    """普通规划、共享规划、普通回复和直聊均贡献独立系统段。"""
+    if context.phase not in {"reply", "direct_reply", "planner", "focus_planner"} or not is_enabled():
         return None
     return SystemPromptSection(text=PROMPT_TEXT, order=100)
 

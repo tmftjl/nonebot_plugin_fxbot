@@ -49,12 +49,12 @@ class InfiniteGen2Tests(unittest.TestCase):
 
     def test_only_chat_generation_phases_receive_sections(self) -> None:
         config.REG.save({"enabled": True})
-        for phase in ("reply", "planner", "focus_planner", "tool", "subagent"):
+        for phase in ("reply", "direct_reply", "planner", "focus_planner", "tool", "subagent"):
             context = hooks.ChatHookContext("test:private:user", phase=phase)
             self.assertEqual(hooks.resolve_persona(context, "人格", "原文"), ("人格", "原文"))
             self.assertEqual(
                 integration.PROMPT_TEXT in hooks.system_prompt_sections(context),
-                phase in {"reply", "planner", "focus_planner"},
+                phase in {"reply", "direct_reply", "planner", "focus_planner"},
             )
 
     def test_repeat_install_does_not_duplicate_prompt(self) -> None:
