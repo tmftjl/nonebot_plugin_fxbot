@@ -13,6 +13,7 @@ from src.plugins.nonebot_plugin_fxbot.chat.focus import manager as focus_module
 from src.plugins.nonebot_plugin_fxbot.chat.types import ChatRequest, ChatResponse
 from src.plugins.nonebot_plugin_fxbot.chat.session import ChatSessionStore
 from src.plugins.nonebot_plugin_fxbot.chat.providers import LLMResponse
+from src.plugins.nonebot_plugin_fxbot.chat.session_hooks import SessionPolicy, register_session_policy
 from src.plugins.nonebot_plugin_fxbot.chat.message_receive import sender, history
 from src.plugins.nonebot_plugin_fxbot.config.system_defaults import SYSTEM_DEFAULTS, validate_system_config
 
@@ -22,7 +23,12 @@ class DirectLLMTests(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self) -> None:
         self.chat = deepcopy(SYSTEM_DEFAULTS["chat"])
-        self.chat["direct_llm"] = True
+        self.direct = {"on": True}
+        self.addCleanup(
+            register_session_policy(
+                "direct-test", lambda session_id: SessionPolicy(direct_reply=True) if self.direct["on"] else None
+            )
+        )
         self.manager = SimpleNamespace(get_system=lambda: {"chat": self.chat})
         self.service = service_module.ChatService(ChatSessionStore())
         self.request = ChatRequest("direct:bot:private:u", "u", None, "当前消息\n第二行", "t1", "m1", "private")
@@ -295,7 +301,7 @@ class DirectLLMTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_mode_is_snapshotted_before_model_and_send(self) -> None:
         async def reload(**kwargs):
-            self.chat["direct_llm"] = False
+            self.direct["on"] = False
             return LLMResponse(content="保持原样")
 
         self.provider.chat.side_effect = reload
@@ -307,7 +313,7 @@ class DirectLLMTests(unittest.IsolatedAsyncioTestCase):
         self.service._active_requests[self.request.session_id] = active
         self.assertFalse(await self.service.queue_message(self.request))
         self.assertNotIn("planner_pending", active.metadata)
-        self.chat["direct_llm"] = False
+        self.direct["on"] = False
         active.metadata["_direct_llm"] = True
         self.assertFalse(await self.service.queue_message(self.request))
 
@@ -337,11 +343,11 @@ class DirectLLMTests(unittest.IsolatedAsyncioTestCase):
         self.chat["focus"].update(enabled=True, on_private=True)
         manager = focus_module.FocusModeManager()
         self.assertFalse(manager.is_enabled_for_request(self.request))
-        self.chat["direct_llm"] = False
+        self.direct["on"] = False
         self.assertTrue(manager.is_enabled_for_request(self.request))
 
     async def test_disabled_mode_uses_existing_provider_path(self) -> None:
-        self.chat["direct_llm"] = False
+        self.direct["on"] = False
         with patch.object(
             self.service, "_process_with_provider", AsyncMock(return_value=ChatResponse("正常"))
         ) as normal:
@@ -423,21 +429,27 @@ class DirectSendTests(unittest.IsolatedAsyncioTestCase):
 
 
 class DirectConfigTests(unittest.TestCase):
-    """旧配置兼容、布尔校验和控制台开关。"""
+    """开关由无限二代插件提供，核心只保留会话策略。"""
 
     def test_defaults_and_validation(self) -> None:
-        self.assertIs(SYSTEM_DEFAULTS["chat"]["direct_llm"], False)
+        from src.plugins.nonebot_plugin_fxbot.plugins.infinite_gen2.config import validate_config
+        from src.plugins.nonebot_plugin_fxbot.plugins.infinite_gen2.ui_schema import DEFAULTS
+
+        self.assertNotIn("direct_llm", SYSTEM_DEFAULTS["chat"])
         validate_system_config({"chat": {}})
+        self.assertIs(DEFAULTS["direct_llm"], False)
         for value in (True, False):
-            validate_system_config({"chat": {"direct_llm": value}})
+            validate_config({"direct_llm": value})
         for value in ("true", 1, None):
             with self.subTest(value=value), self.assertRaises(ValueError):
-                validate_system_config({"chat": {"direct_llm": value}})
+                validate_config({"direct_llm": value})
 
-    def test_console_exposes_switch(self) -> None:
-        from src.plugins.nonebot_plugin_fxbot.console.routes.config import _chat_config_tab
+    def test_console_exposes_switch_in_plugin_card(self) -> None:
+        from src.plugins.nonebot_plugin_fxbot.console.routes.config import _chat_config_tab, _plugin_config_tabs
 
-        card = next(card for card in _chat_config_tab()["cards"] if card["key"] == "chat")
+        chat_card = next(card for card in _chat_config_tab()["cards"] if card["key"] == "chat")
+        self.assertFalse(any(field["field"] == "direct_llm" for field in chat_card["schemas"]))
+        card = next(card for tab in _plugin_config_tabs() for card in tab["cards"] if card["key"] == "infinite_gen2")
         field = next(field for field in card["schemas"] if field["field"] == "direct_llm")
         self.assertEqual(field["component"], "Switch")
         self.assertIs(field["default"], False)
@@ -468,8 +480,8 @@ class DirectRouterTests(unittest.IsolatedAsyncioTestCase):
         identity = SimpleNamespace(session_id=request.session_id, dedupe_key="m", message_id="m")
         event = SimpleNamespace()
         runtime = object()
+        self.addCleanup(register_session_policy("direct-route", lambda session_id: SessionPolicy(direct_reply=True)))
         with (
-            patch.object(router, "_chat_cfg", return_value={"direct_llm": True}),
             patch.object(router, "event_identity", return_value=identity),
             patch.object(router, "event_user_id", return_value="u"),
             patch.object(router, "event_group_id", return_value=None),

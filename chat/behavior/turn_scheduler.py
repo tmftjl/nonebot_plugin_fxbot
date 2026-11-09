@@ -55,7 +55,7 @@ class NormalChatScheduler:
 
     async def submit(self, service: Any, request: ChatRequest, runtime: Any) -> None:
         """保存消息后唤醒会话 worker，进行中的 Planner 直接接收后续消息。"""
-        if self.stopping or not can_reply():
+        if self.stopping or not can_reply(session_id=request.session_id):
             return
         received_at = _received_at(request)
         if request.is_group:
@@ -108,7 +108,7 @@ class NormalChatScheduler:
         """一个会话只维护一条调度循环和一条生成发送链。"""
         try:
             while not self.stopping and self.chats.get(tenant) is state:
-                if not can_reply():
+                if not can_reply(session_id=tenant):
                     return
                 if state.quiet is not None:
                     quiet = state.quiet

@@ -60,7 +60,11 @@ def _receipt_id(receipt: Any) -> str | None:
 
 def _alive(service: Any, request: ChatRequest, response: ChatResponse) -> bool:
     """附加输出（语音、纠错、表情）与正文共用同一轮次令牌。"""
-    return can_reply() and service.is_current(request.session_id, response.epoch) and service.is_latest(request)
+    return (
+        can_reply(session_id=request.session_id)
+        and service.is_current(request.session_id, response.epoch)
+        and service.is_latest(request)
+    )
 
 
 def _always_alive() -> bool:

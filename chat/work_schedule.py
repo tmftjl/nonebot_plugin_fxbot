@@ -14,6 +14,7 @@ from ..utils.tz import now, as_shanghai
 from ..utils.http import get_shared_async_client
 from ..utils.cache import cache
 from ..utils.paths import data_dir
+from .session_hooks import session_policy
 
 CALENDAR_URL = "https://raw.githubusercontent.com/NateScarlet/holiday-cn/master/{year}.json"
 _DOMAIN = "chat_work_calendar"
@@ -82,15 +83,24 @@ def schedule_status(chat: dict[str, Any] | None = None, *, at: datetime | None =
     return {**result, "allowed": not off, "reason": "rest_day" if off else "working"}
 
 
-def can_reply(chat: dict[str, Any] | None = None) -> bool:
+def rest_time_exempt(session_id: str | None) -> bool:
+    """插件为该会话显式放行作息限制，例如服务器运维会话。"""
+    return bool(session_id) and session_policy(session_id).allow_rest_time
+
+
+def can_reply(chat: dict[str, Any] | None = None, *, session_id: str | None = None) -> bool:
     """手动总开关优先，日历规则不改写配置也不自动打开手动关闭的 AI。"""
     chat = get_config_manager().get_system()["chat"] if chat is None else chat
-    return bool(chat.get("enabled", True)) and bool(schedule_status(chat)["allowed"])
+    if not bool(chat.get("enabled", True)):
+        return False
+    if rest_time_exempt(session_id):
+        return True
+    return bool(schedule_status(chat)["allowed"])
 
 
-def work_life_prompt(chat: dict[str, Any]) -> str:
+def work_life_prompt(chat: dict[str, Any], *, session_id: str | None = None) -> str:
     """作息开关启用时为 Planner 和回复器提供一致的生活背景。"""
-    if not chat.get("rest_time_no_reply", False):
+    if not chat.get("rest_time_no_reply", False) or rest_time_exempt(session_id):
         return ""
     work_time = str(chat.get("work_time", "08:30-17:30"))
     return (

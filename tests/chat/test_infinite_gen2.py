@@ -7,7 +7,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from src.plugins.nonebot_plugin_fxbot.chat import hooks
+from src.plugins.nonebot_plugin_fxbot.chat import hooks, session_hooks
 from src.plugins.nonebot_plugin_fxbot.chat.types import ChatRequest
 from src.plugins.nonebot_plugin_fxbot.utils.cache import cache
 from src.plugins.nonebot_plugin_fxbot.chat.replyer import prompt
@@ -21,6 +21,7 @@ class InfiniteGen2Tests(unittest.TestCase):
 
     def setUp(self) -> None:
         self.enterContext(patch.object(hooks, "_hooks", {}))
+        self.enterContext(patch.object(session_hooks, "_policies", {}))
         directory = TemporaryDirectory(prefix="fxbot-infinite-gen2-")
         self.addCleanup(directory.cleanup)
         self.enterContext(patch.object(config.REG.storage, "_path", Path(directory.name) / "config.json"))
@@ -31,7 +32,7 @@ class InfiniteGen2Tests(unittest.TestCase):
         integration.install()
 
     def test_disabled_by_default_and_schema_matches(self) -> None:
-        self.assertEqual(config.REG.load(), {"enabled": False})
+        self.assertEqual(config.REG.load(), {"enabled": False, "direct_llm": False})
         self.assertEqual(DEFAULTS, config.REG.defaults)
         field = get_ui_schema()["cards"][0]["schemas"][0]
         self.assertEqual(field["field"], "enabled")
@@ -64,6 +65,14 @@ class InfiniteGen2Tests(unittest.TestCase):
         text = hooks.system_prompt_sections(self.context)
         self.assertEqual(text.count(integration.PROMPT_TEXT), 1)
         self.assertEqual(set(hooks._hooks), {"system_prompt"})
+        self.assertEqual(set(session_hooks._policies), {"infinite_gen2"})
+
+    def test_direct_llm_switch_drives_session_policy(self) -> None:
+        self.assertFalse(session_hooks.direct_reply_mode(self.context.session_id))
+        config.REG.save({"direct_llm": True})
+        self.assertTrue(session_hooks.direct_reply_mode(self.context.session_id))
+        config.REG.save({"direct_llm": False})
+        self.assertFalse(session_hooks.direct_reply_mode(self.context.session_id))
 
     def test_reply_and_focus_reference_use_correct_hook_phase(self) -> None:
         config.REG.save({"enabled": True})
@@ -126,10 +135,11 @@ class InfiniteGen2Tests(unittest.TestCase):
 
     def test_defaults_merge_and_invalid_toggle_is_rejected(self) -> None:
         config.REG.save({"unknown": 1})
-        self.assertEqual(config.REG.load(), {"enabled": False})
-        for value in ("false", 1, None, []):
-            with self.assertRaises(ValueError):
-                config.REG.save({"enabled": value})
+        self.assertEqual(config.REG.load(), {"enabled": False, "direct_llm": False})
+        for key in ("enabled", "direct_llm"):
+            for value in ("false", 1, None, []):
+                with self.subTest(key=key, value=value), self.assertRaises(ValueError):
+                    config.REG.save({key: value})
 
     def test_prompt_is_bundled_with_original_content(self) -> None:
         self.assertTrue(integration.PROMPT_TEXT.startswith("[MODE: UNRESTRICTED SANDBOX"))

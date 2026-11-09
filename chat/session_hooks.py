@@ -14,7 +14,7 @@ SessionResolver = Callable[[Any, Any, str], str | None]
 
 @dataclass(frozen=True)
 class SessionPolicy:
-    """会话能力与响应节奏，多个插件取交集，不改变权限和长期记忆读写。"""
+    """会话能力与响应节奏，多个插件的限制取交集；allow_rest_time、direct_reply 为放行项，任一插件声明即生效。"""
 
     allow_focus: bool = True
     allow_sharing: bool = True
@@ -22,6 +22,8 @@ class SessionPolicy:
     allow_typing: bool = True
     allow_split: bool = True
     allow_typo: bool = True
+    allow_rest_time: bool = False
+    direct_reply: bool = False
 
 
 PolicyResolver = Callable[[str], SessionPolicy | None]
@@ -80,6 +82,8 @@ def session_policy(session_id: str) -> SessionPolicy:
                     policy.allow_typing,
                     policy.allow_split,
                     policy.allow_typo,
+                    policy.allow_rest_time,
+                    policy.direct_reply,
                 )
             ):
                 raise TypeError("会话策略必须返回 SessionPolicy 或 None")
@@ -90,11 +94,18 @@ def session_policy(session_id: str) -> SessionPolicy:
                 result.allow_typing and policy.allow_typing,
                 result.allow_split and policy.allow_split,
                 result.allow_typo and policy.allow_typo,
+                result.allow_rest_time or policy.allow_rest_time,
+                result.direct_reply or policy.direct_reply,
             )
         except Exception:
             logger.opt(exception=True).error(f"[ChatSession] 会话策略失败: {name}")
             return SessionPolicy(False, False)
     return result
+
+
+def direct_reply_mode(session_id: str) -> bool:
+    """任一插件为该会话声明纯人格直聊时生效。"""
+    return session_policy(session_id).direct_reply
 
 
 def can_share_sessions(source: str, target: str) -> bool:

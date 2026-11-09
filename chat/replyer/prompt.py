@@ -351,7 +351,7 @@ def build_persona_text(
     aliases = [str(alias).strip() for alias in behavior.get("persona_aliases") or [] if str(alias).strip()]
     if aliases and (not request.metadata.get("planner_loop") or request.metadata.get("planner_reply")):
         persona_text = f"{persona_text}\n有人也这么叫你：{'、'.join(aliases)}。"
-    if routine := work_life_prompt(chat_cfg):
+    if routine := work_life_prompt(chat_cfg, session_id=request.session_id):
         persona_text = f"{persona_text}\n\n{routine}"
     if identity := group_identity_prompt(request):
         persona_text = f"{persona_text}\n\n{identity}"

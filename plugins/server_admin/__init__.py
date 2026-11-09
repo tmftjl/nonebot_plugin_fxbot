@@ -56,7 +56,7 @@ def _resolve(bot, event, base: str) -> str | None:
 
 
 def _policy(session_id: str) -> SessionPolicy | None:
-    """服务器域禁止 Focus；共享、防抖、输入状态与分段由控制台开关决定。"""
+    """服务器域禁止 Focus 且不受作息限制；共享、防抖、输入状态与分段由控制台开关决定。"""
     if not store.is_server_session(session_id):
         return None
     flags = policy_switches()
@@ -67,6 +67,7 @@ def _policy(session_id: str) -> SessionPolicy | None:
         allow_typing=flags["allow_typing"],
         allow_split=flags["allow_split"],
         allow_typo=False,
+        allow_rest_time=True,
     )
 
 

@@ -297,7 +297,8 @@ class ModeTests(unittest.IsolatedAsyncioTestCase):
         }
         with patch.object(plugin, "policy_switches", return_value=flags):
             self.assertEqual(
-                plugin._policy(SERVER), session_hooks.SessionPolicy(False, True, False, False, False, False)
+                plugin._policy(SERVER),
+                session_hooks.SessionPolicy(False, True, False, False, False, False, allow_rest_time=True),
             )
         request = ChatRequest(SERVER, "admin", None, "hi", "turn", "msg", "private")
         context = hooks.hook_context(request)
@@ -423,7 +424,21 @@ class PolicySwitchTests(unittest.TestCase):
             "allow_split": True,
         }
         with patch.object(plugin, "policy_switches", return_value=flags):
-            self.assertEqual(plugin._policy(SERVER), session_hooks.SessionPolicy(False, True, True, True, True, False))
+            self.assertEqual(
+                plugin._policy(SERVER),
+                session_hooks.SessionPolicy(False, True, True, True, True, False, allow_rest_time=True),
+            )
+
+    def test_server_session_ignores_rest_time(self) -> None:
+        from src.plugins.nonebot_plugin_fxbot.chat import work_schedule
+
+        flags = {"allow_sharing": True, "allow_debounce": True, "allow_typing": True, "allow_split": True}
+        with (
+            patch.object(plugin, "policy_switches", return_value=flags),
+            patch.object(work_schedule, "schedule_status", return_value={"allowed": False}),
+        ):
+            self.assertTrue(work_schedule.can_reply({"enabled": True}, session_id=SERVER))
+            self.assertFalse(work_schedule.can_reply({"enabled": True}, session_id=BASE))
 
 
 class ExecutorTests(unittest.IsolatedAsyncioTestCase):

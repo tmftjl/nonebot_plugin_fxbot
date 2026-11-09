@@ -300,18 +300,6 @@ def _all_config_tab() -> dict[str, Any]:
                         "componentProps": {"options": personas},
                     },
                     {
-                        "field": "direct_llm",
-                        "label": "纯人格直聊",
-                        "component": "Switch",
-                        "default": SYSTEM_DEFAULTS["chat"]["direct_llm"],
-                        "helpMessage": (
-                            "将人格原文、短期对话历史和本条消息直接发给回复模型；无限二代开启时仍注入其系统段。"
-                            "不带长期记忆、工具或框架任务提示词，跳过 Planner/Focus、分段、错字、语音及表情补发。"
-                            "历史条数沿用群聊/私聊上下文配置，设为 0 则不带历史。"
-                            "群聊仅响应 @ 或人格名触发，权限和发送校验仍生效。"
-                        ),
-                    },
-                    {
                         "field": "provider",
                         "label": "默认 Provider",
                         "component": "Select",

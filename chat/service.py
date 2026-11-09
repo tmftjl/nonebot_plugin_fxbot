@@ -30,7 +30,7 @@ from ..utils.tz import now
 from .providers import LLMResponse
 from .heart_flow import plan_flow, conversation
 from .memory.inject import learning_context
-from .session_hooks import session_policy
+from .session_hooks import session_policy, direct_reply_mode
 from .work_schedule import can_reply
 from .behavior.quote import forget_counter
 from .amemorix.inject import memory_block
@@ -144,11 +144,7 @@ class ChatService:
     async def queue_message(self, request: ChatRequest, runtime: ToolRuntime | None = None) -> bool:
         """运行中的会话接收后续消息，由同一个 Planner 消费。"""
         active = self._active_requests.get(request.session_id)
-        if (
-            active is None
-            or active.metadata.get("_direct_llm")
-            or get_config_manager().get_system()["chat"].get("direct_llm", False)
-        ):
+        if active is None or active.metadata.get("_direct_llm") or direct_reply_mode(request.session_id):
             return False
         active.metadata["planner_latest_request"] = request
         if runtime is not None:
@@ -241,7 +237,7 @@ class ChatService:
         epoch = request.accepted_epoch or 0
         deadline = time.monotonic() + seconds
         while True:
-            if not can_reply():
+            if not can_reply(session_id=request.session_id):
                 return False
             if not self._alive(request, epoch):
                 await self._mark_turn_aborted(request, "等待期间被新触发取代")
@@ -294,10 +290,10 @@ class ChatService:
     ) -> ChatResponse:
         """调用方已持有轮次锁。"""
         chat_cfg = get_config_manager().get_system()["chat"]
-        if not can_reply(chat_cfg):
+        if not can_reply(chat_cfg, session_id=request.session_id):
             return ChatResponse(text="", epoch=self.session_store.epoch(request.session_id))
         # 本轮固定模式，避免异步生成期间热更新导致提示与发送走不同分支。
-        request.metadata["_direct_llm"] = bool(chat_cfg.get("direct_llm", False))
+        request.metadata["_direct_llm"] = direct_reply_mode(request.session_id)
         if request.metadata["_direct_llm"] and (
             is_proactive(request) or request.batched or focus_instruction is not None
         ):

@@ -30,6 +30,7 @@ from ..adapter import (
 )
 from .personas import effective_persona_name
 from .tool_runtime import default_runtime_factory
+from .session_hooks import direct_reply_mode
 from .work_schedule import can_reply
 from .behavior.quote import quote_counter
 from .message_adapter import (
@@ -105,9 +106,9 @@ _PROACTIVE_ATTR = "_fxbot_proactive_pass"
 
 async def _proactive_gate(bot: Any, event: Any, *, text: str, has_image: bool, has_voice: bool = False) -> bool:
     """普通群消息只采样一次；群级开关开启时才可能转为主动回复。"""
-    if _chat_cfg().get("direct_llm", False):
-        return False
     identity = event_identity(bot, event)
+    if direct_reply_mode(identity.session_id):
+        return False
     gate = default_reply_gate_registry.get(identity.session_id)
     sample = text or ("[图片]" if has_image else "[语音]" if has_voice else "")
     has_at_bot, at_other = mention_flags(bot, event)
@@ -199,9 +200,10 @@ async def _ai_fallback_rule(bot: Bot, event: Event) -> bool:
     if not should_process_fxbot_message(bot, event):
         return False
     cfg = _chat_cfg()
-    if not can_reply(cfg) or _message_filtered(cfg, event):
+    session_id = session_id_for_event(bot, event)
+    if not can_reply(cfg, session_id=session_id) or _message_filtered(cfg, event):
         return False
-    if cfg.get("direct_llm", False) and getattr(event, _PROACTIVE_ATTR, False):
+    if direct_reply_mode(session_id) and getattr(event, _PROACTIVE_ATTR, False):
         return False
     if not getattr(event, _PROACTIVE_ATTR, False) and not _match_context(cfg, bot, event):
         return False
@@ -238,9 +240,9 @@ ai_router = on_message(rule=Rule(_ai_fallback_rule), priority=99, block=True)
 @context_router.handle()
 async def _handle_context(bot: Bot, event: Event) -> None:
     """把群聊或私聊的上下文消息写入 AI 会话历史。"""
-    if _chat_cfg().get("direct_llm", False):
-        return
     identity = event_identity(bot, event)
+    if direct_reply_mode(identity.session_id):
+        return
     if not chat_service.session_store.mark_seen(identity.session_id, identity.dedupe_key):
         return
     quote_counter(identity.session_id).record(identity.message_id or "", normalize_id(event_user_id(event)) or "")
@@ -274,7 +276,7 @@ async def _handle_context(bot: Bot, event: Event) -> None:
         sender_role=event_sender_role(bot, event),
         quote_snapshot=await read_quote_snapshot(bot, event),
     )
-    if not can_reply(_chat_cfg()):
+    if not can_reply(_chat_cfg(), session_id=identity.session_id):
         return
     if focus_mode_manager.enabled() or focus_mode_manager.attached(identity.session_id):
         focus_request = await adapt_message_event(bot, event, trigger_kind="mention")
@@ -322,11 +324,12 @@ async def _focus_or_detach(bot: Bot, event: Event, request: ChatRequest, *, is_a
 async def _handle_ai_fallback(bot: Bot, event: Event, matcher: Matcher) -> None:
     """处理 AI 兜底消息；首个触发消息等完防抖窗口后统一生成一轮。"""
     identity = event_identity(bot, event)
+    direct = direct_reply_mode(identity.session_id)
     if not chat_service.session_store.mark_seen(identity.session_id, identity.dedupe_key):
         logger.debug("[Chat] 忽略重复投递的 AI 消息")
         return
     quote_counter(identity.session_id).record(identity.message_id or "", normalize_id(event_user_id(event)) or "")
-    if not _chat_cfg().get("direct_llm", False):
+    if not direct:
         emoji_module.collect_in_background(identity.session_id, event)
     if getattr(event, _PROACTIVE_ATTR, False):
         trigger_kind: TriggerKind = "proactive"
@@ -338,7 +341,7 @@ async def _handle_ai_fallback(bot: Bot, event: Event, matcher: Matcher) -> None:
     trigger_seq = chat_service.session_store.next_seq(identity.session_id, seq_owner)
     accepted_epoch = chat_service.session_store.epoch(identity.session_id)
     activity_seq = chat_service.session_store.activity(identity.session_id)
-    if _chat_cfg().get("direct_llm", False):
+    if direct:
         request = await adapt_message_event(bot, event, trigger_kind=trigger_kind, include_quote=False)
     else:
         request = await adapt_message_event(bot, event, trigger_kind=trigger_kind)
@@ -354,7 +357,7 @@ async def _handle_ai_fallback(bot: Bot, event: Event, matcher: Matcher) -> None:
     request.accepted_epoch = accepted_epoch
     request.activity_seq = activity_seq
     runtime = default_runtime_factory.create(bot=bot, event=event, matcher=matcher)
-    if _chat_cfg().get("direct_llm", False):
+    if direct:
         try:
             await chat_service.process_and_send(request, runtime)
         except Exception:

@@ -125,7 +125,7 @@ async def interruptible_step(service: Any, context: Any, provider: Any, messages
     """新消息到达时取消规划并重建上下文；清空会话时终止。"""
     request = context.request
     while service.is_current(request.session_id, context.epoch):
-        if not can_reply():
+        if not can_reply(session_id=request.session_id):
             return None
         version = service.session_store.activity(request.session_id)
         request.metadata["passive_reply_target"] = next(
@@ -141,7 +141,9 @@ async def interruptible_step(service: Any, context: Any, provider: Any, messages
         try:
             while not task.done():
                 done, _ = await asyncio.wait({task}, timeout=0.1)
-                if not service.is_current(request.session_id, context.epoch) or not can_reply():
+                if not service.is_current(request.session_id, context.epoch) or not can_reply(
+                    session_id=request.session_id
+                ):
                     return None
                 if steering and service.session_store.activity(request.session_id) != version:
                     break
@@ -356,7 +358,9 @@ async def run(service: Any, context: Any) -> ChatResponse:
 
     async with fallback_provider("planner", request.session_id) as provider:
         for round_index in range(MAX_INTERNAL_ROUNDS):
-            if not service.is_current(request.session_id, context.epoch) or not can_reply():
+            if not service.is_current(request.session_id, context.epoch) or not can_reply(
+                session_id=request.session_id
+            ):
                 break
             await finish_cycle()
             if request.metadata.pop("planner_pending", False) or round_index > 0:
@@ -438,7 +442,7 @@ async def run(service: Any, context: Any) -> ChatResponse:
                         stopped
                         or pause is not None
                         or not service.is_current(request.session_id, context.epoch)
-                        or not can_reply()
+                        or not can_reply(session_id=request.session_id)
                     ):
                         result = {"ok": False, "error": "本轮已暂停或结束，工具未执行"}
                     elif name == "reply" and not passive:

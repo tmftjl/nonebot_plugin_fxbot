@@ -33,7 +33,6 @@ SYSTEM_DEFAULTS = {
         "private_allowlist": [],
         "group_allowlist": [],
         "persona": "小鱼",
-        "direct_llm": False,
         "provider": "",
         "providers": {},
         "max_context_size": 30,
@@ -251,8 +250,6 @@ def validate_system_config(data: dict[str, Any]) -> None:
         raise ValueError("chat 必须是对象")
     if not isinstance(chat.get("rest_time_no_reply", False), bool):
         raise ValueError("chat.rest_time_no_reply 必须是布尔值")
-    if not isinstance(chat.get("direct_llm", False), bool):
-        raise ValueError("chat.direct_llm 必须是布尔值")
     work_time = chat.get("work_time", "08:30-17:30")
     if not isinstance(work_time, str) or not re.fullmatch(
         r"(?:[01]\d|2[0-3]):[0-5]\d-(?:[01]\d|2[0-3]):[0-5]\d", work_time

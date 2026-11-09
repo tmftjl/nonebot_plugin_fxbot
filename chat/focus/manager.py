@@ -12,7 +12,7 @@ from nonebot import logger
 from .context import FocusCheckpointStore
 from ...config import get_manager as get_config_manager
 from .group_runtime import FocusMember, FocusGroupRuntime
-from ..session_hooks import session_policy
+from ..session_hooks import session_policy, direct_reply_mode
 
 _DEFAULTS: dict[str, Any] = {"enabled": False, "on_private": False, "chat_whitelist": [], "groups": []}
 FAILURE_THRESHOLD = 3
@@ -22,8 +22,6 @@ def focus_config() -> dict[str, Any]:
     """读取 chat.focus；缺失或损坏时按关闭处理。"""
     try:
         chat = get_config_manager().get_system()["chat"]
-        if chat.get("direct_llm", False):
-            return dict(_DEFAULTS)
         value = chat.get("focus")
     except Exception:
         return dict(_DEFAULTS)
@@ -92,7 +90,7 @@ class FocusModeManager:
 
     def is_enabled_for_request(self, request: Any) -> bool:
         """Focus 是否接管这条消息所在的聊天。"""
-        if not session_policy(request.session_id).allow_focus:
+        if not session_policy(request.session_id).allow_focus or direct_reply_mode(request.session_id):
             return False
         cfg = focus_config()
         if not cfg["enabled"]:

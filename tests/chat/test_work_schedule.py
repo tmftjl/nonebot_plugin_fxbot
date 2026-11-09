@@ -19,6 +19,7 @@ from src.plugins.nonebot_plugin_fxbot.chat.service import ChatService
 from src.plugins.nonebot_plugin_fxbot.chat.session import ChatSessionStore
 from src.plugins.nonebot_plugin_fxbot.chat.behavior import turn_scheduler
 from src.plugins.nonebot_plugin_fxbot.chat.heart_flow import conversation
+from src.plugins.nonebot_plugin_fxbot.chat.session_hooks import SessionPolicy, register_session_policy
 from src.plugins.nonebot_plugin_fxbot.chat.message_receive import sender
 from src.plugins.nonebot_plugin_fxbot.config.system_defaults import validate_system_config
 from src.plugins.nonebot_plugin_fxbot.chat.focus.group_runtime import FocusEntry, FocusGroupRuntime
@@ -94,6 +95,26 @@ class WorkTimeTests(unittest.TestCase):
             chat["rest_time_no_reply"] = False
             chat["enabled"] = False
             self.assertFalse(schedule.can_reply())
+
+    def test_exempt_session_replies_outside_work_time(self) -> None:
+        unregister = register_session_policy(
+            "test-exempt", lambda sid: SessionPolicy(allow_rest_time=True) if sid == "server" else None
+        )
+        self.addCleanup(unregister)
+        with patch.object(schedule, "schedule_status", return_value={"allowed": False}) as status:
+            self.assertFalse(schedule.can_reply(config()))
+            self.assertFalse(schedule.can_reply(config(), session_id="normal"))
+            self.assertTrue(schedule.can_reply(config(), session_id="server"))
+        self.assertEqual(status.call_count, 2)
+        self.assertFalse(schedule.can_reply(config(enabled=False), session_id="server"))
+
+    def test_exempt_session_omits_work_life_prompt(self) -> None:
+        unregister = register_session_policy(
+            "test-exempt-prompt", lambda sid: SessionPolicy(allow_rest_time=True) if sid == "server" else None
+        )
+        self.addCleanup(unregister)
+        self.assertEqual(schedule.work_life_prompt(config(), session_id="server"), "")
+        self.assertNotEqual(schedule.work_life_prompt(config(), session_id="normal"), "")
 
     def test_console_exposes_exact_requested_fields(self) -> None:
         from src.plugins.nonebot_plugin_fxbot.console.routes.config import _chat_config_tab
@@ -248,6 +269,29 @@ class SchedulePipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(response.text)
         process.assert_not_awaited()
 
+    async def test_scheduler_rest_check_receives_session_id(self) -> None:
+        scheduler = turn_scheduler.NormalChatScheduler()
+        service = SimpleNamespace(queue_message=AsyncMock(return_value=True))
+        request = ChatRequest("tenant", "user", "group", "你好", "turn", "msg", "mention")
+        with patch.object(turn_scheduler, "can_reply", return_value=True) as check:
+            await scheduler.submit(service, request, None)
+        self.assertEqual(check.call_args.kwargs["session_id"], "tenant")
+
+        state = turn_scheduler.ScheduledChat(service=service, runtime=None)
+        scheduler.chats["tenant"] = state
+        with patch.object(turn_scheduler, "can_reply", return_value=False) as check:
+            await scheduler._run("tenant", state)
+        self.assertEqual(check.call_args.kwargs["session_id"], "tenant")
+
+    async def test_service_rest_check_receives_session_id(self) -> None:
+        from src.plugins.nonebot_plugin_fxbot.chat import service as service_module
+
+        service = ChatService(ChatSessionStore())
+        request = ChatRequest("tenant", "user", None, "你好", "turn", "msg", "private")
+        with patch.object(service_module, "can_reply", return_value=False) as check:
+            await service._process_locked(request, None)
+        self.assertEqual(check.call_args.kwargs["session_id"], "tenant")
+
     async def test_planning_is_cancelled_when_work_time_ends(self) -> None:
         opened = True
         started = asyncio.Event()
@@ -265,7 +309,7 @@ class SchedulePipelineTests(unittest.IsolatedAsyncioTestCase):
         request = ChatRequest("tenant", "user", "group", "你好", "turn", "msg", "mention")
         context = SimpleNamespace(request=request, epoch=0)
         with (
-            patch.object(conversation, "can_reply", side_effect=lambda: opened),
+            patch.object(conversation, "can_reply", side_effect=lambda *args, **kwargs: opened),
             patch.object(conversation, "request_step", model),
         ):
             task = asyncio.create_task(conversation.interruptible_step(service, context, object(), [], []))
