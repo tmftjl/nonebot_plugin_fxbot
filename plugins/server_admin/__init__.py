@@ -1,4 +1,4 @@
-"""超级用户私聊的独立服务器会话及本机 shell 运维工具。"""
+"""超级用户的独立服务器会话及本机 shell 运维工具，私聊与群聊前缀共用同一会话。"""
 
 from __future__ import annotations
 
@@ -14,27 +14,38 @@ from nonebot.matcher import Matcher
 from nonebot.adapters import Bot, Event
 
 from . import store
-from .access import actor_base, owner_allowed, plugin_enabled, execution_allowed
+from .access import (
+    actor_base,
+    owner_allowed,
+    plugin_enabled,
+    group_actor_base,
+    mark_group_event,
+    execution_allowed,
+    owner_allowed_group,
+)
 from .config import blocked_reason, policy_switches, auto_run_commands, skip_confirmation
 from ...plugin import Plugin
 from .executor import audit, executor
-from ...adapter import event_user_id, event_plain_text
+from ...adapter import normalize_id, event_user_id, event_plain_text
 from ...chat.hooks import register_chat_hook
 from ...chat.tools import ToolError, ToolContext, ToolRuntime, tool
 from ...permission import PermLevel, PermScene, is_superuser
 from ...utils.paths import data_dir, config_dir, startup_marker_path
+from ...chat.service import chat_service
+from ...chat.tool_runtime import default_runtime_factory
 from ...chat.session_hooks import SessionPolicy, register_session_policy, register_session_resolver
-from ...chat.message_adapter import event_identity
+from ...chat.message_adapter import event_identity, adapt_message_event
 
 __plugin_meta__ = PluginMetadata(
     name="服务器运维",
-    description="超级用户私聊的独立服务器运维会话，执行 Bot 进程权限内的 shell 命令。",
-    usage="#服务器模式 / #聊天模式；危险命令确认时像平时一样回话即可。",
+    description="超级用户的独立服务器运维会话，执行 Bot 进程权限内的 shell 命令；私聊与群聊共用同一会话。",
+    usage="#服务器模式 / #聊天模式（私聊）；群聊用 #服务器模式# 接对话；危险命令确认时像平时一样回话即可。",
     type="application",
 )
 
 P = Plugin("server_admin", display_name="服务器运维", enabled=True, level=PermLevel.SUPERUSER, scene=PermScene.PRIVATE)
 _COMMAND = re.compile(r"^[#＃](服务器模式|聊天模式)\s*$")
+_GROUP_COMMAND = re.compile(r"^[#＃]服务器模式[#＃]\s*")
 
 
 def _resolve(bot, event, base: str) -> str | None:
@@ -64,8 +75,7 @@ def _guard(context, details):
     del details
     if store.is_server_session(context.session_id):
         return (
-            context.group_id is None
-            and bool(context.user_id)
+            bool(context.user_id)
             and plugin_enabled()
             and is_superuser(context.user_id)
             and store.enabled(context.session_id)
@@ -119,12 +129,12 @@ def _prompt(context) -> str | None:
         return None
     if skip_confirmation():
         note = (
-            "这是服务器运维私聊。命令用 server_exec 执行，未结束用 job_id 查，别重复提交。"
+            "这是服务器运维会话。命令用 server_exec 执行，未结束用 job_id 查，别重复提交。"
             "全部命令免确认已开启：直接执行，破坏性操作先讲清影响。被禁用规则拒绝就如实说，别绕过。"
         )
     else:
         note = (
-            "这是服务器运维私聊。命令用 server_exec 执行，未结束用 job_id 查，别重复提交。"
+            "这是服务器运维会话。命令用 server_exec 执行，未结束用 job_id 查，别重复提交。"
             "需要确认的命令先展示，对方明确同意后再调 server_confirm，否则 cancel。"
             "被禁用规则拒绝就如实说，别绕过。"
         )
@@ -221,13 +231,74 @@ async def _handle(bot: Bot, event: Event, matcher: Matcher) -> None:
         await matcher.finish(message)
 
 
+async def _group_rule(bot: Bot, event: Event) -> bool:
+    """只接受群聊里由超级用户触发的前缀。"""
+    return owner_allowed_group(bot, event)
+
+
+group_cmd = P.on_regex(
+    r"^[#＃]服务器模式[#＃]",
+    name="group_mode",
+    display_name="群聊服务器模式",
+    level=PermLevel.SUPERUSER,
+    scene=PermScene.GROUP,
+    rule=Rule(_group_rule),
+    priority=3,
+    block=True,
+)
+
+
+async def handle_group_turn(bot: Bot, event: Event, matcher: Matcher) -> str:
+    """把群里的前缀消息投进同一私聊服务器会话，回复仍发回本群。"""
+    if not owner_allowed_group(bot, event):
+        return ""
+    text = _GROUP_COMMAND.sub("", event_plain_text(event).strip(), count=1).strip()
+    if not text:
+        return "请在 #服务器模式# 后输入内容"
+    base = group_actor_base(bot, event)
+    session_id = store.server_session(base)
+    if not store.enabled(session_id):
+        return "服务器会话未开启，请先在私聊发送 #服务器模式"
+    identity = event_identity(bot, event)
+    if not chat_service.session_store.mark_seen(session_id, identity.dedupe_key):
+        return ""
+    await chat_service.ensure_hydrated(session_id, is_group=False)
+    owner = normalize_id(event_user_id(event)) or ""
+    request = await adapt_message_event(bot, event, trigger_kind="private")
+    # 会话共用私聊域：历史、人格和记忆都按私聊服务器会话处理，只是发送目标仍是本群。
+    request.session_id = session_id
+    request.group_id = None
+    request.text = text
+    request.trigger_seq = chat_service.session_store.next_seq(session_id, owner)
+    request.trigger_owner = owner
+    request.accepted_epoch = chat_service.session_store.epoch(session_id)
+    request.activity_seq = chat_service.session_store.activity(session_id)
+    mark_group_event(event)
+    runtime = default_runtime_factory.create(bot=bot, event=event, matcher=matcher)
+    await chat_service.process_and_send(request, runtime)
+    return ""
+
+
+@group_cmd.handle()
+async def _handle_group(bot: Bot, event: Event, matcher: Matcher) -> None:
+    """群聊入口，故障只留日志。"""
+    try:
+        message = await handle_group_turn(bot, event, matcher)
+    except Exception:
+        logger.opt(exception=True).warning("[ServerAdmin] 群聊服务器命令失败")
+        await matcher.finish()
+        return
+    if message:
+        await matcher.finish(message)
+
+
 @tool(
     name="server_exec",
     permission="server_admin:mode",
     title="服务器命令",
     deferred=True,
     description=(
-        "在服务器运维私聊中执行任意本机 shell 命令。提交 command 执行；任务未结束时用 job_id 查询，"
+        "在服务器运维会话中执行任意本机 shell 命令。提交 command 执行；任务未结束时用 job_id 查询，"
         "或 cancel=true 取消。危险命令会先把完整命令展示给对方，对方明确同意后再调用 server_confirm。"
         "完成后总结结果，不直接复制日志，不向用户展示 job_id 或工具名。"
     ),
@@ -244,14 +315,14 @@ async def _handle(bot: Bot, event: Event, matcher: Matcher) -> None:
 async def server_exec(
     context: ToolContext, runtime: ToolRuntime, command: str = "", cwd: str = "", job_id: str = "", cancel: bool = False
 ) -> dict:
-    """工具本身校验真实私聊、超级用户、插件开关、派生会话及调用者身份。"""
+    """工具本身校验真实入口（私聊或群聊前缀）、超级用户、插件开关、派生会话及调用者身份。"""
 
     def authorize() -> bool:
         """运行中沿用真实事件身份，重新读取当前权限及开关。"""
         return execution_allowed(context.session_id, runtime.bot, runtime.event, context.user_id, context.group_id)
 
     if not context.user_id or not authorize():
-        raise ToolError("仅允许超级用户在已开启的服务器私聊会话使用", code="server_admin_denied")
+        raise ToolError("仅允许超级用户在已开启的服务器会话使用", code="server_admin_denied")
     try:
         if cancel:
             return {"cancelled": executor.cancel(context.session_id)}
@@ -283,7 +354,7 @@ async def server_exec(
             # 确认必须让真人先看到精确执行内容，不能只依赖模型转述。
             if runtime.matcher is None:
                 executor.cancel(context.session_id)
-                raise ToolError("当前缺少私聊确认通道")
+                raise ToolError("当前缺少确认通道")
             try:
                 await runtime.matcher.send(_describe(result))
                 executor.presented(context.session_id, result["job_id"], _message_key(runtime))
@@ -303,7 +374,7 @@ async def server_exec(
     permission="server_admin:mode",
     title="确认服务器命令",
     description=(
-        "对方在私聊里明确同意执行当前待确认命令后调用，无参数。"
+        "对方在会话里明确同意执行当前待确认命令后调用，无参数。"
         "只有明确的同意才算（例如“行”“跑吧”“确认”）；提问、犹豫、沉默、含糊都不算，不能替对方决定。"
         "调用后命令立即执行并返回结果，直接向对方汇报。"
     ),
@@ -314,7 +385,7 @@ async def server_confirm(context: ToolContext, runtime: ToolRuntime) -> dict:
     if not context.user_id or not execution_allowed(
         context.session_id, runtime.bot, runtime.event, context.user_id, context.group_id
     ):
-        raise ToolError("仅允许超级用户在已开启的服务器私聊会话使用", code="server_admin_denied")
+        raise ToolError("仅允许超级用户在已开启的服务器会话使用", code="server_admin_denied")
     reply = event_plain_text(runtime.event).strip()
     try:
         result = executor.confirm(context.session_id, _message_key(runtime), reply)

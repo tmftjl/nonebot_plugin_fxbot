@@ -46,7 +46,7 @@ def permissions():
         "sub_plugins": {
             "server_admin": {
                 "top": {"enabled": True},
-                "commands": {"mode": {"enabled": True}},
+                "commands": {"mode": {"enabled": True}, "group_mode": {"enabled": True}},
             }
         },
     }
@@ -89,6 +89,18 @@ class AccessTests(unittest.TestCase):
         with patch.object(access, "enabled", return_value=False):
             self.assertFalse(access.execution_allowed(SERVER, bot(), event(), "admin"))
         self.assertFalse(access.execution_allowed(SERVER, bot(), None, "admin"))
+
+    def test_marked_group_event_reuses_the_same_private_server_session(self) -> None:
+        marked = event("#服务器模式# ls", group="group")
+        access.mark_group_event(marked)
+        self.assertTrue(access.execution_allowed(SERVER, bot(), marked, "admin"))
+        self.assertFalse(access.execution_allowed(SERVER, bot(), event(group="group"), "admin"))
+        self.assertFalse(access.execution_allowed(SERVER, bot(), marked, "other"))
+        self.assertFalse(access.execution_allowed(BASE, bot(), marked, "admin"))
+        with patch.object(access, "enabled", return_value=False):
+            self.assertFalse(access.execution_allowed(SERVER, bot(), marked, "admin"))
+        with patch.object(access, "is_superuser", return_value=False):
+            self.assertFalse(access.execution_allowed(SERVER, bot(), marked, "admin"))
 
     def test_robot_admin_is_not_superuser_even_with_permission_whitelists(self) -> None:
         with (
@@ -211,6 +223,68 @@ class ModeTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(await plugin._rule(bot(), event("#服务器模式")))
         with patch.object(plugin, "owner_allowed", return_value=True):
             self.assertTrue(await plugin._rule(bot(), event("#服务器模式")))
+
+    async def test_group_prefix_requires_enabled_server_session(self) -> None:
+        with (
+            patch.object(plugin, "owner_allowed_group", return_value=True),
+            patch.object(plugin, "group_actor_base", return_value=BASE),
+            patch.object(plugin.store, "enabled", return_value=False),
+        ):
+            self.assertIn(
+                "未开启",
+                await plugin.handle_group_turn(bot(), event("#服务器模式# ls", group="group"), SimpleNamespace()),
+            )
+        with patch.object(plugin, "owner_allowed_group", return_value=True):
+            self.assertIn(
+                "输入内容",
+                await plugin.handle_group_turn(bot(), event("#服务器模式#  ", group="group"), SimpleNamespace()),
+            )
+
+    async def test_group_prefix_routes_into_private_server_session(self) -> None:
+        store_events = SimpleNamespace(
+            mark_seen=Mock(return_value=True),
+            next_seq=Mock(return_value=1),
+            epoch=Mock(return_value=0),
+            activity=Mock(return_value=1),
+        )
+        service = SimpleNamespace(
+            session_store=store_events,
+            ensure_hydrated=AsyncMock(),
+            process_and_send=AsyncMock(),
+        )
+        request = ChatRequest("onebot11:bot:group:group", "admin", "group", "#服务器模式# ls", "t", "k", "private")
+        with (
+            patch.object(plugin, "owner_allowed_group", return_value=True),
+            patch.object(plugin, "group_actor_base", return_value=BASE),
+            patch.object(plugin.store, "enabled", return_value=True),
+            patch.object(plugin, "chat_service", service),
+            patch.object(plugin, "event_identity", return_value=SimpleNamespace(dedupe_key="msg:1")),
+            patch.object(plugin, "adapt_message_event", AsyncMock(return_value=request)),
+            patch.object(plugin.default_runtime_factory, "create", return_value="runtime"),
+            patch.object(plugin, "mark_group_event") as mark,
+        ):
+            self.assertEqual(
+                await plugin.handle_group_turn(bot(), event("#服务器模式# ls", group="group"), "matcher"), ""
+            )
+        self.assertEqual(request.session_id, SERVER)
+        self.assertIsNone(request.group_id)
+        self.assertEqual(request.text, "ls")
+        self.assertEqual(request.trigger_kind, "private")
+        mark.assert_called_once()
+        service.process_and_send.assert_awaited_once_with(request, "runtime")
+
+    def test_guard_accepts_private_and_group_entry_sessions(self) -> None:
+        store.set_mode(BASE, True)
+        private = hooks.ChatHookContext(SERVER, user_id="admin")
+        group = hooks.ChatHookContext(SERVER, user_id="admin", group_id="group")
+        with (
+            patch.object(plugin, "plugin_enabled", return_value=True),
+            patch.object(plugin, "is_superuser", return_value=True),
+        ):
+            self.assertTrue(plugin._guard(private, {}))
+            self.assertTrue(plugin._guard(group, {}))
+        with patch.object(plugin, "is_superuser", return_value=False):
+            self.assertFalse(plugin._guard(group, {}))
 
     def test_hooks_route_and_protect_disabled_server_sessions(self) -> None:
         store.set_mode(BASE, True)
