@@ -36,7 +36,7 @@ from ...permission.message_policy import should_process_fxbot_message
 
 _CONFIG_FILE = data_dir("group_admin") / "join_verify.json"
 _CONFIG_KEY = ("join_verify", "configs")
-_TIMEOUT = 60
+_TIMEOUT = 180
 _ATTEMPTS = 2
 _KICK = True
 _SWEEP_INTERVAL = 3.0
@@ -275,7 +275,7 @@ async def _handle_answer(bot: Bot, event: Event, matcher: Matcher) -> None:
         return
     answer = "".join(str(event_plain_text(event) or "").translate(_FULLWIDTH_DIGITS).split())
     if not answer:
-        await _notify(bot, record.group_id, record.user_id, "请在60s内回复图中的 4 位数字")
+        await _notify(bot, record.group_id, record.user_id, f"请在 {_TIMEOUT} 秒内回复图中的 4 位数字")
         return
     if answer == record.code:
         _pending.pop(key, None)
