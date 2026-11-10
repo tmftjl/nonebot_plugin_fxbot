@@ -1,11 +1,14 @@
 <!-- -*- coding: utf-8 -*- -->
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Refresh } from '@element-plus/icons-vue'
+import { ArrowDown, ChatLineRound, Check, Clock, Collection, Connection, Refresh, Setting } from '@element-plus/icons-vue'
+import MetricCard from '@/components/MetricCard.vue'
 import PageHeader from '@/components/PageHeader.vue'
 import PillTabs from '@/components/PillTabs.vue'
 import ChatTenantPicker from '@/components/ChatTenantPicker.vue'
+import ModelTraceBrowser from '@/components/ModelTraceBrowser.vue'
+import ModelTraceDetail from '@/components/ModelTraceDetail.vue'
 import { chatApi } from '@/api'
 import type {
   ChatTenant,
@@ -28,7 +31,7 @@ const tabs = [
   { key: 'planner', label: '规划样本', hint: 'Planner 首轮动作' },
   { key: 'gate', label: '主动接话门控', hint: 'reply 概率与窗口' },
   { key: 'trace', label: '轮次追踪', hint: '每轮注入与耗时' },
-  { key: 'snapshot', label: '模型快照', hint: '完整 prompt 与输出' },
+  { key: 'snapshot', label: '思考过程', hint: '按阶段阅读输出、思考与调用链' },
 ] as const
 
 type TabKey = (typeof tabs)[number]['key']
@@ -78,25 +81,23 @@ const emptySessionForm = () => ({ persona: '', provider: '', talkOverride: false
 const sessionSettings = ref<ChatSessionSettings | null>(null)
 const sessionLoading = ref(false)
 const sessionSaving = ref(false)
+const settingsOpen = ref(false)
 const sessionForm = ref(emptySessionForm())
 const sessionDigest = ref<ChatSessionDigest | null>(null)
 const digestLoading = ref(false)
 const recentMessages = ref<ChatRecentMessage[]>([])
 const messagesLoading = ref(false)
+const messageList = ref<HTMLElement | null>(null)
 let sessionRequest = 0
 
 const RECORD_PAGE_SIZE = 20
 const plannerPage = ref(1)
 const tracePage = ref(1)
-const snapshotPage = ref(1)
 const plannerRows = computed(() =>
   plannerSamples.value.slice((plannerPage.value - 1) * RECORD_PAGE_SIZE, plannerPage.value * RECORD_PAGE_SIZE),
 )
 const traceRows = computed(() =>
   traces.value.slice((tracePage.value - 1) * RECORD_PAGE_SIZE, tracePage.value * RECORD_PAGE_SIZE),
-)
-const snapshotRows = computed(() =>
-  modelTraces.value.slice((snapshotPage.value - 1) * RECORD_PAGE_SIZE, snapshotPage.value * RECORD_PAGE_SIZE),
 )
 
 const currentTenant = computed(() => tenants.value.find((item) => item.tenant === tenant.value) || null)
@@ -112,7 +113,8 @@ const tenantParts = computed(() => {
 })
 const latestTrace = computed(() => traces.value[0] || null)
 const latestSnapshot = computed(() => modelTraces.value[0] || null)
-const latestStages = computed(() => (latestTrace.value ? traceStages(latestTrace.value) : []))
+const expressionCursor = computed(() => sessionDigest.value?.cursors.expression || null)
+const jargonCursor = computed(() => sessionDigest.value?.cursors.jargon || null)
 
 const percentText = (value: number | null | undefined) => `${Math.round(Number(value ?? 0) * 100)}%`
 const sessionSwitchText = computed(() => {
@@ -122,6 +124,15 @@ const sessionSwitchText = computed(() => {
 const hasSessionOverrides = computed(() => {
   const settings = sessionSettings.value
   return !!settings && (!!settings.persona.bound || !!settings.provider.bound || settings.talk_value.bound !== null)
+})
+const sessionDirty = computed(() => {
+  const settings = sessionSettings.value
+  if (!settings) return false
+  return sessionForm.value.persona !== settings.persona.bound
+    || sessionForm.value.provider !== settings.provider.bound
+    || sessionForm.value.talkOverride !== (settings.talk_value.bound !== null)
+    || (sessionForm.value.talkOverride
+      && sessionForm.value.talkValue !== Math.round((settings.talk_value.bound ?? 0) * 100))
 })
 
 const digestState = computed(() => sessionDigest.value?.state || null)
@@ -235,7 +246,12 @@ const loadRecentMessages = async () => {
   messagesLoading.value = true
   try {
     const result = await chatApi.listMessages(target)
-    if (tenant.value === target) recentMessages.value = result.items || []
+    if (tenant.value === target) {
+      recentMessages.value = result.items || []
+      // 列表按时间正序，最新消息在底部；加载后滚动到底部，避免停在旧消息上
+      await nextTick()
+      if (messageList.value) messageList.value.scrollTop = messageList.value.scrollHeight
+    }
   } catch (error) {
     console.error('加载最近对话失败', error)
     if (tenant.value === target) recentMessages.value = []
@@ -449,7 +465,6 @@ const loadModelTraces = async () => {
     const result = await chatApi.listModelTraces(target)
     if (target !== tenant.value) return
     modelTraces.value = result.items || []
-    snapshotPage.value = 1
   } catch (error) {
     console.error('加载模型快照失败', error)
     ElMessage.error('加载模型快照失败，请重试')
@@ -458,76 +473,27 @@ const loadModelTraces = async () => {
   }
 }
 
+let snapshotRequest = 0
 const openSnapshot = async (row: ChatModelTrace) => {
+  const request = ++snapshotRequest
+  const target = tenant.value
   snapshotDialog.value = true
   snapshotLoading.value = true
   snapshotDetail.value = null
-  snapshotOpen.value = ['request', 'output', 'attempts']
   try {
     const result = await chatApi.getModelTrace(row.path)
-    snapshotDetail.value = result.snapshot
-    const outputs = snapshotReasoning.value
-    const hasReasoning = outputs.some((item: SnapshotRecord) => item?.type === 'reasoning' && item.text)
-    snapshotOpen.value = hasReasoning
-      ? ['reasoning', 'request', 'output', 'attempts']
-      : ['request', 'output', 'attempts']
+    if (request === snapshotRequest && target === tenant.value) snapshotDetail.value = result.snapshot
   } catch (error) {
     console.error('读取模型快照失败', error)
-    ElMessage.error('读取模型快照失败，请重试')
-    snapshotDialog.value = false
+    if (request === snapshotRequest && target === tenant.value) {
+      ElMessage.error('读取模型快照失败，请重试')
+      snapshotDialog.value = false
+    }
   } finally {
-    snapshotLoading.value = false
+    if (request === snapshotRequest) snapshotLoading.value = false
   }
 }
 
-const snapshotText = computed(() =>
-  snapshotDetail.value ? JSON.stringify(snapshotDetail.value, null, 2) : '',
-)
-const snapshotOpen = ref<string[]>(['request', 'output', 'attempts'])
-type SnapshotRecord = Record<string, any>
-const snapshotRowsOf = (name: string): SnapshotRecord[] => {
-  const value = snapshotDetail.value?.[name]
-  return Array.isArray(value) ? value : []
-}
-const snapshotMeta = computed(() => {
-  const detail = snapshotDetail.value
-  if (!detail) return []
-  const meta = (detail.metadata || {}) as SnapshotRecord
-  const attempts = snapshotRowsOf('generation_attempts')
-  const last = (attempts[attempts.length - 1] || {}) as SnapshotRecord
-  const tokens = [meta.prompt_tokens, meta.completion_tokens, meta.total_tokens]
-  return [
-    { label: '提供方', value: meta.provider || '—' },
-    { label: '模型', value: meta.model_name || '—' },
-    { label: '耗时', value: `${meta.duration_ms ?? 0} ms` },
-    { label: 'Token', value: tokens.every((value) => value === undefined) ? '—' : tokens.map((v) => v ?? 0).join(' / ') },
-    { label: '会话', value: meta.session_id || '—' },
-    { label: '轮次', value: meta.turn_id || '—' },
-    { label: '类型', value: meta.task || detail.request?.kind || '—' },
-    { label: '结果', value: last.status === 'failed' ? '失败' : last.status ? '完成' : '—' },
-  ]
-})
-const snapshotAttempts = computed(() => snapshotRowsOf('generation_attempts'))
-const snapshotRequests = computed(() => snapshotRowsOf('request_items'))
-const snapshotOutputs = computed(() => snapshotRowsOf('output_items'))
-const snapshotReasoning = computed(() =>
-  snapshotAttempts.value.flatMap((attempt) => Array.isArray(attempt.output_items) ? attempt.output_items : [])
-    .filter((item: SnapshotRecord) => item.type === 'reasoning' && String(item.text || '').trim()),
-)
-const snapshotTools = computed(() => snapshotRowsOf('tool_definitions'))
-const snapshotItemText = (item: SnapshotRecord) => {
-  if (typeof item.text === 'string') return item.text
-  if (item.type === 'function_call') return `${item.name || 'tool'}(${item.arguments || ''})`
-  if (typeof item.content === 'string') return item.content
-  return JSON.stringify(item, null, 2)
-}
-
-const formatBytes = (value: number) => {
-  const size = Number(value || 0)
-  if (size < 1024) return `${size} B`
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
-  return `${(size / 1024 / 1024).toFixed(1)} MB`
-}
 
 const refreshOverview = () =>
   Promise.all([loadTraces(), loadModelTraces(), loadRecentMessages(), loadSessionDigest()])
@@ -547,6 +513,10 @@ const refresh = async () => {
 }
 
 const onTenantChange = async () => {
+  snapshotRequest++
+  snapshotDialog.value = false
+  snapshotDetail.value = null
+  snapshotLoading.value = false
   sessionDigest.value = null
   recentMessages.value = []
   modelTraces.value = []
@@ -567,9 +537,9 @@ onMounted(() => {
 
 <template>
   <div class="chat-reply-view">
-    <PageHeader title="接话与运行" subtitle="按会话查看身份、配置与最近思考，并调整人格、Provider 与回复频率">
+    <PageHeader title="接话与运行" subtitle="观察对话，了解思考，调整每个会话的回应方式。">
       <template #actions>
-        <el-button :icon="Refresh" :loading="healthLoading" @click="refresh">刷新</el-button>
+        <el-button :icon="Refresh" :loading="healthLoading" @click="refresh">刷新数据</el-button>
       </template>
     </PageHeader>
 
@@ -579,29 +549,44 @@ onMounted(() => {
           <span class="session-eyebrow">当前会话</span>
           <ChatTenantPicker v-model="tenant" :tenants="tenants" @change="onTenantChange" />
         </div>
-        <div v-if="sessionSettings" class="session-tags">
-          <el-tag effect="plain" size="small">人格 · {{ sessionSettings.persona.effective }}</el-tag>
-          <el-tag effect="plain" size="small" type="info">
-            Provider · {{ sessionSettings.provider.effective || '未指定' }}
-          </el-tag>
-          <el-tag effect="plain" size="small" type="success">
-            频率 · {{ percentText(sessionSettings.talk_value.effective) }}
-          </el-tag>
+        <div class="session-controls">
+          <span v-if="sessionDirty" class="unsaved-mark">有未保存的修改</span>
+          <el-button
+            v-if="tenant"
+            :icon="Setting"
+            :type="settingsOpen ? 'primary' : 'default'"
+            :plain="settingsOpen"
+            :aria-expanded="settingsOpen"
+            aria-controls="session-settings"
+            @click="settingsOpen = !settingsOpen"
+          >
+            会话设置 <el-icon class="settings-chevron" :class="{ expanded: settingsOpen }"><ArrowDown /></el-icon>
+          </el-button>
         </div>
       </div>
 
-      <div v-if="tenant" class="session-facts">
-        <span>{{ tenantParts.scene }}</span>
-        <span>{{ tenantParts.platform }}</span>
-        <span v-if="tenantParts.bot">Bot {{ tenantParts.bot }}</span>
-        <span>{{ currentTenant?.messages ?? 0 }} 条消息</span>
-        <span>学习 {{ currentTenant?.learn_count ?? 0 }} · 使用 {{ currentTenant?.use_count ?? 0 }}</span>
-        <span>主动接话 {{ sessionSwitchText }}</span>
-        <code class="tenant-id">{{ tenant }}</code>
+      <div v-if="tenant" class="session-summary">
+        <div class="summary-item">
+          <span>人格</span><strong>{{ sessionSettings?.persona.effective || '—' }}</strong>
+        </div>
+        <div class="summary-item">
+          <span>模型</span><strong :title="sessionSettings?.provider.effective">{{ sessionSettings?.provider.effective || '未指定' }}</strong>
+        </div>
+        <div class="summary-item">
+          <span>回复频率</span><strong>{{ percentText(sessionSettings?.talk_value.effective) }}</strong>
+        </div>
+        <div class="summary-item">
+          <span>主动接话</span><strong>{{ sessionSwitchText }}</strong>
+        </div>
       </div>
       <div v-else class="tenant-help">选择会话后可查看详情并设置本会话的人格、Provider 与回复频率。</div>
 
-      <div v-if="tenant" class="session-settings">
+      <div v-if="tenant" v-show="settingsOpen" id="session-settings" class="session-editor">
+      <div class="editor-heading">
+        <div><h3>调整会话设置</h3><p>仅影响当前会话，未覆盖的选项继续跟随全局。</p></div>
+        <span v-if="sessionDirty" class="unsaved-mark">尚未保存</span>
+      </div>
+      <div class="session-settings">
         <div class="setting-field">
           <div class="setting-label-row">
             <label>人格</label>
@@ -627,7 +612,7 @@ onMounted(() => {
 
         <div class="setting-field">
           <div class="setting-label-row">
-            <label>Provider</label>
+            <label>模型提供方</label>
             <el-tag v-if="sessionForm.provider" size="small" type="warning">仅本会话</el-tag>
           </div>
           <el-select v-model="sessionForm.provider" placeholder="跟随路由与默认">
@@ -675,232 +660,202 @@ onMounted(() => {
           </span>
         </div>
 
+      </div>
+      <div class="editor-footer">
+        <p>切换人格会清空短期历史，学习记录和长期记忆不受影响。</p>
         <div class="setting-actions">
-          <el-button type="primary" :loading="sessionSaving" :disabled="sessionLoading || !sessionSettings" @click="saveSessionSettings">保存设置</el-button>
-          <el-button :loading="sessionSaving" :disabled="sessionLoading || !hasSessionOverrides" @click="resetSessionSettings">
-            恢复全局
-          </el-button>
+          <el-button :loading="sessionSaving" :disabled="sessionLoading || !hasSessionOverrides" @click="resetSessionSettings">恢复全局</el-button>
+          <el-button type="primary" :icon="Check" :loading="sessionSaving" :disabled="sessionLoading || !sessionSettings || !sessionDirty" @click="saveSessionSettings">保存修改</el-button>
         </div>
       </div>
-
-      <div class="tenant-help">
-        Provider 与回复频率保存后立即生效；人格切换会清空本会话短期历史，学习与长期记忆不受影响。
       </div>
     </div>
 
-    <div class="panel health-panel">
-      <div class="panel-header">
-        <h3 class="panel-title">运行状态</h3>
-        <el-button :icon="Refresh" :loading="healthLoading" @click="loadHealth">刷新</el-button>
-      </div>
-      <div class="meta-grid">
-        <span>
-          对话
-          <el-tag :type="health?.enabled ? 'success' : 'info'" size="small">
-            {{ health?.enabled ? '已启用' : '未启用' }}
-          </el-tag>
-        </span>
-        <span>
-          聊天存储
-          <el-tag :type="health?.storage_ready ? 'success' : 'danger'" size="small">
-            {{ health?.storage_ready ? '就绪' : '未就绪' }}
-          </el-tag>
-        </span>
-        <span>
-          调度器
-          <el-tag :type="health?.scheduler_ready ? 'success' : 'warning'" size="small">
-            {{ health?.scheduler_ready ? '运行中' : '未加载' }}
-          </el-tag>
-        </span>
-        <span>在线 Bot：{{ health?.online_bots ?? 0 }}</span>
-        <span v-if="health?.degraded_reason">降级：{{ health.degraded_reason }}</span>
-      </div>
+    <div class="runtime-bar" aria-label="运行状态">
+      <span class="runtime-label"><el-icon><Connection /></el-icon>运行状态</span>
+      <span class="runtime-chip" :class="{ ok: health?.enabled }">
+        <i />{{ health ? (health.enabled ? '对话已启用' : '对话未启用') : '对话状态未知' }}
+      </span>
+      <span class="runtime-chip" :class="{ ok: health?.storage_ready }">
+        <i />{{ health ? (health.storage_ready ? '存储就绪' : '存储未就绪') : '存储状态未知' }}
+      </span>
+      <span class="runtime-chip" :class="{ ok: health?.scheduler_ready }">
+        <i />{{ health ? (health.scheduler_ready ? '调度运行中' : '调度未加载') : '调度状态未知' }}
+      </span>
+      <span class="runtime-chip"><i class="is-info" />{{ health?.online_bots ?? '—' }} 个 Bot 在线</span>
+      <span v-if="health?.degraded_reason" class="runtime-error">{{ health.degraded_reason }}</span>
     </div>
 
     <PillTabs v-if="loaded" v-model="activeTab" :items="tabs" class="reply-tabs" />
 
     <Transition name="tab-swap" mode="out-in">
       <div :key="activeTab" class="tab-stack">
-        <div v-if="activeTab === 'overview'" class="panel overview-panel">
-          <div class="panel-header">
-            <h3 class="panel-title">会话详情</h3>
-            <el-button :icon="Refresh" :loading="traceLoading || modelTraceLoading" @click="refreshOverview">
-              刷新
-            </el-button>
+        <div v-if="activeTab === 'overview'" class="overview-panel">
+          <div v-if="tenant" class="overview-metrics">
+            <MetricCard
+              label="会话消息"
+              :value="currentTenant?.messages ?? 0"
+              hint="当前保留的对话记录"
+              :icon="ChatLineRound"
+            />
+            <MetricCard
+              label="已发送轮次"
+              :value="`${turnCounts.sent} / ${turnCounts.total}`"
+              :hint="turnCounts.issues ? `${turnCounts.issues} 轮需要关注` : '暂无异常轮次'"
+              :icon="Check"
+              :tone="turnCounts.issues ? 'warning' : 'success'"
+            />
+            <MetricCard
+              label="最近模型耗时"
+              :value="latestSnapshot ? `${(latestSnapshot.duration_ms / 1000).toFixed(1)} s` : '—'"
+              :hint="latestSnapshot?.model_name || '等待首次模型调用'"
+              :icon="Clock"
+              tone="info"
+            />
+            <MetricCard
+              label="学习资产"
+              :value="jargonCount + (sessionDigest?.expressions.total ?? 0)"
+              :hint="`黑话 ${jargonCount} · 表达 ${sessionDigest?.expressions.total ?? 0}`"
+              :icon="Collection"
+            />
           </div>
-          <div class="tenant-help">当前会话的身份、生效配置，以及最近一轮对话与最近一次模型调用。</div>
 
-          <div class="overview-grid">
-            <section class="overview-card">
-              <h4 class="overview-title">会话身份</h4>
-              <dl class="detail-list">
-                <div>
-                  <dt>场景</dt>
-                  <dd>{{ tenantParts.scene }} · {{ tenantParts.platform }}</dd>
+          <div v-if="!tenant" class="overview-placeholder">
+            <el-icon><ChatLineRound /></el-icon>
+            <p>先选择一个会话，查看最近对话、学习资产与模型思考。</p>
+          </div>
+
+          <div v-if="tenant" class="overview-grid">
+            <section class="overview-card facts-card">
+              <div class="facts-grid">
+                <div class="facts-column">
+                  <h4 class="overview-title">会话身份</h4>
+                  <dl class="detail-list">
+                    <div>
+                      <dt>场景</dt>
+                      <dd>{{ tenantParts.scene }} · {{ tenantParts.platform }}</dd>
+                    </div>
+                    <div v-if="tenantParts.bot">
+                      <dt>Bot</dt>
+                      <dd>{{ tenantParts.bot }}</dd>
+                    </div>
+                    <div>
+                      <dt>最近活跃</dt>
+                      <dd>{{ formatTime(digestState?.last_active_at) }}</dd>
+                    </div>
+                    <div>
+                      <dt>清空</dt>
+                      <dd>
+                        {{ digestState?.generation ? `${digestState.generation} 次` : '未清空' }}
+                        <span v-if="digestState?.cleared_at">· 上次 {{ formatTime(digestState.cleared_at) }}</span>
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>学习 / 使用</dt>
+                      <dd>{{ currentTenant?.learn_count ?? 0 }} / {{ currentTenant?.use_count ?? 0 }}</dd>
+                    </div>
+                    <div>
+                      <dt>完整 ID</dt>
+                      <dd><code class="tenant-id">{{ tenant || '未选择' }}</code></dd>
+                    </div>
+                  </dl>
                 </div>
-                <div v-if="tenantParts.bot">
-                  <dt>Bot</dt>
-                  <dd>{{ tenantParts.bot }}</dd>
+
+                <div class="facts-column">
+                  <h4 class="overview-title">学习资产</h4>
+                  <dl class="detail-list">
+                    <div>
+                      <dt>群风格</dt>
+                      <dd>
+                        <template v-if="sessionDigest?.style">
+                          v{{ sessionDigest.style.version }} · 规则 {{ sessionDigest.style.rules }} ·
+                          示例 {{ sessionDigest.style.examples }} · 已用 {{ sessionDigest.style.use_count }} 次
+                        </template>
+                        <span v-else class="asset-empty">未学习</span>
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>风格摘要</dt>
+                      <dd class="asset-summary">{{ sessionDigest?.style?.summary || '—' }}</dd>
+                    </div>
+                    <div>
+                      <dt>黑话</dt>
+                      <dd>
+                        共 {{ jargonCount }} 条 · 生效 {{ sessionDigest?.jargon.active ?? 0 }}
+                        <template v-if="sessionDigest?.jargon.pending">
+                          · 待审 {{ sessionDigest.jargon.pending }}
+                        </template>
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>表达</dt>
+                      <dd>
+                        共 {{ sessionDigest?.expressions.total ?? 0 }} 条 · 已确认
+                        {{ sessionDigest?.expressions.checked ?? 0 }} · 已排除
+                        {{ sessionDigest?.expressions.rejected ?? 0 }}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>表情包</dt>
+                      <dd>
+                        启用 {{ sessionDigest?.emoji.enabled ?? 0 }} / 共 {{ sessionDigest?.emoji.total ?? 0 }}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>学习游标</dt>
+                      <dd v-if="expressionCursor || jargonCursor">
+                        表达落后 {{ expressionCursor?.backlog ?? '—' }} 条
+                        <template v-if="expressionCursor?.fail_count">（失败 {{ expressionCursor.fail_count }}）</template>
+                        · 黑话落后 {{ jargonCursor?.backlog ?? '—' }} 条
+                        <template v-if="jargonCursor?.fail_count">（失败 {{ jargonCursor.fail_count }}）</template>
+                      </dd>
+                      <dd v-else class="asset-empty">尚未建立游标</dd>
+                    </div>
+                  </dl>
                 </div>
-                <div>
-                  <dt>消息</dt>
-                  <dd>{{ currentTenant?.messages ?? 0 }} 条</dd>
-                </div>
-                <div>
-                  <dt>学习 / 使用</dt>
-                  <dd>{{ currentTenant?.learn_count ?? 0 }} / {{ currentTenant?.use_count ?? 0 }}</dd>
-                </div>
-                <div>
-                  <dt>最近活跃</dt>
-                  <dd>{{ formatTime(digestState?.last_active_at) }}</dd>
-                </div>
-                <div>
-                  <dt>轮次</dt>
-                  <dd>
-                    共 {{ turnCounts.total }} 轮 · 已发 {{ turnCounts.sent }}
-                    <span v-if="turnCounts.issues" class="overview-error">· 异常 {{ turnCounts.issues }}</span>
-                  </dd>
-                </div>
-                <div>
-                  <dt>清空</dt>
-                  <dd>
-                    {{ digestState?.generation ? `${digestState.generation} 次` : '未清空' }}
-                    <span v-if="digestState?.cleared_at">· 上次 {{ formatTime(digestState.cleared_at) }}</span>
-                  </dd>
-                </div>
-                <div>
-                  <dt>完整 ID</dt>
-                  <dd><code class="tenant-id">{{ tenant || '未选择' }}</code></dd>
-                </div>
-              </dl>
+              </div>
             </section>
 
-            <section class="overview-card">
-              <h4 class="overview-title">本会话配置</h4>
-              <dl class="detail-list">
-                <div>
-                  <dt>人格</dt>
-                  <dd>
-                    {{ sessionSettings?.persona.effective || '—' }}
-                    <el-tag v-if="sessionSettings?.persona.bound" size="small" type="warning">会话</el-tag>
-                  </dd>
-                </div>
-                <div>
-                  <dt>Provider</dt>
-                  <dd>
-                    {{ sessionSettings?.provider.effective || '未指定' }}
-                    <el-tag v-if="sessionSettings?.provider.bound" size="small" type="warning">会话</el-tag>
-                  </dd>
-                </div>
-                <div>
-                  <dt>回复频率</dt>
-                  <dd>
-                    {{ percentText(sessionSettings?.talk_value.effective) }}
-                    <el-tag
-                      v-if="sessionSettings && sessionSettings.talk_value.bound !== null"
-                      size="small"
-                      type="warning"
-                    >
-                      会话
-                    </el-tag>
-                  </dd>
-                </div>
-                <div>
-                  <dt>主动接话</dt>
-                  <dd>{{ sessionSwitchText }}</dd>
-                </div>
-              </dl>
-            </section>
-
-            <section class="overview-card overview-wide">
-              <h4 class="overview-title">学习资产</h4>
-              <dl class="detail-list overview-assets">
-                <div>
-                  <dt>群风格</dt>
-                  <dd>
-                    <template v-if="sessionDigest?.style">
-                      v{{ sessionDigest.style.version }} · 规则 {{ sessionDigest.style.rules }} ·
-                      示例 {{ sessionDigest.style.examples }} · 已用 {{ sessionDigest.style.use_count }} 次
-                    </template>
-                    <span v-else class="asset-empty">未学习</span>
-                  </dd>
-                </div>
-                <div>
-                  <dt>风格摘要</dt>
-                  <dd class="asset-summary">{{ sessionDigest?.style?.summary || '—' }}</dd>
-                </div>
-                <div>
-                  <dt>黑话</dt>
-                  <dd>
-                    共 {{ jargonCount }} 条 · 生效 {{ sessionDigest?.jargon.active ?? 0 }}
-                    <template v-if="sessionDigest?.jargon.pending">
-                      · 待审 {{ sessionDigest.jargon.pending }}
-                    </template>
-                  </dd>
-                </div>
-                <div>
-                  <dt>表达</dt>
-                  <dd>
-                    共 {{ sessionDigest?.expressions.total ?? 0 }} 条 · 已确认
-                    {{ sessionDigest?.expressions.checked ?? 0 }} · 已排除
-                    {{ sessionDigest?.expressions.rejected ?? 0 }}
-                  </dd>
-                </div>
-                <div>
-                  <dt>表情包</dt>
-                  <dd>
-                    启用 {{ sessionDigest?.emoji.enabled ?? 0 }} / 共 {{ sessionDigest?.emoji.total ?? 0 }}
-                  </dd>
-                </div>
-                <div v-for="job in ['expression', 'jargon']" :key="job">
-                  <dt>{{ job === 'expression' ? '表达学习' : '黑话学习' }}</dt>
-                  <dd v-if="sessionDigest?.cursors[job]">
-                    游标后消息 {{ sessionDigest.cursors[job].backlog }} 条 · 失败 {{ sessionDigest.cursors[job].fail_count }}
-                    <span v-if="sessionDigest.cursors[job].next_retry_at">
-                      · 重试 {{ formatTime(sessionDigest.cursors[job].next_retry_at) }}
-                    </span>
-                    <span v-if="sessionDigest.cursors[job].last_error" class="overview-error">
-                      · {{ sessionDigest.cursors[job].last_error }}
-                    </span>
-                  </dd>
-                  <dd v-else class="asset-empty">尚未建立游标</dd>
-                </div>
-              </dl>
-            </section>
-
-            <section class="overview-card overview-wide">
+            <section class="overview-card messages-card">
               <div class="overview-title-row">
-                <h4 class="overview-title">最近对话</h4>
+                <h4 class="overview-title">最近对话 <span class="section-count">{{ recentMessages.length }}</span></h4>
                 <el-button :icon="Refresh" link type="primary" :loading="messagesLoading" @click="loadRecentMessages">
                   刷新
                 </el-button>
               </div>
-              <div v-if="recentMessages.length" class="message-list">
-                <div
-                  v-for="(message, index) in recentMessages"
-                  :key="index"
-                  class="message-row"
-                  :class="message.role"
-                >
-                  <div class="message-head">
-                    <span class="message-role">
-                      {{
-                        message.role === 'assistant'
-                          ? 'Bot'
-                          : message.sender_name || message.sender_id || '用户'
-                      }}
-                    </span>
-                    <span>{{ formatTime(message.timestamp) }}</span>
-                    <el-tag v-if="message.at_bot" size="small" effect="plain">@</el-tag>
+              <div v-if="recentMessages.length" class="message-viewport">
+                <div ref="messageList" class="message-list">
+                  <div
+                    v-for="(message, index) in recentMessages"
+                    :key="index"
+                    class="message-row"
+                    :class="message.role"
+                  >
+                    <div class="message-avatar" aria-hidden="true">{{ message.role === 'assistant' ? 'AI' : (message.sender_name || message.sender_id || '用').slice(0, 1) }}</div>
+                    <div class="message-body">
+                      <div class="message-head">
+                        <span class="message-role">
+                          {{
+                            message.role === 'assistant'
+                              ? 'Bot'
+                              : message.sender_name || message.sender_id || '用户'
+                          }}
+                        </span>
+                        <span>{{ formatTime(message.timestamp) }}</span>
+                        <el-tag v-if="message.at_bot" size="small" effect="plain">@</el-tag>
+                      </div>
+                      <div class="message-bubble">
+                        <p v-if="message.quote" class="message-quote">引用：{{ message.quote }}</p>
+                        <p class="message-content">{{ message.content }}</p>
+                      </div>
+                    </div>
                   </div>
-                  <p v-if="message.quote" class="message-quote">引用：{{ message.quote }}</p>
-                  <p class="message-content">{{ message.content }}</p>
                 </div>
               </div>
               <div v-else class="empty-hint">{{ messagesLoading ? '加载中…' : '暂无消息记录' }}</div>
             </section>
 
-            <section class="overview-card overview-wide">
+            <section class="overview-card turn-card">
               <h4 class="overview-title">最近一轮</h4>
               <template v-if="latestTrace">
                 <div class="meta-grid overview-meta">
@@ -912,14 +867,7 @@ onMounted(() => {
                   <span>发送：{{ traceSend(latestTrace) }}</span>
                 </div>
                 <p v-if="latestTrace.error" class="overview-error">错误：{{ latestTrace.error }}</p>
-                <div v-if="latestStages.length" class="stage-list">
-                  <div v-for="(stage, index) in latestStages" :key="index" class="stage-row">
-                    <el-tag size="small" effect="plain">{{ stage.label }}</el-tag>
-                    <span>{{ stage.provider || '—' }}</span>
-                    <span>{{ stage.duration_ms }} ms</span>
-                    <span v-if="stage.error" class="stage-error">{{ stage.error }}</span>
-                  </div>
-                </div>
+                <p v-if="traceTiming(latestTrace)" class="trace-timing-line">{{ traceTiming(latestTrace) }}</p>
                 <div class="preview-block">
                   <span class="block-label">请求</span>
                   <p>{{ latestTrace.request_preview || '—' }}</p>
@@ -932,7 +880,7 @@ onMounted(() => {
               <div v-else class="empty-hint">暂无轮次记录</div>
             </section>
 
-            <section class="overview-card overview-wide">
+            <section class="overview-card thinking-card">
               <div class="overview-title-row">
                 <h4 class="overview-title">最近一次模型调用</h4>
                 <el-button v-if="latestSnapshot" link type="primary" @click="openSnapshot(latestSnapshot)">
@@ -947,7 +895,7 @@ onMounted(() => {
                   <span>耗时：{{ latestSnapshot.duration_ms }} ms</span>
                   <span>{{ latestSnapshot.status === 'failed' ? '失败' : '完成' }}</span>
                 </div>
-                <span class="block-label">思考过程</span>
+                <span class="block-label">思考摘要</span>
                 <pre class="thinking-text" :class="{ empty: !latestSnapshot.reasoning_preview }">{{
                   latestSnapshot.reasoning_preview || '本次调用没有记录思考内容'
                 }}</pre>
@@ -1164,114 +1112,19 @@ onMounted(() => {
           />
         </div>
 
-        <div v-if="activeTab === 'snapshot'" class="panel">
-          <div class="panel-header">
-            <h3 class="panel-title">模型快照</h3>
-            <el-button :icon="Refresh" :loading="modelTraceLoading" @click="loadModelTraces">刷新</el-button>
-          </div>
-          <div class="tenant-help">
-            每次模型调用保存完整请求与返回（含思考内容与工具定义），按会话分目录保留；
-            每会话保留数量由「模型快照」配置项控制。
-          </div>
-          <el-table :data="snapshotRows" row-key="path" empty-text="暂无模型快照">
-            <el-table-column label="时间" min-width="170">
-              <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
-            </el-table-column>
-            <el-table-column label="类型" width="110">
-              <template #default="{ row }">{{ row.task || row.category }}</template>
-            </el-table-column>
-            <el-table-column prop="output_title" label="提供方 / 模型" min-width="200" show-overflow-tooltip />
-            <el-table-column label="思考摘要" min-width="180" show-overflow-tooltip>
-              <template #default="{ row }">{{ row.reasoning_preview || '—' }}</template>
-            </el-table-column>
-            <el-table-column prop="turn_id" label="轮次" width="110" show-overflow-tooltip />
-            <el-table-column label="耗时" width="100">
-              <template #default="{ row }">{{ row.duration_ms }} ms</template>
-            </el-table-column>
-            <el-table-column label="大小" width="100">
-              <template #default="{ row }">{{ formatBytes(row.size) }}</template>
-            </el-table-column>
-            <el-table-column label="结果" width="100">
-              <template #default="{ row }">{{ row.status === 'failed' ? '失败' : '完成' }}</template>
-            </el-table-column>
-            <el-table-column label="操作" width="90" fixed="right">
-              <template #default="{ row }">
-                <el-button link type="primary" @click="openSnapshot(row)">查看</el-button>
-              </template>
-            </el-table-column>
-          </el-table>
-          <el-pagination
-            v-if="modelTraces.length > RECORD_PAGE_SIZE"
-            v-model:current-page="snapshotPage"
-            :page-size="RECORD_PAGE_SIZE"
-            :total="modelTraces.length"
-            layout="prev, pager, next, total"
-            class="table-pager"
-            small
-          />
-        </div>
+        <ModelTraceBrowser
+          v-if="activeTab === 'snapshot'"
+          :tenant="tenant"
+          :items="modelTraces"
+          :loading="modelTraceLoading"
+          @refresh="loadModelTraces"
+        />
       </div>
     </Transition>
 
-    <el-dialog v-model="snapshotDialog" title="模型快照" width="80%" top="6vh">
+    <el-dialog v-model="snapshotDialog" title="思考过程" width="min(1120px, calc(100vw - 32px))" top="5vh">
       <div v-loading="snapshotLoading" class="snapshot-body">
-        <template v-if="snapshotDetail">
-          <el-descriptions :column="4" border size="small" class="snapshot-meta">
-            <el-descriptions-item v-for="item in snapshotMeta" :key="item.label" :label="item.label">
-              {{ item.value }}
-            </el-descriptions-item>
-          </el-descriptions>
-          <el-collapse v-model="snapshotOpen" class="snapshot-sections">
-            <el-collapse-item
-              v-if="snapshotReasoning.length"
-              name="reasoning"
-              :title="`思考过程 (${snapshotReasoning.length})`"
-            >
-              <div v-for="(item, index) in snapshotReasoning" :key="index" class="snapshot-item">
-                <div class="snapshot-item-head">reasoning #{{ index + 1 }}</div>
-                <pre class="snapshot-text">{{ snapshotItemText(item) }}</pre>
-              </div>
-            </el-collapse-item>
-            <el-collapse-item name="request" :title="`请求消息 (${snapshotRequests.length})`">
-              <div v-for="(item, index) in snapshotRequests" :key="index" class="snapshot-item">
-                <div class="snapshot-item-head">{{ item.role || item.type || 'item' }} #{{ index + 1 }}</div>
-                <pre class="snapshot-text">{{ snapshotItemText(item) }}</pre>
-              </div>
-            </el-collapse-item>
-            <el-collapse-item name="output" :title="`模型输出 (${snapshotOutputs.length})`">
-              <div v-for="(item, index) in snapshotOutputs" :key="index" class="snapshot-item">
-                <div class="snapshot-item-head">{{ item.type || 'item' }} #{{ index + 1 }}</div>
-                <pre class="snapshot-text">{{ snapshotItemText(item) }}</pre>
-              </div>
-            </el-collapse-item>
-            <el-collapse-item name="attempts" :title="`调用链 (${snapshotAttempts.length})`">
-              <el-table :data="snapshotAttempts" size="small" empty-text="暂无调用记录">
-                <el-table-column type="expand">
-                  <template #default="{ row }">
-                    <pre class="snapshot-text">{{ JSON.stringify(row, null, 2) }}</pre>
-                  </template>
-                </el-table-column>
-                <el-table-column prop="workflow_purpose" label="阶段" min-width="220" />
-                <el-table-column prop="workflow_attempt" label="尝试" width="70" />
-                <el-table-column prop="provider" label="提供方" min-width="140" show-overflow-tooltip />
-                <el-table-column prop="model" label="模型" min-width="160" show-overflow-tooltip />
-                <el-table-column label="耗时" width="100">
-                  <template #default="{ row }">{{ row.duration_ms }} ms</template>
-                </el-table-column>
-                <el-table-column label="状态" width="90">
-                  <template #default="{ row }">{{ row.status === 'failed' ? '失败' : '完成' }}</template>
-                </el-table-column>
-                <el-table-column prop="error" label="错误" min-width="200" show-overflow-tooltip />
-              </el-table>
-            </el-collapse-item>
-            <el-collapse-item v-if="snapshotTools.length" name="tools" :title="`工具定义 (${snapshotTools.length})`">
-              <pre class="snapshot-text">{{ JSON.stringify(snapshotTools, null, 2) }}</pre>
-            </el-collapse-item>
-            <el-collapse-item name="raw" title="原始 JSON">
-              <pre class="snapshot-json">{{ snapshotText }}</pre>
-            </el-collapse-item>
-          </el-collapse>
-        </template>
+        <ModelTraceDetail v-if="snapshotDetail" :snapshot="snapshotDetail" />
       </div>
     </el-dialog>
   </div>
@@ -1282,75 +1135,29 @@ onMounted(() => {
   padding: 24px 28px 32px;
 }
 
-.trace-detail {
-  padding: 12px 24px;
-}
-
-.trace-timing {
-  margin: 0 0 12px;
-  color: var(--color-text-secondary);
-}
-
-.snapshot-body {
-  min-height: 160px;
-}
-
-.snapshot-meta {
-  margin-bottom: 12px;
-}
-
-.snapshot-sections {
-  border-top: none;
-}
-
-.snapshot-item {
-  margin-bottom: 10px;
-}
-
-.snapshot-item-head {
-  margin-bottom: 4px;
-  color: var(--color-text-secondary);
-  font-size: 12px;
-}
-
-.snapshot-text {
-  max-height: 320px;
-  margin: 0;
-  padding: 8px 12px;
-  overflow: auto;
-  border-radius: var(--radius-sm);
-  background: var(--color-bg-tertiary);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px;
-  line-height: 1.6;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.snapshot-json {
-  max-height: 70vh;
-  margin: 0;
-  padding: 12px 16px;
-  overflow: auto;
-  border-radius: var(--radius-sm);
-  background: var(--color-bg-tertiary);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px;
-  line-height: 1.6;
-  white-space: pre-wrap;
-  word-break: break-all;
+.chat-reply-view > .panel, .tab-stack > .panel {
+  border-radius: var(--radius-xl);
 }
 
 .session-panel {
-  padding-bottom: 16px;
+  padding: 22px 24px 0;
+  margin-bottom: 0;
+  background:
+    radial-gradient(circle at 100% 0%, var(--color-primary-soft) 0%, transparent 42%),
+    var(--color-bg-secondary);
+  box-shadow: var(--shadow-sm);
+}
+
+.session-panel > .tenant-help {
+  padding-bottom: 18px;
 }
 
 .session-head {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 20px;
 }
 
 .session-picker {
@@ -1358,49 +1165,144 @@ onMounted(() => {
   flex: 1;
   flex-direction: column;
   gap: 6px;
-  min-width: min(100%, 420px);
+  min-width: min(100%, 300px);
+  max-width: 600px;
+}
+
+.session-picker :deep(.tenant-trigger) {
+  min-height: 58px;
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.session-picker :deep(.tenant-current-name) {
+  font-size: 18px;
+  letter-spacing: -0.02em;
+}
+
+.session-picker :deep(.tenant-current-meta) {
+  font-size: 11px;
+}
+
+.session-picker :deep(.tenant-trigger:focus-visible) {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 4px;
+}
+
+.session-picker :deep(.tenant-pop) {
+  min-width: min(340px, calc(100vw - 68px));
 }
 
 .session-eyebrow {
   color: var(--color-text-tertiary);
   font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.04em;
 }
 
-.session-tags,
-.session-facts {
+.session-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.settings-chevron {
+  margin-left: 8px;
+  transition: transform 0.18s ease;
+}
+
+.settings-chevron.expanded {
+  transform: rotate(180deg);
+}
+
+.unsaved-mark {
+  color: var(--color-warning);
+  font-size: 12px;
+}
+
+.session-summary {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px 16px;
+  gap: 8px;
+  margin-top: 18px;
+  padding: 16px 0;
+  border-top: 1px solid var(--color-border-light);
 }
 
-.session-tags {
-  padding-bottom: 4px;
+.summary-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 12px;
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-tertiary);
 }
 
-.session-facts {
-  align-items: center;
-  margin-top: 12px;
-  color: var(--color-text-secondary);
+.summary-item span {
+  flex-shrink: 0;
+  color: var(--color-text-tertiary);
+  font-size: 11px;
+}
+
+.summary-item strong {
+  overflow: hidden;
+  max-width: 220px;
+  color: var(--color-text);
   font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-editor {
+  margin: 0 -24px;
+  padding: 22px 24px 18px;
+  border-top: 1px solid var(--color-border);
+  border-radius: 0 0 var(--radius-xl) var(--radius-xl);
+  background: var(--color-bg-card);
+}
+
+.editor-heading, .editor-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.editor-heading h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.editor-heading p, .editor-footer p {
+  margin: 6px 0 0;
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+  line-height: 1.7;
 }
 
 .session-settings {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
-  gap: 16px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 24px;
   align-items: start;
-  margin-top: 18px;
-  padding-top: 16px;
-  border-top: 1px solid var(--color-border-light);
+  margin-top: 22px;
 }
 
 .setting-field {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-tertiary);
 }
 
 .setting-label-row {
@@ -1417,52 +1319,87 @@ onMounted(() => {
   min-height: 16px;
   color: var(--color-text-tertiary);
   font-size: 11px;
-}
-
-.setting-frequency {
-  max-width: 360px;
+  line-height: 1.6;
 }
 
 .setting-frequency :deep(.el-slider) {
   margin: 2px 0 0;
 }
 
-.setting-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding-top: 20px;
+.editor-footer {
+  margin-top: 20px;
+  padding-top: 14px;
+  border-top: 1px solid var(--color-border-light);
 }
 
-.panel-header,
-.panel-actions {
+.setting-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.setting-actions :deep(.el-button + .el-button) {
+  margin-left: 0;
+}
+
+.runtime-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 14px 2px 18px;
+  font-size: 11px;
+}
+
+.runtime-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 4px;
+  color: var(--color-text-tertiary);
+}
+
+.runtime-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--color-border-light);
+  border-radius: 999px;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-tertiary);
+}
+
+.runtime-chip i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--color-text-tertiary);
+}
+
+.runtime-chip.ok {
+  border-color: color-mix(in srgb, var(--color-success) 24%, transparent);
+  background: color-mix(in srgb, var(--color-success) 10%, transparent);
+  color: var(--color-text-secondary);
+}
+
+.runtime-chip.ok i {
+  background: var(--color-success);
+}
+
+.runtime-chip i.is-info {
+  background: var(--color-primary);
+}
+
+.runtime-error {
+  color: var(--color-danger);
+}
+
+.panel-header, .panel-actions {
   display: flex;
   align-items: center;
   gap: 12px;
-}
-
-.tenant-id {
-  padding: 1px 5px;
-  border-radius: var(--radius-sm);
-  background: var(--color-bg-tertiary);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 11px;
-  word-break: break-all;
-}
-
-.tenant-help {
-  margin-top: 10px;
-  color: var(--color-text-secondary);
-  font-size: 12px;
-}
-
-.table-pager {
-  justify-content: flex-end;
-  margin-top: 12px;
-}
-
-.health-panel {
-  margin-bottom: 16px;
 }
 
 .panel-header {
@@ -1470,35 +1407,119 @@ onMounted(() => {
   flex-wrap: wrap;
 }
 
+.tenant-id {
+  padding: 2px 5px;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-tertiary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+
+.tenant-help {
+  margin-top: 10px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  line-height: 1.8;
+}
+
+.table-pager {
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
 .meta-grid {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px 20px;
+  gap: 8px 16px;
   color: var(--color-text-secondary);
+  font-size: 11px;
+  line-height: 1.7;
+}
+
+.overview-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.overview-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 64px 20px;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-xl);
+  color: var(--color-text-tertiary);
+}
+
+.overview-placeholder .el-icon {
+  font-size: 26px;
+}
+
+.overview-placeholder p {
+  margin: 0;
   font-size: 12px;
 }
 
 .overview-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
-  margin-top: 16px;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  grid-template-areas:
+    'facts facts'
+    'messages thinking'
+    'messages trace';
+  gap: 20px;
 }
 
 .overview-card {
   min-width: 0;
-  padding: 16px;
-  border: 1px solid var(--color-border-light);
-  border-radius: var(--radius-lg);
-  background: var(--color-bg-tertiary);
+  padding: 20px 22px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  background: var(--color-bg-card);
+  box-shadow: var(--shadow-sm);
 }
 
-.overview-wide {
-  grid-column: 1 / -1;
+.facts-card {
+  grid-area: facts;
+}
+
+.facts-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.facts-column {
+  min-width: 0;
+}
+
+.facts-column + .facts-column {
+  padding-left: 32px;
+  border-left: 1px solid var(--color-border-light);
+}
+
+.messages-card {
+  display: flex;
+  flex-direction: column;
+  grid-area: messages;
+}
+
+.turn-card {
+  grid-area: trace;
+}
+
+.thinking-card {
+  grid-area: thinking;
 }
 
 .overview-title {
-  margin: 0 0 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 16px;
   color: var(--color-text);
   font-size: 13px;
   font-weight: 600;
@@ -1509,174 +1530,231 @@ onMounted(() => {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 12px;
+  margin-bottom: 16px;
 }
 
 .overview-title-row .overview-title {
   margin: 0;
 }
 
+.section-count {
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-tertiary);
+  font-size: 10px;
+  font-weight: 500;
+}
+
 .detail-list {
   display: grid;
-  gap: 10px;
+  gap: 14px;
   margin: 0;
 }
 
 .detail-list > div {
   display: grid;
-  grid-template-columns: 84px minmax(0, 1fr);
+  grid-template-columns: 72px minmax(0, 1fr);
   gap: 10px;
   align-items: baseline;
 }
 
 .detail-list dt {
   color: var(--color-text-tertiary);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .detail-list dd {
   margin: 0;
   color: var(--color-text);
   font-size: 12px;
-  word-break: break-all;
+  overflow-wrap: anywhere;
+  line-height: 1.7;
 }
 
 .overview-meta {
-  margin-bottom: 12px;
-}
-
-.overview-assets {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  column-gap: 24px;
+  margin-bottom: 16px;
 }
 
 .asset-summary {
   display: -webkit-box;
   overflow: hidden;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
+  -webkit-line-clamp: 2;
 }
 
 .asset-empty {
   color: var(--color-text-tertiary);
 }
 
+.message-viewport {
+  position: relative;
+  flex: 1;
+  min-height: 360px;
+}
+
+.message-viewport::before {
+  content: '';
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 20px;
+  background: linear-gradient(var(--color-bg-card), transparent);
+  pointer-events: none;
+}
+
 .message-list {
+  position: absolute;
+  inset: 0;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  max-height: 420px;
-  padding-right: 4px;
+  gap: 16px;
+  padding-right: 6px;
   overflow: auto;
+  scrollbar-width: thin;
 }
 
 .message-row {
-  padding: 10px 12px;
-  border-left: 3px solid var(--color-border-light);
-  border-radius: var(--radius-sm);
-  background: var(--color-bg-secondary);
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
 }
 
-.message-row.assistant {
-  border-left-color: var(--color-primary);
+.message-avatar {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--color-border-light);
+  border-radius: 50%;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.message-row.assistant .message-avatar {
+  border-color: transparent;
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+}
+
+.message-body {
+  flex: 1;
+  min-width: 0;
 }
 
 .message-head {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
-  margin-bottom: 4px;
+  margin-bottom: 6px;
   color: var(--color-text-tertiary);
-  font-size: 12px;
+  font-size: 10px;
 }
 
 .message-role {
   color: var(--color-text-secondary);
+  font-size: 12px;
   font-weight: 600;
 }
 
+.message-bubble {
+  display: inline-block;
+  max-width: min(76ch, 100%);
+  padding: 9px 13px;
+  border: 1px solid var(--color-border-light);
+  border-radius: 4px 12px 12px 12px;
+  background: var(--color-bg-tertiary);
+}
+
+.message-row.assistant .message-bubble {
+  border-color: transparent;
+  background: var(--color-primary-soft);
+}
+
 .message-quote {
-  margin: 0 0 4px;
+  margin: 0 0 6px;
+  padding-left: 8px;
+  border-left: 2px solid var(--color-border);
   color: var(--color-text-tertiary);
   font-size: 12px;
 }
 
 .message-content {
   margin: 0;
+  color: var(--color-text);
   font-size: 13px;
-  line-height: 1.6;
+  line-height: 1.75;
   white-space: pre-wrap;
-  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .overview-error {
-  margin: 0 0 10px;
   color: var(--color-danger);
   font-size: 12px;
 }
 
-.stage-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-bottom: 12px;
-}
-
-.stage-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+.trace-timing-line {
+  margin: 0 0 14px;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-tertiary);
   color: var(--color-text-secondary);
-  font-size: 12px;
-}
-
-.stage-error {
-  color: var(--color-danger);
+  font-size: 11px;
+  line-height: 1.7;
 }
 
 .preview-block {
-  margin-top: 10px;
+  margin-top: 14px;
 }
 
-.preview-block p,
-.preview-text {
-  margin: 4px 0 0;
+.preview-block p, .preview-text {
+  margin: 6px 0 0;
   color: var(--color-text-secondary);
   font-size: 12px;
-  line-height: 1.6;
+  line-height: 1.85;
   white-space: pre-wrap;
-  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .thinking-text {
   max-height: 260px;
-  margin: 4px 0 12px;
-  padding: 10px 12px;
+  margin: 8px 0 18px;
+  padding: 14px 16px;
   overflow: auto;
-  border-radius: var(--radius-sm);
-  background: var(--color-bg-secondary);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px;
-  line-height: 1.65;
+  border-left: 2px solid var(--color-primary);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  background: var(--color-bg-tertiary);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.85;
   white-space: pre-wrap;
-  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .thinking-text.empty {
   color: var(--color-text-tertiary);
-  font-family: inherit;
 }
 
 .empty-hint {
-  padding: 12px 0;
+  padding: 34px 12px;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-lg);
   color: var(--color-text-tertiary);
   font-size: 12px;
+  text-align: center;
 }
 
 .reply-tabs {
   width: fit-content;
   max-width: 100%;
-  margin-bottom: 20px;
+  margin-bottom: 24px;
 }
 
 .tab-stack {
@@ -1699,7 +1777,7 @@ onMounted(() => {
 .block-label {
   margin-bottom: 0;
   color: var(--color-text-secondary);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
 }
 
@@ -1707,11 +1785,22 @@ onMounted(() => {
   margin: 0 8px 8px 0;
 }
 
-.tab-swap-enter-active,
-.tab-swap-leave-active {
-  transition:
-    opacity 0.16s ease,
-    transform 0.16s ease;
+.trace-detail {
+  padding: 12px 24px;
+}
+
+.trace-timing {
+  margin: 0 0 12px;
+  color: var(--color-text-secondary);
+}
+
+.snapshot-body {
+  min-height: 160px;
+}
+
+
+.tab-swap-enter-active, .tab-swap-leave-active {
+  transition: opacity 0.16s ease, transform 0.16s ease;
 }
 
 .tab-swap-enter-from {
@@ -1725,31 +1814,78 @@ onMounted(() => {
 }
 
 @media (max-width: 1100px) {
-  .session-settings {
+  .chat-reply-view {
+    padding: 20px 22px 26px;
+  }
+  .session-summary {
+    gap: 8px;
+  }
+  .overview-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-
-  .setting-actions {
-    grid-column: 1 / -1;
-    padding-top: 0;
+  .overview-grid {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: 'facts' 'messages' 'thinking' 'trace';
+  }
+  .facts-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .facts-column + .facts-column {
+    margin-top: 20px;
+    padding-top: 20px;
+    padding-left: 0;
+    border-top: 1px solid var(--color-border-light);
+    border-left: 0;
   }
 }
 
 @media (max-width: 760px) {
-  .overview-grid,
-  .overview-assets,
+  .chat-reply-view {
+    padding: 16px;
+  }
+  .session-panel {
+    padding: 18px 18px 0;
+  }
+  .session-editor {
+    margin-inline: -18px;
+    padding-inline: 18px;
+  }
+  .session-head {
+    gap: 14px;
+  }
+  .session-picker {
+    flex-basis: 100%;
+  }
+  .session-controls {
+    margin-left: auto;
+  }
+  .summary-item strong {
+    max-width: 150px;
+  }
+  .runtime-bar {
+    gap: 6px;
+  }
   .session-settings {
     grid-template-columns: minmax(0, 1fr);
   }
-
-  .setting-frequency {
-    max-width: none;
+  .editor-footer {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .setting-actions {
+    align-self: flex-end;
+  }
+  .overview-card {
+    padding: 18px;
+  }
+  .trace-detail {
+    padding: 10px;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .tab-swap-enter-active,
-  .tab-swap-leave-active {
+  .tab-swap-enter-active, .tab-swap-leave-active, .settings-chevron {
     transition: none;
   }
 }

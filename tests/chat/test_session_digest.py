@@ -92,7 +92,7 @@ class SessionDigestTests(unittest.IsolatedAsyncioTestCase):
                     tenant=self.tenant,
                     sender_id="u1",
                     sender_name="小明",
-                    content=f"hi {index}",
+                    content="小明(u1): hi 0" if index == 0 else f"hi {index}",
                     dedupe_key=f"d{index}",
                     occurred_at=now,
                 )

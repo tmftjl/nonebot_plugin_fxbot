@@ -18,6 +18,7 @@ from ..auth import sse_auth, bearer_auth
 from ...chat import emoji as emoji_module
 from ...config import get_manager as get_config_manager
 from ...utils.tz import SHANGHAI_TZ, as_shanghai
+from ...chat.types import speaker_label
 from ...chat.vision import describe_emoji
 from ...chat.service import chat_service
 from ...chat.bindings import PERSONA, PROVIDER, TALK_VALUE, get_binding, set_binding
@@ -103,9 +104,15 @@ def _message_payload(row: dict[str, object]) -> dict[str, Any]:
             parsed = datetime.fromisoformat(timestamp)
         except ValueError:
             parsed = None
+    role = str(row.get("role") or "")
+    content = str(row.get("content") or "")
+    if role == "user":
+        # 存储内容是给模型看的「昵称(id): 正文」，控制台头部已经展示发言人，去掉重复前缀
+        label = speaker_label(str(row.get("_sender_id") or ""), str(row.get("_sender_name") or ""))
+        content = content.removeprefix(f"{label}: ").removeprefix(f"{label}:\n")
     return {
-        "role": str(row.get("role") or ""),
-        "content": str(row.get("content") or ""),
+        "role": role,
+        "content": content,
         "timestamp": _iso(parsed),
         "sender_id": str(row.get("_sender_id") or ""),
         "sender_name": str(row.get("_sender_name") or ""),
