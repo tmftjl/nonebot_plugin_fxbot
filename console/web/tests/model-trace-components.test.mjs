@@ -118,12 +118,16 @@ test('自动选中首条记录，筛选与清空后详情保持一致', async ()
   } finally { browser.app.unmount() }
 })
 
-test('详情输出优先，完整思考按正文展示，工具和原始数据可展开', async () => {
+test('详情输出优先，完整思考按正文展示，工具与参数按字段展示', async () => {
   const Detail = component('ModelTraceDetail')
   const html = await renderToString(vue.createSSRApp(Detail, { snapshot: {
     metadata: { model_name: 'test-model', task: 'reply', duration_ms: 1200 },
-    output_items: [{ type: 'message', text: '最终回复 <script>alert(1)</script>' }],
+    output_items: [
+      { type: 'message', text: '最终回复 <script>alert(1)</script>' },
+      { type: 'function_call', name: 'send_reply', arguments: { target: 'group', text: '你好' } },
+    ],
     request_items: [{ role: 'system', content: '系统上下文' }],
+    tool_definitions: [{ type: 'function', function: { name: 'send_reply', description: '发送一条群消息' } }],
     generation_attempts: [{
       workflow_purpose: 'replyer.reasoning_initial', status: 'completed',
       output_items: [{ type: 'reasoning', text: '这是完整推理内容' }],
@@ -133,7 +137,12 @@ test('详情输出优先，完整思考按正文展示，工具和原始数据�
   assert.match(html, /系统上下文/)
   assert.match(html, /首次推理/)
   assert.match(html, /生成调用链/)
-  assert.match(html, /原始 JSON/)
+  assert.match(html, /发送一条群消息/)
+  assert.match(html, />target</)
+  assert.match(html, />group</)
+  assert.match(html, />你好</)
+  assert.doesNotMatch(html, /原始 JSON|完整调用数据|原始条目/)
+  assert.doesNotMatch(html, /\{&quot;|&quot;target&quot;/)
   assert.doesNotMatch(html, /<script>alert/)
   assert.match(html, /&lt;script&gt;alert/)
   assert.doesNotMatch(html, /<table/)

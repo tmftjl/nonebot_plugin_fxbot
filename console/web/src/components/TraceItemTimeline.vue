@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { traceItemKind, traceItemLabel, traceItemText, traceJson, traceRecords, type TraceRecord } from '@/utils/modelTrace'
+import { traceFields, traceItemKind, traceItemLabel, traceItemText, traceRecords, type TraceRecord } from '@/utils/modelTrace'
 
 defineProps<{ items: TraceRecord[]; emptyText?: string }>()
 
@@ -17,18 +17,24 @@ const functionOf = (item: TraceRecord): TraceRecord =>
       </header>
       <template v-if="item.type === 'function_call'">
         <div class="tool-name">{{ item.name || '未命名工具' }}</div>
-        <pre class="item-code">{{ traceJson(item.arguments) }}</pre>
+        <dl v-if="traceFields(item.arguments).length" class="item-fields">
+          <div v-for="(field, fieldIndex) in traceFields(item.arguments)" :key="fieldIndex" :class="{ 'field-plain': !field.key }">
+            <dt v-if="field.key">{{ field.key }}</dt>
+            <dd>{{ field.value }}</dd>
+          </div>
+        </dl>
       </template>
       <p v-else-if="traceItemText(item)" class="item-prose">{{ traceItemText(item) }}</p>
-      <p v-else class="item-placeholder">{{ item.type === 'reasoning' ? '该推理条目未返回可读文字，原生数据保留在完整快照中。' : '此条目没有可显示的文字。' }}</p>
+      <p v-else class="item-placeholder">{{ item.type === 'reasoning' ? '该推理条目未返回可读文字，可能由模型或提供方省略。' : '此条目没有可显示的文字。' }}</p>
       <div v-for="(call, callIndex) in traceRecords(item.tool_calls)" :key="callIndex" class="nested-tool">
         <span>工具调用</span><strong>{{ functionOf(call).name }}</strong>
-        <pre class="item-code">{{ traceJson(functionOf(call).arguments) }}</pre>
+        <dl v-if="traceFields(functionOf(call).arguments).length" class="item-fields">
+          <div v-for="(field, fieldIndex) in traceFields(functionOf(call).arguments)" :key="fieldIndex" :class="{ 'field-plain': !field.key }">
+            <dt v-if="field.key">{{ field.key }}</dt>
+            <dd>{{ field.value }}</dd>
+          </div>
+        </dl>
       </div>
-      <details class="item-source">
-        <summary>原始条目</summary>
-        <pre class="item-code">{{ traceJson(item) }}</pre>
-      </details>
     </article>
   </div>
   <div v-else class="timeline-empty">{{ emptyText || '没有可展示的内容' }}</div>
@@ -37,63 +43,85 @@ const functionOf = (item: TraceRecord): TraceRecord =>
 <style scoped>
 .item-timeline {
   display: grid;
-  gap: 14px;
+  gap: 10px;
 }
 
 .context-item {
   min-width: 0;
   overflow: hidden;
-  border: 1px solid var(--color-border);
-  border-radius: 9px;
+  border: 1px solid var(--color-border-light);
+  border-radius: 10px;
   background: var(--color-bg-secondary);
 }
 
 .context-item header {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 11px 16px;
+  gap: 8px;
+  padding: 8px 14px;
   border-bottom: 1px solid var(--color-border-light);
+  background: var(--color-bg-card);
 }
 
 .item-role {
-  color: var(--color-primary);
-  font-size: 11px;
+  color: var(--color-text-secondary);
+  font-size: 10px;
   font-weight: 600;
+  letter-spacing: 0.04em;
 }
 
 .item-index {
   margin-left: auto;
   color: var(--color-text-tertiary);
-  font-size: 10px;
+  font: 10px ui-monospace, monospace;
   font-variant-numeric: tabular-nums;
 }
 
 .item-attempt {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--color-bg-tertiary);
   color: var(--color-text-tertiary);
-  font-size: 10px;
+  font-size: 9px;
 }
 
 .item-prose {
   margin: 0;
-  padding: 18px;
+  padding: 13px 16px 15px;
   color: var(--color-text);
   font-size: 13px;
-  line-height: 1.95;
+  line-height: 1.8;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
 .item-placeholder, .timeline-empty {
-  padding: 18px;
+  padding: 14px 16px;
   margin: 0;
   color: var(--color-text-tertiary);
   font-size: 12px;
   line-height: 1.8;
 }
 
+.timeline-empty {
+  border: 1px dashed var(--color-border);
+  border-radius: 10px;
+  text-align: center;
+}
+
 .context-item[data-kind="reasoning"] {
-  border-left: 3px solid var(--color-primary);
+  border-color: transparent;
+  border-left: 2px solid var(--color-primary);
+  background: var(--color-primary-soft);
+}
+
+.context-item[data-kind="reasoning"] header {
+  border-bottom-color: transparent;
+  background: transparent;
+}
+
+.context-item[data-kind="reasoning"] .item-role {
+  color: var(--color-primary);
 }
 
 .context-item[data-kind="reasoning"] .item-prose {
@@ -105,7 +133,7 @@ const functionOf = (item: TraceRecord): TraceRecord =>
 }
 
 .context-item[data-kind="error"] {
-  border-left: 3px solid var(--color-danger);
+  border-left: 2px solid var(--color-danger);
 }
 
 .context-item[data-kind="error"] .item-role {
@@ -117,47 +145,82 @@ const functionOf = (item: TraceRecord): TraceRecord =>
 }
 
 .tool-name {
-  padding: 14px 16px 0;
+  padding: 12px 14px 0;
   color: var(--color-text);
   font-family: ui-monospace, monospace;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
+  overflow-wrap: anywhere;
 }
 
-.item-code {
-  max-height: 380px;
-  margin: 12px 16px 16px;
-  padding: 14px;
-  overflow: auto;
-  border-radius: 6px;
-  background: var(--color-bg-tertiary);
-  color: var(--color-text-secondary);
-  font: 11px/1.8 ui-monospace, monospace;
+.item-fields {
+  display: grid;
+  gap: 6px;
+  margin: 10px 14px 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border-light);
+  border-radius: 8px;
+  background: var(--color-bg-card);
+}
+
+.item-fields > div {
+  display: grid;
+  grid-template-columns: minmax(0, 132px) minmax(0, 1fr);
+  gap: 12px;
+  line-height: 1.7;
+}
+
+.item-fields dt {
+  color: var(--color-text-tertiary);
+  font: 10.5px/1.7 ui-monospace, monospace;
+  overflow-wrap: anywhere;
+}
+
+.item-fields dd {
+  grid-column: 2;
+  margin: 0;
+  color: var(--color-text);
+  font-size: 12px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
-.item-source {
-  border-top: 1px solid var(--color-border-light);
-}
-
-.item-source summary {
-  padding: 9px 16px;
-  color: var(--color-text-tertiary);
-  font-size: 10px;
-  cursor: pointer;
+.item-fields .field-plain dd {
+  grid-column: 1 / -1;
 }
 
 .nested-tool {
-  margin: 0 16px 12px;
+  margin: 0 14px 14px;
   border: 1px solid var(--color-border-light);
-  border-radius: 6px;
+  border-radius: 8px;
+  background: var(--color-bg-card);
 }
 
 .nested-tool > span, .nested-tool > strong {
   display: inline-block;
-  margin: 10px 0 0 12px;
-  font-size: 11px;
+  margin: 9px 0 0 12px;
   color: var(--color-text-secondary);
+  font-size: 10px;
+}
+
+.nested-tool > strong {
+  margin-left: 6px;
+  color: var(--color-text);
+  font: 600 11px ui-monospace, monospace;
+}
+
+.nested-tool .item-fields {
+  margin: 8px 10px 10px;
+  background: var(--color-bg-secondary);
+}
+
+@media (max-width: 760px) {
+  .item-fields > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+  .item-fields dd {
+    grid-column: 1;
+  }
 }
 </style>

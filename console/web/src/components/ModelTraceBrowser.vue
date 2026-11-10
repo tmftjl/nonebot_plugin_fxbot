@@ -1,14 +1,13 @@
 <script setup lang="ts">
 // 浏览交互参考 MaiBot dashboard 的 reasoning-process 页面，数据读取沿用 FxBot 会话边界。
 import { computed, ref, watch } from 'vue'
-import { Clock, Refresh, Search } from '@element-plus/icons-vue'
+import { Clock, Search } from '@element-plus/icons-vue'
 import { chatApi } from '@/api'
 import type { ChatModelTrace } from '@/types/api'
 import { filterModelTraces, traceDuration, traceStage, type TraceRecord } from '@/utils/modelTrace'
 import ModelTraceDetail from './ModelTraceDetail.vue'
 
 const props = defineProps<{ tenant: string; items: ChatModelTrace[]; loading: boolean }>()
-defineEmits<{ refresh: [] }>()
 const query = ref('')
 const stage = ref('')
 const status = ref('')
@@ -68,19 +67,18 @@ watch(() => [props.tenant, selected.value?.path, selected.value?.created_at, sel
 <template>
   <section class="reasoning-workspace" aria-label="思考过程浏览器">
     <div class="reasoning-toolbar">
-      <div><h3>思考过程</h3><p>从一次输出，读懂模型的上下文与生成过程。</p></div>
-      <el-button :icon="Refresh" :loading="loading" @click="$emit('refresh')">刷新记录</el-button>
+      <div><h3>调用记录</h3><p>选择一次调用，阅读输出、思考与完整上下文。</p></div>
     </div>
     <div class="reasoning-layout">
       <aside class="record-sidebar">
         <div class="record-filters">
           <el-input v-model="query" :prefix-icon="Search" placeholder="搜索回复、思考或模型…" aria-label="搜索思考记录" clearable />
           <div class="filter-row">
-            <el-select v-model="stage" aria-label="按调用阶段筛选">
+            <el-select v-model="stage" placeholder="全部阶段" aria-label="按调用阶段筛选">
               <el-option label="全部阶段" value="" />
               <el-option v-for="value in stages" :key="value" :value="value" :label="traceStage(value)" />
             </el-select>
-            <el-select v-model="status" aria-label="按调用状态筛选">
+            <el-select v-model="status" placeholder="全部状态" aria-label="按调用状态筛选">
               <el-option label="全部状态" value="" />
               <el-option label="完成" value="completed" />
               <el-option label="失败" value="failed" />
@@ -126,20 +124,20 @@ watch(() => [props.tenant, selected.value?.path, selected.value?.created_at, sel
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 20px;
+  margin-bottom: 16px;
 }
 
 .reasoning-toolbar h3 {
   margin: 0;
   color: var(--color-text);
-  font-size: 17px;
+  font-size: 15px;
   font-weight: 600;
 }
 
 .reasoning-toolbar p {
-  margin: 7px 0 0;
+  margin: 5px 0 0;
   color: var(--color-text-tertiary);
-  font-size: 12px;
+  font-size: 11.5px;
 }
 
 .reasoning-layout {

@@ -11,7 +11,7 @@ const code = ts.transpileModule(
 ).outputText
 const context = vm.createContext({ exports: {} })
 vm.runInContext(code, context)
-const { filterModelTraces, traceReasoning, traceItemText, traceItemLabel, traceStage, traceDuration } = context.exports
+const { filterModelTraces, traceReasoning, traceItemText, traceItemLabel, traceStage, traceDuration, traceReadable, traceFields } = context.exports
 
 test('按阶段、状态与摘要筛选思考记录', () => {
   const items = [
@@ -51,10 +51,22 @@ test('没有尝试思考时读取顶层条目，加密推理不伪造文字', ()
 test('原生内容块和工具结果转成可读内容，不把 HTML 当页面执行', () => {
   assert.equal(traceItemText({ type: 'reasoning', summary: [{ text: '推理摘要' }] }), '推理摘要')
   assert.equal(traceItemText({ role: 'assistant', content: [{ type: 'output_text', text: '<script>alert(1)</script>' }] }), '<script>alert(1)</script>')
-  assert.match(traceItemText({ type: 'function_call_output', output: { ok: true } }), /"ok": true/)
+  assert.equal(traceItemText({ type: 'function_call_output', output: { ok: true } }), 'ok: true')
   assert.equal(traceItemLabel({ role: 'system' }), '系统指令')
   assert.equal(traceItemLabel({ type: 'function_call' }), '工具调用')
   assert.equal(traceItemLabel({ type: 'function_call_output' }), '工具结果')
   assert.equal(traceStage('reply'), '回复器')
   assert.equal(traceDuration(1250), '1.25 s')
+})
+
+test('结构化参数转成字段行，不暴露 JSON 语法', () => {
+  assert.equal(traceReadable({ ok: true, tags: ['a', 'b'] }), 'ok: true\ntags: a、b')
+  const fields = traceFields({ query: '天气', limit: 5 })
+  assert.equal(fields.length, 2)
+  assert.equal(fields[0].key, 'query')
+  assert.equal(fields[0].value, '天气')
+  assert.equal(fields[1].value, '5')
+  assert.equal(traceFields('{"query":"天气"}')[0].value, '天气')
+  assert.equal(traceFields('纯文本')[0].key, '')
+  assert.equal(traceFields('').length, 0)
 })

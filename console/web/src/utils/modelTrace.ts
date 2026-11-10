@@ -55,16 +55,45 @@ export function traceText(value: unknown): string {
 export function traceItemText(item: TraceRecord): string {
   if (item.type === 'error') return String(item.error || '本次调用失败')
   if (item.type === 'function_call_output' || item.role === 'tool') {
-    return traceText(item.output ?? item.content) || traceJson(item.output ?? item.content)
+    return traceText(item.output ?? item.content) || traceReadable(item.output ?? item.content)
   }
   return traceText(item)
 }
 
-export function traceJson(value: unknown): string {
-  if (typeof value === 'string') {
-    try { return JSON.stringify(JSON.parse(value), null, 2) } catch { return value }
+/** 把结构化数据压成「键: 值」文本，不暴露 JSON 语法。 */
+export function traceReadable(value: unknown, depth = 0): string {
+  if (value === null || value === undefined) return ''
+  if (typeof value === 'string') return value
+  if (typeof value !== 'object') return String(value)
+  if (Array.isArray(value)) {
+    return value.map((item) => traceReadable(item, depth + 1)).filter(Boolean).join(depth ? '、' : '\n')
   }
-  return JSON.stringify(value ?? {}, null, 2)
+  const lines = Object.entries(value as TraceRecord)
+    .map(([key, item]) => {
+      const text = traceReadable(item, depth + 1)
+      return text ? `${key}: ${text}` : ''
+    })
+    .filter(Boolean)
+  return lines.join(depth ? '；' : '\n')
+}
+
+/** 工具参数拆成逐项字段，供定义列表展示。 */
+export function traceFields(value: unknown): Array<{ key: string; value: string }> {
+  if (typeof value === 'string') {
+    const text = value.trim()
+    if (!text) return []
+    try {
+      return traceFields(JSON.parse(text))
+    } catch {
+      return [{ key: '', value }]
+    }
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    const text = traceReadable(value)
+    return text ? [{ key: '', value: text }] : []
+  }
+  return Object.entries(value as TraceRecord)
+    .map(([key, item]) => ({ key, value: traceReadable(item, 1) || '—' }))
 }
 
 export function traceReasoning(snapshot: TraceRecord): TraceRecord[] {

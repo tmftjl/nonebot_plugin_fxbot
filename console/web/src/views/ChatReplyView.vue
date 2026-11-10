@@ -1117,7 +1117,6 @@ onMounted(() => {
           :tenant="tenant"
           :items="modelTraces"
           :loading="modelTraceLoading"
-          @refresh="loadModelTraces"
         />
       </div>
     </Transition>
