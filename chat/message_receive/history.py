@@ -172,7 +172,9 @@ async def persist_turn_start(request: ChatRequest, content: str, epoch: int) -> 
     """写入用户消息、轮次和用户条目；失败只降级本轮持久化。"""
     if not memory_state.is_ready() or not history_enabled(request.is_group):
         return None
-    await _prepare_image_memory(request)
+    reuse_turn = bool(request.metadata.get("planner_parent_turn_id"))
+    if not reuse_turn:
+        await _prepare_image_memory(request)
     if request.accepted_epoch is None:
         request.accepted_epoch = epoch
     payload = json.dumps({"has_image": True}) if request.images else "{}"
@@ -193,6 +195,9 @@ async def persist_turn_start(request: ChatRequest, content: str, epoch: int) -> 
         turn_id = await chat_repository.upsert_turn(turn)
         if turn_id is None:
             return None
+        if reuse_turn:
+            # Planner 回复子请求沿用父轮次：轮次行与首条用户消息已存在，只补生成结果
+            return turn_id, None
         # 合并批次的原始消息已由 persist_batch 写入，这里只写合并后的 user 条目
         recorded = request.batched or bool(request.metadata.get("history_recorded"))
         message_id = (
@@ -256,6 +261,7 @@ async def persist_turn_end(
                 provider=provider_name,
                 error="空响应",
                 finished_at=utc_now_naive(),
+                from_status=("received", "generating", "generated"),
             )
             return None
         await chat_repository.update_turn(
@@ -272,12 +278,13 @@ async def persist_turn_end(
                 request.session_id, message_id, content, turn_key=request.turn_id, generation=request.accepted_epoch
             )
         item_ids: list[int] = []
+        base_seq = await chat_repository.next_turn_item_seq(request.session_id, turn_id)
         for index, part in enumerate(parts_to_send):
             stored_item_id = await chat_repository.append_turn_item(
                 ChatTurnItem(
                     tenant=request.session_id,
                     turn_id=turn_id,
-                    item_seq=1 + index,
+                    item_seq=base_seq + index,
                     part_index=index,
                     role="assistant",
                     content=part,
@@ -446,6 +453,7 @@ async def mark_turn_aborted(request: ChatRequest, error: str = "") -> None:
             status="aborted",
             error=error[:500],
             finished_at=utc_now_naive(),
+            from_status=("received", "generating", "generated"),
         )
     except Exception:
         logger.opt(exception=True).warning("[Chat] 记录轮次作废状态时出错")
@@ -463,6 +471,7 @@ async def mark_turn_failed(request: ChatRequest, exc: Exception) -> None:
             status="failed",
             error=f"{type(exc).__name__}: {exc}"[:500],
             finished_at=utc_now_naive(),
+            from_status=("received", "generating", "generated"),
         )
     except Exception:
         logger.opt(exception=True).warning("[Chat] 记录轮次失败状态时出错")
@@ -619,6 +628,7 @@ async def end_turn_without_reply(request: ChatRequest, provider_name: str) -> No
             status="ended",
             provider=provider_name,
             finished_at=utc_now_naive(),
+            from_status=("received", "generating", "generated"),
         )
     except Exception:
         logger.opt(exception=True).warning("[ChatPlanner] 记录结束轮次失败")

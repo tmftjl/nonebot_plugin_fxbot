@@ -311,14 +311,30 @@ class ChatRepository:
 
     @with_session
     async def update_turn(
-        self, session: AsyncSession, tenant: str, turn_key: str, *, generation: int | None = None, **fields: object
+        self,
+        session: AsyncSession,
+        tenant: str,
+        turn_key: str,
+        *,
+        generation: int | None = None,
+        from_status: tuple[str, ...] | None = None,
+        **fields: object,
     ) -> None:
-        """只更新传入的轮次字段。"""
+        """只更新传入的轮次字段；from_status 限制允许迁移的当前状态。"""
         if not fields or not await self._current_turn(session, tenant, turn_key=turn_key, generation=generation):
             return
-        await session.execute(
-            update(ChatTurn).where(ChatTurn.tenant == tenant, ChatTurn.turn_key == turn_key).values(**fields)
+        statement = update(ChatTurn).where(ChatTurn.tenant == tenant, ChatTurn.turn_key == turn_key)
+        if from_status:
+            statement = statement.where(ChatTurn.status.in_(from_status))
+        await session.execute(statement.values(**fields))
+
+    @with_session
+    async def next_turn_item_seq(self, session: AsyncSession, tenant: str, turn_id: int) -> int:
+        """返回轮内下一个可用序号，避免同一逻辑轮次多次回复互相覆盖。"""
+        statement = select(func.max(ChatTurnItem.item_seq)).where(
+            ChatTurnItem.tenant == tenant, ChatTurnItem.turn_id == turn_id
         )
+        return int((await session.execute(statement)).scalar() or 0) + 1
 
     @with_session
     async def append_turn_item(

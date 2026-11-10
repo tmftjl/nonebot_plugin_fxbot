@@ -457,6 +457,7 @@ class TurnPersistenceTests(unittest.IsolatedAsyncioTestCase):
             patch.object(memory_state, "is_ready", return_value=True),
             patch.object(chat_repository, "update_turn", new=AsyncMock()) as update_turn,
             patch.object(chat_repository, "update_message_content", new=AsyncMock()) as update_message,
+            patch.object(chat_repository, "next_turn_item_seq", new=AsyncMock(return_value=1)),
             patch.object(chat_repository, "append_turn_item", new=AsyncMock(return_value=12)) as append,
         ):
             item_id = await self.service._persist_turn_end(
@@ -471,6 +472,20 @@ class TurnPersistenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((item.item_seq, item.part_index), (1, 0))
         self.assertEqual(item.send_status, "pending")
         update_message.assert_not_awaited()
+
+    async def test_planner_reply_reuses_parent_turn(self) -> None:
+        request = _request(metadata={"planner_parent_turn_id": "turn-1", "planner_reply": True})
+        with (
+            patch.object(memory_state, "is_ready", return_value=True),
+            patch.object(chat_repository, "upsert_turn", new=AsyncMock(return_value=7)) as upsert,
+            patch.object(chat_repository, "append_message", new=AsyncMock(return_value=9)) as append,
+            patch.object(chat_repository, "append_turn_item", new=AsyncMock(return_value=11)) as item,
+        ):
+            self.assertEqual(await self.service._persist_turn_start(request, "用户: 你好", 3), (7, None))
+
+        self.assertEqual(upsert.await_args.args[0].turn_key, "turn-1")
+        append.assert_not_awaited()
+        item.assert_not_awaited()
 
     async def test_failure_marks_turn_failed(self) -> None:
         request = _request()
@@ -496,6 +511,61 @@ class TurnPersistenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(mark.await_args.kwargs["generation"], 0)
         self.assertEqual(mark.await_args.kwargs["content"], "回复")
         self.assertTrue(mark.await_args.kwargs["context"]["_self_message"])
+
+
+class LogicalTurnTests(unittest.IsolatedAsyncioTestCase):
+    """同一逻辑轮次复用父行，结束状态不覆盖已发送结果。"""
+
+    async def asyncSetUp(self) -> None:
+        await base_models.init_database()
+        await migrate.ensure_schema()
+        memory_state.mark_ready()
+        self.addCleanup(memory_state.mark_ready)
+        self.tenant = f"logical-{uuid4().hex}"
+        self.addAsyncCleanup(chat_repository.clear_tenant, self.tenant)
+
+    async def test_reply_attempts_do_not_create_second_turn(self) -> None:
+        parent = _request(session_id=self.tenant, turn_id="parent", dedupe_key="m1", message_id="m1")
+        child = _request(
+            session_id=self.tenant,
+            turn_id="parent",
+            dedupe_key="m1",
+            message_id="m1",
+            metadata={"planner_parent_turn_id": "parent", "planner_reply": True, "turn_attempt": 1},
+        )
+        persisted = await history_module.persist_turn_start(parent, "用户: 你好", 0)
+        self.assertIsNotNone(persisted)
+        self.assertEqual(await history_module.persist_turn_start(child, "用户: 你好", 0), (persisted[0], None))
+        await history_module.persist_turn_end(
+            child, (persisted[0], None), LLMResponse(content="回复一"), "p", "用户: 你好", [], ["回复一"]
+        )
+        await history_module.persist_turn_end(
+            child, (persisted[0], None), LLMResponse(content="回复二"), "p", "用户: 你好", [], ["回复二"]
+        )
+
+        async with base_models.async_maker() as session:
+            turns = await ChatTurn.select_rows(tenant=self.tenant, session=session)
+            users = await ChatTurnItem.select_rows(tenant=self.tenant, role="user", session=session)
+            assistants = await ChatTurnItem.select_rows(tenant=self.tenant, role="assistant", session=session)
+        self.assertEqual(len(turns), 1)
+        self.assertEqual([item.item_seq for item in users], [0])
+        self.assertEqual([(item.item_seq, item.content) for item in assistants], [(1, "回复一"), (2, "回复二")])
+
+    async def test_sent_turn_is_not_downgraded_by_planner_end(self) -> None:
+        request = _request(session_id=self.tenant)
+        persisted = await history_module.persist_turn_start(request, "用户消息", 0)
+        await history_module.persist_turn_end(
+            request, persisted, LLMResponse(content="回复"), "p", "用户消息", [], ["回复"]
+        )
+        async with base_models.async_maker() as session:
+            await session.execute(update(ChatTurn).where(ChatTurn.id == persisted[0]).values(status="sent"))
+            await session.commit()
+
+        await history_module.end_turn_without_reply(request, "p")
+
+        async with base_models.async_maker() as session:
+            rows = await ChatTurn.select_rows(tenant=self.tenant, session=session)
+        self.assertEqual([row.status for row in rows], ["sent"])
 
 
 class RestartContinuityTests(ReplyPipelineTests):

@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import asyncio
 from time import perf_counter
-from uuid import uuid4
 from typing import Any
 from datetime import datetime
 from contextlib import suppress
@@ -304,9 +303,11 @@ async def run(service: Any, context: Any) -> ChatResponse:
                 f"{reference}\n你刚刚已经回复过这条消息，你刚刚的发言是：“{' '.join(previous_reply.split())}”\n"
                 "你现在想再次回复这条消息，进行补充，注意请不要和之前你的发言重复。"
             )
+        attempt = int(request.metadata.get("planner_reply_attempts") or 0) + 1
+        request.metadata["planner_reply_attempts"] = attempt
         reply_request = replace(
             request,
-            turn_id=uuid4().hex,
+            turn_id=request.turn_id,
             user_id=sender_id,
             user_name=sender_name,
             text=selected_text,
@@ -323,6 +324,7 @@ async def run(service: Any, context: Any) -> ChatResponse:
                 "history_recorded": True,
                 "planner_reply": True,
                 "planner_parent_turn_id": request.turn_id,
+                "turn_attempt": attempt,
                 "reply_target_id": target,
                 "target_quote_ids": target_quotes,
                 "has_at_bot": target_at_bot,

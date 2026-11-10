@@ -125,6 +125,9 @@ class ConversationTests(unittest.IsolatedAsyncioTestCase):
         ]
         await conversation.run(self.service, self.context)
         self.assertEqual(self.service._send_generated.await_count, 2)
+        children = [call.args[0] for call in self.service._process_locked.await_args_list]
+        self.assertEqual({child.turn_id for child in children}, {self.request.turn_id})
+        self.assertEqual([child.metadata["turn_attempt"] for child in children], [1, 2])
 
     async def test_new_incoming_message_during_reply_allows_supplement(self) -> None:
         async def send(*args):
@@ -173,6 +176,8 @@ class ConversationTests(unittest.IsolatedAsyncioTestCase):
         await conversation.run(self.service, self.context)
         child = self.service._process_locked.await_args.args[0]
         self.assertEqual((child.user_id, child.message_id, child.reply_to_message_id), ("user", "m1", "m1"))
+        self.assertEqual(child.turn_id, self.request.turn_id)
+        self.assertEqual(child.metadata["turn_attempt"], 1)
         self.assertEqual(child.metadata["target_quote_ids"], ["quoted"])
         self.assertEqual(child.metadata["quote_snapshot"], snapshot)
 
