@@ -12,6 +12,7 @@ from src.plugins.nonebot_plugin_fxbot.chat import router, service as service_mod
 from src.plugins.nonebot_plugin_fxbot.chat.types import ChatRequest, ChatResponse
 from src.plugins.nonebot_plugin_fxbot.chat.service import ChatService
 from src.plugins.nonebot_plugin_fxbot.chat.session import ChatSessionStore
+from src.plugins.nonebot_plugin_fxbot.chat.behavior import reply_gate as reply_gate_module
 from src.plugins.nonebot_plugin_fxbot.console.routes import chat as chat_routes
 from src.plugins.nonebot_plugin_fxbot.chat.message_receive import sender as sender_module
 from src.plugins.nonebot_plugin_fxbot.chat.behavior.debounce import PendingBatch, DebounceRegistry
@@ -20,6 +21,8 @@ from src.plugins.nonebot_plugin_fxbot.chat.behavior.reply_gate import (
     DynamicReplyGate,
     ReplyGateRegistry,
     ReplyLikelihoodInput,
+    talk_value_for,
+    talk_value_override,
     summarize_pending_texts,
     estimate_reply_probability,
 )
@@ -503,6 +506,165 @@ class GateConsoleTests(unittest.IsolatedAsyncioTestCase):
     async def test_tenant_is_required(self) -> None:
         with self.assertRaises(HTTPException):
             await chat_routes.get_reply_gate("  ", 100)
+
+
+class TalkValueOverrideTests(unittest.TestCase):
+    """会话级回复频率覆盖优先级与容错。"""
+
+    def test_override_takes_precedence(self) -> None:
+        with (
+            patch.object(reply_gate_module, "get_binding", return_value="0.25"),
+            patch.object(
+                reply_gate_module,
+                "reply_timing_config",
+                return_value={"talk_value": 0.9, "enable_talk_value_rules": False},
+            ),
+        ):
+            self.assertAlmostEqual(talk_value_for("tenant"), 0.25)
+
+    def test_invalid_override_falls_back_to_global(self) -> None:
+        cfg = {"talk_value": 0.6, "enable_talk_value_rules": False}
+        for raw in ("", "bad"):
+            with self.subTest(raw=raw):
+                with (
+                    patch.object(reply_gate_module, "get_binding", return_value=raw),
+                    patch.object(reply_gate_module, "reply_timing_config", return_value=cfg),
+                ):
+                    self.assertIsNone(talk_value_override("tenant"))
+                    self.assertAlmostEqual(talk_value_for("tenant"), 0.6)
+
+    def test_override_is_clamped(self) -> None:
+        with patch.object(reply_gate_module, "get_binding", return_value="1.5"):
+            self.assertEqual(talk_value_override("tenant"), 1.0)
+        with patch.object(reply_gate_module, "get_binding", return_value="-0.2"):
+            self.assertEqual(talk_value_override("tenant"), 0.0)
+
+
+class SessionConsoleTests(unittest.IsolatedAsyncioTestCase):
+    """控制台读取与保存会话设置。"""
+
+    async def test_clear_session_reports_persistence_and_focus_failures(self) -> None:
+        from src.plugins.nonebot_plugin_fxbot.chat.focus import focus_mode_manager
+
+        for ready, focus_error, storage_error in (
+            (True, False, False),
+            (False, False, False),
+            (True, True, False),
+            (True, False, True),
+        ):
+            with self.subTest(ready=ready, focus_error=focus_error, storage_error=storage_error):
+                service = ChatService(ChatSessionStore())
+                clear = AsyncMock(return_value=1)
+                if storage_error:
+                    clear.side_effect = RuntimeError("storage failed")
+                with (
+                    patch.object(service_module.memory_state, "is_ready", return_value=ready),
+                    patch.object(service_module.history_module, "clear_tenant", clear),
+                    patch.object(
+                        focus_mode_manager,
+                        "clear_context",
+                        AsyncMock(side_effect=RuntimeError("focus failed") if focus_error else None),
+                    ),
+                ):
+                    result = await service.clear_session("test:clear-status")
+                self.assertEqual(result, ready and not focus_error and not storage_error)
+
+    async def test_session_settings_reports_bound_and_effective(self) -> None:
+        def binding(kind: str, _tenant: str) -> str:
+            return "p1" if kind == chat_routes.PROVIDER else ""
+
+        with (
+            patch.object(
+                chat_routes,
+                "get_config_manager",
+                return_value=SimpleNamespace(get_system=lambda: {"chat": {"provider": "p2", "persona": "global"}}),
+            ),
+            patch.object(chat_routes.provider_manager, "list_providers_by_type", return_value=["p2", "p1"]),
+            patch.object(chat_routes, "get_binding", side_effect=binding),
+            patch.object(chat_routes, "load_personas", return_value={"小鱼": object()}),
+            patch.object(chat_routes, "effective_persona_name", return_value="小鱼"),
+            patch.object(chat_routes, "talk_value_override", return_value=0.3),
+            patch.object(chat_routes, "talk_value_for", return_value=0.3),
+            patch.object(chat_routes, "proactive_switch", AsyncMock(return_value=True)),
+        ):
+            payload = await chat_routes._session_settings("tenant")
+
+        self.assertEqual(payload["provider"], {"bound": "p1", "effective": "p1", "options": ["p1", "p2"]})
+        self.assertEqual(payload["persona"], {"bound": "", "effective": "小鱼", "options": ["小鱼"]})
+        self.assertEqual(payload["talk_value"], {"bound": 0.3, "effective": 0.3})
+        self.assertEqual(payload["proactive"], {"switch": True})
+
+    async def test_persona_change_clears_history(self) -> None:
+        writes: list[tuple[str, str, str | None]] = []
+
+        def binding(kind: str, _tenant: str) -> str:
+            return "old" if kind == chat_routes.PERSONA else ""
+
+        with (
+            patch.object(chat_routes, "load_personas", return_value={"old": object(), "new": object()}),
+            patch.object(chat_routes.provider_manager, "list_providers_by_type", return_value=["p1"]),
+            patch.object(chat_routes, "get_binding", side_effect=binding),
+            patch.object(chat_routes, "set_binding", side_effect=lambda *args: writes.append(args)),
+            patch.object(
+                chat_routes,
+                "_session_settings",
+                AsyncMock(return_value={"tenant": "tenant"}),
+            ),
+            patch.object(chat_routes.chat_service, "clear_session", AsyncMock(return_value=True)) as clear,
+        ):
+            result = await chat_routes.save_session_settings(
+                {"tenant": "tenant", "persona": "new", "provider": "p1", "talk_value": 0.4}
+            )
+
+        clear.assert_awaited_once_with("tenant")
+        self.assertTrue(result["history_cleared"])
+        self.assertIn((chat_routes.PERSONA, "tenant", "new"), writes)
+        self.assertIn((chat_routes.PROVIDER, "tenant", "p1"), writes)
+        self.assertIn((chat_routes.TALK_VALUE, "tenant", "0.4"), writes)
+
+    async def test_persona_clear_failure_does_not_save_bindings(self) -> None:
+        for failure in (False, RuntimeError("internal error")):
+            with self.subTest(failure=failure):
+                clear = AsyncMock(return_value=False)
+                if isinstance(failure, Exception):
+                    clear.side_effect = failure
+                with (
+                    patch.object(chat_routes, "load_personas", return_value={"new": object()}),
+                    patch.object(chat_routes.provider_manager, "list_providers_by_type", return_value=[]),
+                    patch.object(chat_routes, "get_binding", return_value="old"),
+                    patch.object(chat_routes, "set_binding") as write,
+                    patch.object(chat_routes.chat_service, "clear_session", clear),
+                ):
+                    with self.assertRaises(HTTPException) as raised:
+                        await chat_routes.save_session_settings({"tenant": "tenant", "persona": "new"})
+                    self.assertEqual(raised.exception.status_code, 503)
+                    self.assertNotIn("internal error", raised.exception.detail)
+                    write.assert_not_called()
+
+    async def test_unchanged_persona_keeps_history(self) -> None:
+        with (
+            patch.object(chat_routes, "load_personas", return_value={"same": object()}),
+            patch.object(chat_routes.provider_manager, "list_providers_by_type", return_value=[]),
+            patch.object(chat_routes, "get_binding", return_value="same"),
+            patch.object(chat_routes, "set_binding"),
+            patch.object(chat_routes, "_session_settings", AsyncMock(return_value={"tenant": "tenant"})),
+            patch.object(chat_routes.chat_service, "clear_session", AsyncMock()) as clear,
+        ):
+            result = await chat_routes.save_session_settings({"tenant": "tenant", "persona": "same"})
+
+        clear.assert_not_awaited()
+        self.assertFalse(result["history_cleared"])
+
+    async def test_unknown_provider_is_rejected(self) -> None:
+        with (
+            patch.object(chat_routes, "load_personas", return_value={"same": object()}),
+            patch.object(chat_routes.provider_manager, "list_providers_by_type", return_value=["p1"]),
+            patch.object(chat_routes, "get_binding", return_value=""),
+            patch.object(chat_routes, "set_binding") as write,
+        ):
+            with self.assertRaises(HTTPException):
+                await chat_routes.save_session_settings({"tenant": "tenant", "provider": "missing"})
+        write.assert_not_called()
 
 
 if __name__ == "__main__":

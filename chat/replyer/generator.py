@@ -26,6 +26,7 @@ from ..behavior.response import ProcessedResponseSegment, process_response_async
 from ..behavior.postprocess import postprocess_reply
 
 TOOL_TIMEOUT = 15.0
+REASONING_ONLY_HINT = "上一次只返回了思考内容，正文为空。请生成要发送的回复正文，不要只输出思考过程。"
 WEB_TOOLS = frozenset({"web_search", "web_fetch"})
 PROACTIVE_TOOLS = frozenset(
     {
@@ -106,7 +107,61 @@ async def generate(
     if response.has_tool_calls:
         logger.warning("[Chat] 回复模型返回了工具调用，已丢弃该次输出")
         return LLMResponse(content="")
+    data = response.provider_data or {}
+    native_reasoning = data.get("client_type") == "openai_responses" and any(
+        isinstance(item, dict) and item.get("type") == "reasoning" for item in data.get("output_items") or []
+    )
+    if not (response.content or "").strip() and (response.reasoning_content.strip() or native_reasoning):
+        return await _continue_reasoning(provider, messages, response)
     return response
+
+
+async def _continue_reasoning(provider: Any, messages: list[dict[str, Any]], response: LLMResponse) -> LLMResponse:
+    """对齐 MaiBot：纯推理响应先续写，Provider 不支持时提示正文为空后重生成一次。"""
+    logger.warning("[Chat] 回复模型只返回了思考内容，尝试续写一次")
+    continuation = getattr(provider, "chat_continuation", None)
+    if continuation is not None:
+        try:
+            continued = await asyncio.wait_for(
+                continuation(messages=messages, previous=response, temperature=1.0, max_tokens=8192), 240
+            )
+        except Exception:
+            logger.opt(exception=True).warning("[Chat] 推理续写失败，改用重生成")
+            continued = None
+        if continued is not None and (continued.content or "").strip():
+            if continued.has_tool_calls:
+                logger.warning("[Chat] 推理续写返回了工具调用，已丢弃该次输出")
+                continued.tool_calls = []
+                continued.tool_call_ids = []
+            if not continued.reasoning_content:
+                continued.reasoning_content = response.reasoning_content
+            return continued
+    trace_key = str(getattr(response, "_trace_key", "") or "")
+    trace_kwargs = (
+        {
+            "_trace_merge": trace_key,
+            "_trace_purpose": "replyer.reasoning_regeneration",
+            "_trace_attempt": 2,
+        }
+        if trace_key
+        else {}
+    )
+    retry = await asyncio.wait_for(
+        provider.chat(
+            messages=[*messages, {"role": "user", "content": REASONING_ONLY_HINT}],
+            tools=None,
+            temperature=1.0,
+            max_tokens=8192,
+            **trace_kwargs,
+        ),
+        240,
+    )
+    if not retry.has_tool_calls and not retry.reasoning_content:
+        retry.reasoning_content = response.reasoning_content
+    if retry.has_tool_calls:
+        logger.warning("[Chat] 回复模型在重生成时返回了工具调用，已丢弃该次输出")
+        return LLMResponse(content="", reasoning_content=response.reasoning_content)
+    return retry
 
 
 async def shape_reply(

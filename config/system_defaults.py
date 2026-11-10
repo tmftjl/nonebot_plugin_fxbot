@@ -142,6 +142,10 @@ SYSTEM_DEFAULTS = {
             "enable_kaomoji_protection": False,
             "enable_overflow_return_all": False,
         },
+        "model_trace": {
+            "enabled": True,
+            "max_groups_per_chat": 256,
+        },
         "typo": {
             "enable": True,
             "error_rate": 0.01,
@@ -545,6 +549,15 @@ def validate_system_config(data: dict[str, Any]) -> None:
         value = splitter.get(key, SYSTEM_DEFAULTS["chat"]["response_splitter"][key])
         if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
             raise ValueError(f"chat.response_splitter.{key} 必须是不小于 {minimum} 的整数")
+
+    trace = chat.get("model_trace", {})
+    if not isinstance(trace, dict):
+        raise ValueError("chat.model_trace 必须是对象")
+    if "enabled" in trace and not isinstance(trace["enabled"], bool):
+        raise ValueError("chat.model_trace.enabled 必须是布尔值")
+    keep = trace.get("max_groups_per_chat", SYSTEM_DEFAULTS["chat"]["model_trace"]["max_groups_per_chat"])
+    if isinstance(keep, bool) or not isinstance(keep, int) or not 1 <= keep <= 5000:
+        raise ValueError("chat.model_trace.max_groups_per_chat 必须是 1 到 5000 之间的整数")
 
     routing = chat.get("model_routing", {})
     if not isinstance(routing, dict):

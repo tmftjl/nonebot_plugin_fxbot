@@ -29,6 +29,7 @@ from ...utils.tz import now
 from ..providers import LLMResponse
 from ..memory.config import expression_vector_config
 from ..memory.models import ChatPlannerSample
+from ..trace_context import bind_turn, unbind_turn
 from ..work_schedule import can_reply, work_life_prompt
 from ..replyer.prompt import recall_query, strip_images, build_persona_text, build_user_content
 from ..context_summary import SUMMARY_HEADER, clear_summary, compact_messages, planner_snapshot
@@ -629,12 +630,16 @@ class FocusGroupRuntime:
             ):
                 await notify("request_rejected", hook_context(member.request, phase="focus_planner"))
                 return LLMResponse(content=""), "", ""
-        async with fallback_provider("planner", self._routing_session()) as provider:
-            response = await asyncio.wait_for(
-                provider.chat(messages=messages, tools=definitions or None, temperature=0.7, max_tokens=16384), 180
-            )
-            self._planner_snapshot = planner_snapshot(provider, messages, definitions)
-            return response, provider.provider_id, str(provider.get_model() or "")
+        token = bind_turn(self.scope_id, uuid4().hex, related_sessions=tuple(self.members))
+        try:
+            async with fallback_provider("planner", self._routing_session()) as provider:
+                response = await asyncio.wait_for(
+                    provider.chat(messages=messages, tools=definitions or None, temperature=0.7, max_tokens=16384), 180
+                )
+                self._planner_snapshot = planner_snapshot(provider, messages, definitions)
+                return response, provider.provider_id, str(provider.get_model() or "")
+        finally:
+            unbind_turn(token)
 
     def _build_messages(self, references: list[str]) -> list[dict[str, Any]]:
         messages: list[dict[str, Any]] = [{"role": "system", "content": self._system_prompt()}]

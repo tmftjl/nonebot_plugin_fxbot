@@ -1108,6 +1108,28 @@ def _all_config_tab() -> dict[str, Any]:
                 ],
             },
             {
+                "key": "chat.model_trace",
+                "title": "模型快照",
+                "category": "后处理",
+                "schemas": [
+                    {
+                        "field": "enabled",
+                        "label": "记录模型快照",
+                        "component": "Switch",
+                        "default": SYSTEM_DEFAULTS["chat"]["model_trace"]["enabled"],
+                        "helpMessage": "完整记录每次模型请求与返回，可在回复控制台的「模型快照」里查看。",
+                    },
+                    {
+                        "field": "max_groups_per_chat",
+                        "label": "每会话保留数",
+                        "component": "InputNumber",
+                        "default": SYSTEM_DEFAULTS["chat"]["model_trace"]["max_groups_per_chat"],
+                        "helpMessage": "每类请求、每个群/私聊最多保留多少份快照，超出按时间删除最旧的。",
+                        "componentProps": {"min": 1, "max": 5000, "step": 16},
+                    },
+                ],
+            },
+            {
                 "key": "chat.emoji",
                 "title": "表情包",
                 "category": "学习",

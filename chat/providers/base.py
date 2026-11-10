@@ -71,6 +71,17 @@ class ChatProvider(BaseProvider):
     ) -> LLMResponse:
         """执行一次对话请求。"""
 
+    async def chat_continuation(
+        self,
+        messages: list[dict[str, Any]],
+        previous: LLMResponse,
+        model: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int | None = None,
+    ) -> LLMResponse | None:
+        """把只返回了推理内容的响应接回上下文续写一次；默认不支持。"""
+        return None
+
     async def chat_stream(
         self,
         messages: list[dict[str, Any]],

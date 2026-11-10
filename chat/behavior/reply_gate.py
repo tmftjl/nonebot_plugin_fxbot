@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from nonebot import logger
 
 from ...config import SYSTEM_DEFAULTS, get_manager as get_config_manager
+from ..bindings import TALK_VALUE, get_binding
 from ...utils.tz import now as shanghai_now
 from ..memory.state import is_ready as memory_ready
 from ..memory.learning import GROUP, PRIVATE, TenantTarget, tenant_target
@@ -146,8 +147,20 @@ def _rule_rank(rule: dict[str, Any], tenant: str, target: TenantTarget | None) -
     return 4 if platform not in {"", "*"} else 2
 
 
+def talk_value_override(tenant: str) -> float | None:
+    """读取会话级回复频率覆盖；未设置或值损坏时返回 None。"""
+    try:
+        value = float(get_binding(TALK_VALUE, tenant))
+    except (TypeError, ValueError):
+        return None
+    return min(1.0, max(0.0, value))
+
+
 def talk_value_for(tenant: str, *, at: datetime | None = None) -> float:
-    """读取当前生效的 talk_value；范围越具体越优先，同范围内时间段优先于全天。"""
+    """读取当前生效的 talk_value；会话覆盖优先，其次按范围和时段匹配规则。"""
+    override = talk_value_override(tenant)
+    if override is not None:
+        return override
     cfg = reply_timing_config()
     try:
         default = float(cfg.get("talk_value", REPLY_TIMING_DEFAULTS["talk_value"]))

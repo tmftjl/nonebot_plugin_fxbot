@@ -19,7 +19,11 @@ from ...chat import emoji as emoji_module
 from ...config import get_manager as get_config_manager
 from ...utils.tz import SHANGHAI_TZ, as_shanghai
 from ...chat.vision import describe_emoji
+from ...chat.service import chat_service
+from ...chat.bindings import PERSONA, PROVIDER, TALK_VALUE, get_binding, set_binding
+from ...chat.personas import load_personas, effective_persona_name
 from ...chat.providers import provider_manager
+from ...chat.model_trace import read_snapshot, list_snapshots
 from ...chat.memory.state import is_ready, degraded_reason
 from ...chat.focus.manager import FAILURE_THRESHOLD, focus_mode_manager
 from ...chat.message_adapter import load_images
@@ -30,10 +34,12 @@ from ...chat.memory.expression import (
     extract_text_expressions,
 )
 from ...chat.memory.repository import chat_repository
+from ...chat.providers.routing import candidate_providers
 from ...chat.behavior.reply_gate import (
     ReplyGate,
     talk_value_for,
     proactive_switch,
+    talk_value_override,
     default_reply_gate_registry,
 )
 
@@ -85,6 +91,44 @@ def _trace_payload(row: object) -> dict[str, Any]:
         "error": getattr(row, "error", ""),
         "created_at": _iso(getattr(row, "created_at", None)),
     }
+
+
+def _message_payload(row: dict[str, object]) -> dict[str, Any]:
+    """把持久化消息压成控制台只读结构。"""
+    quote = row.get("_quote_snapshot")
+    timestamp = str(row.get("_timestamp") or "")
+    parsed: datetime | None = None
+    if timestamp:
+        try:
+            parsed = datetime.fromisoformat(timestamp)
+        except ValueError:
+            parsed = None
+    return {
+        "role": str(row.get("role") or ""),
+        "content": str(row.get("content") or ""),
+        "timestamp": _iso(parsed),
+        "sender_id": str(row.get("_sender_id") or ""),
+        "sender_name": str(row.get("_sender_name") or ""),
+        "at_bot": bool(row.get("_at_bot")),
+        "quote": str(quote.get("text") or "") if isinstance(quote, dict) else "",
+    }
+
+
+def _digest_payload(digest: dict[str, object]) -> dict[str, Any]:
+    """把会话摘要里的时间字段转成带 +08:00 的 ISO。"""
+    raw_state = digest.get("state")
+    state: dict[str, Any] = dict(raw_state) if isinstance(raw_state, dict) else {}
+    for key in ("cleared_at", "updated_at", "last_active_at"):
+        state[key] = _iso(state.get(key) if isinstance(state.get(key), datetime) else None)
+    style = digest.get("style")
+    if isinstance(style, dict):
+        last_used = style.get("last_used_at")
+        style = {**style, "last_used_at": _iso(last_used if isinstance(last_used, datetime) else None)}
+    cursors = {}
+    for job, cursor in (digest.get("cursors") or {}).items():
+        next_retry = cursor.get("next_retry_at")
+        cursors[job] = {**cursor, "next_retry_at": _iso(next_retry if isinstance(next_retry, datetime) else None)}
+    return {**digest, "state": state, "style": style, "cursors": cursors}
 
 
 def _style_payload(style: object) -> dict[str, Any]:
@@ -228,6 +272,45 @@ def _gate_payload(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+async def _session_settings(tenant: str) -> dict[str, Any]:
+    """汇总会话当前生效的 Provider、人格与回复频率。"""
+    chat_cfg = get_config_manager().get_system()["chat"]
+    configured = provider_manager.list_providers_by_type("chat")
+    available = set(configured)
+    providers = sorted(available)
+    provider_bound = get_binding(PROVIDER, tenant)
+    provider_effective = provider_bound if provider_bound in available else candidate_providers("reply", tenant)[0]
+    if not provider_effective:
+        default_provider = str(chat_cfg.get("provider") or "")
+        provider_effective = default_provider if default_provider in available else next(iter(configured), "")
+    persona_items = load_personas()
+    personas = sorted(persona_items)
+    persona_bound = get_binding(PERSONA, tenant)
+    persona_effective = (
+        persona_bound
+        if persona_bound in persona_items
+        else effective_persona_name("", str(chat_cfg.get("persona") or ""))
+    )
+    return {
+        "tenant": tenant,
+        "provider": {
+            "bound": provider_bound,
+            "effective": provider_effective,
+            "options": providers,
+        },
+        "persona": {
+            "bound": persona_bound,
+            "effective": persona_effective,
+            "options": personas,
+        },
+        "talk_value": {
+            "bound": talk_value_override(tenant),
+            "effective": talk_value_for(tenant),
+        },
+        "proactive": {"switch": await proactive_switch(tenant)},
+    }
+
+
 @router.get("/tenants")
 async def list_tenants() -> dict[str, Any]:
     """列出仍有消息的租户，供控制台选择。"""
@@ -236,6 +319,91 @@ async def list_tenants() -> dict[str, Any]:
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail="聊天数据库尚未就绪") from exc
     return {"tenants": tenants}
+
+
+@router.get("/session")
+async def get_session_settings(tenant: str) -> dict[str, Any]:
+    """读取单个会话的 Provider、人格、回复频率与主动接话开关。"""
+    return await _session_settings(_tenant(tenant))
+
+
+@router.put("/session")
+async def save_session_settings(payload: dict[str, Any]) -> dict[str, Any]:
+    """保存会话级覆盖；空值表示跟随全局。人格变化时清空短期历史。"""
+    tenant = _tenant(str(payload.get("tenant") or ""))
+    personas = load_personas()
+    providers = set(provider_manager.list_providers_by_type("chat"))
+
+    persona = get_binding(PERSONA, tenant)
+    if "persona" in payload:
+        raw = payload["persona"]
+        if raw is not None and not isinstance(raw, str):
+            raise HTTPException(status_code=400, detail="persona 必须是字符串")
+        persona = str(raw or "").strip()
+        if persona and persona not in personas:
+            raise HTTPException(status_code=400, detail="人格不存在")
+
+    provider = get_binding(PROVIDER, tenant)
+    if "provider" in payload:
+        raw = payload["provider"]
+        if raw is not None and not isinstance(raw, str):
+            raise HTTPException(status_code=400, detail="provider 必须是字符串")
+        provider = str(raw or "").strip()
+        if provider and provider not in providers:
+            raise HTTPException(status_code=400, detail="Provider 不存在")
+
+    talk_value = talk_value_override(tenant)
+    if "talk_value" in payload:
+        raw = payload["talk_value"]
+        if raw is None or raw == "":
+            talk_value = None
+        elif isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            raise HTTPException(status_code=400, detail="talk_value 必须是 0 到 1 的数字")
+        elif not 0 <= float(raw) <= 1:
+            raise HTTPException(status_code=400, detail="talk_value 必须在 0 到 1 之间")
+        else:
+            talk_value = float(raw)
+
+    persona_changed = get_binding(PERSONA, tenant) != persona
+    history_cleared = False
+    if persona_changed:
+        try:
+            history_cleared = await chat_service.clear_session(tenant)
+        except Exception as exc:
+            logger.opt(exception=True).warning(f"[Chat] 控制台切换人格前清空会话失败 tenant={tenant}")
+            raise HTTPException(status_code=503, detail="会话历史清理失败，请重试") from exc
+        if not history_cleared:
+            logger.warning(f"[Chat] 控制台切换人格前未能确认历史清空 tenant={tenant}")
+            raise HTTPException(status_code=503, detail="会话历史清理失败，请重试")
+
+    set_binding(PERSONA, tenant, persona)
+    set_binding(PROVIDER, tenant, provider)
+    set_binding(TALK_VALUE, tenant, None if talk_value is None else f"{talk_value:g}")
+
+    return {"settings": await _session_settings(tenant), "history_cleared": history_cleared}
+
+
+@router.get("/session/digest")
+async def get_session_digest(tenant: str) -> dict[str, Any]:
+    """读取会话生命周期、学习资产与轮次状态。"""
+    tenant = _tenant(tenant)
+    try:
+        digest = await chat_repository.session_digest(tenant)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail="聊天数据库尚未就绪") from exc
+    return {"digest": _digest_payload(digest)}
+
+
+@router.get("/messages")
+async def list_recent_messages(tenant: str, limit: int = 40) -> dict[str, Any]:
+    """读取最近的原始消息与已发出回复。"""
+    tenant = _tenant(tenant)
+    limit = max(1, min(200, int(limit)))
+    try:
+        rows = await chat_repository.get_recent_messages(tenant, limit)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail="聊天数据库尚未就绪") from exc
+    return {"items": [_message_payload(row) for row in rows]}
 
 
 @router.get("/planner")
@@ -274,6 +442,22 @@ async def list_traces(tenant: str, limit: int = 100) -> dict[str, Any]:
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail="聊天数据库尚未就绪") from exc
     return {"items": [_trace_payload(row) for row in rows]}
+
+
+@router.get("/model_traces")
+async def list_model_traces(tenant: str, limit: int = 100) -> dict[str, Any]:
+    """列出该会话最近的模型请求快照。"""
+    tenant = _tenant(tenant)
+    return {"items": await asyncio.to_thread(list_snapshots, tenant, limit)}
+
+
+@router.get("/model_traces/detail")
+async def get_model_trace(path: str) -> dict[str, Any]:
+    """读取单份模型快照全文。"""
+    snapshot = await asyncio.to_thread(read_snapshot, path)
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="模型快照不存在")
+    return {"snapshot": snapshot}
 
 
 @router.get("/style")

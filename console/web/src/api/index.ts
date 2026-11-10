@@ -14,6 +14,9 @@ import type {
   CacheClearPayload,
   CacheClearResult,
   ChatTenant,
+  ChatSessionDigest,
+  ChatSessionSettings,
+  ChatRecentMessage,
   ChatStyle,
   ChatJargon,
   ChatExpression,
@@ -24,6 +27,7 @@ import type {
   ChatEmojiCounts,
   ChatHealth,
   ChatTrace,
+  ChatModelTrace,
   AmemorixConfig,
   AmemorixBundle,
   AmemorixCorrectionItem,
@@ -221,6 +225,23 @@ export const cacheApi = {
 // 聊天记忆 API
 export const chatApi = {
   tenants: () => api.get<{ tenants: ChatTenant[] }>('/chat/tenants'),
+  getSession: (tenant: string) =>
+    api.get<ChatSessionSettings>(`/chat/session?tenant=${encodeURIComponent(tenant)}`),
+  getSessionDigest: (tenant: string) =>
+    api.get<{ digest: ChatSessionDigest }>(`/chat/session/digest?tenant=${encodeURIComponent(tenant)}`),
+  listMessages: (tenant: string, limit = 40) =>
+    api.get<{ items: ChatRecentMessage[] }>(
+      `/chat/messages?tenant=${encodeURIComponent(tenant)}&limit=${limit}`,
+    ),
+  saveSession: (
+    payload: {
+      tenant: string
+      persona?: string | null
+      provider?: string | null
+      talk_value?: number | null
+    },
+  ) =>
+    api.put<{ settings: ChatSessionSettings; history_cleared: boolean }>('/chat/session', payload),
   getStyle: (tenant: string) =>
     api.get<{ style: ChatStyle | null }>(`/chat/style?tenant=${encodeURIComponent(tenant)}`),
   saveStyle: (tenant: string, manualOverride: string) =>
@@ -324,6 +345,14 @@ export const chatApi = {
   listTraces: (tenant: string, limit = 100) =>
     api.get<{ items: ChatTrace[] }>(
       `/chat/trace?tenant=${encodeURIComponent(tenant)}&limit=${limit}`,
+    ),
+  listModelTraces: (tenant: string, limit = 100) =>
+    api.get<{ items: ChatModelTrace[] }>(
+      `/chat/model_traces?tenant=${encodeURIComponent(tenant)}&limit=${limit}`,
+    ),
+  getModelTrace: (path: string) =>
+    api.get<{ snapshot: Record<string, any> }>(
+      `/chat/model_traces/detail?path=${encodeURIComponent(path)}`,
     ),
 }
 

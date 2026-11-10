@@ -17,6 +17,8 @@ const emit = defineEmits<{
 interface TenantView {
   tenant: string
   messages: number
+  learnCount: number
+  useCount: number
   scene: 'group' | 'private' | 'other'
   sceneLabel: string
   platform: string
@@ -29,7 +31,12 @@ const open = ref(false)
 const query = ref('')
 const root = ref<HTMLElement | null>(null)
 
-const parse = (tenant: string, messages: number): TenantView => {
+const parse = (
+  tenant: string,
+  messages: number,
+  learnCount = 0,
+  useCount = 0,
+): TenantView => {
   const parts = tenant.split(':')
   const scene = parts[2]
   const target = parts.slice(3).join(':')
@@ -37,6 +44,8 @@ const parse = (tenant: string, messages: number): TenantView => {
     ? {
         tenant,
         messages,
+        learnCount,
+        useCount,
         scene: scene === 'group' ? 'group' : scene === 'private' ? 'private' : 'other',
         sceneLabel: scene === 'group' ? '群聊' : scene === 'private' ? '私聊' : '会话',
         platform: parts[0],
@@ -47,6 +56,8 @@ const parse = (tenant: string, messages: number): TenantView => {
     : {
         tenant,
         messages,
+        learnCount,
+        useCount,
         scene: 'other',
         sceneLabel: '会话',
         platform: tenant,
@@ -58,7 +69,9 @@ const parse = (tenant: string, messages: number): TenantView => {
   return view
 }
 
-const rows = computed(() => props.tenants.map((item) => parse(item.tenant, item.messages)))
+const rows = computed(() =>
+  props.tenants.map((item) => parse(item.tenant, item.messages, item.learn_count, item.use_count)),
+)
 const filtered = computed(() => {
   const keyword = query.value.trim().toLowerCase()
   return keyword ? rows.value.filter((row) => row.searchText.includes(keyword)) : rows.value
@@ -74,7 +87,10 @@ const current = computed(() => {
 const currentMeta = computed(() => {
   const parts = [current.value.platform]
   if (current.value.bot) parts.push(`Bot ${current.value.bot}`)
-  if (current.value.messages) parts.push(`${current.value.messages} 条`)
+  if (current.value.messages) parts.push(`${current.value.messages} 条消息`)
+  if (current.value.learnCount || current.value.useCount) {
+    parts.push(`学习 ${current.value.learnCount} · 使用 ${current.value.useCount}`)
+  }
   return parts.join(' · ')
 })
 
@@ -166,6 +182,9 @@ onBeforeUnmount(() => {
             </span>
             <span class="tenant-option-meta">
               {{ row.platform }}<template v-if="row.bot"> · Bot {{ row.bot }}</template> · {{ row.messages }} 条
+              <template v-if="row.learnCount || row.useCount">
+                · 学习 {{ row.learnCount }} / 使用 {{ row.useCount }}
+              </template>
             </span>
           </span>
         </button>
@@ -182,19 +201,20 @@ onBeforeUnmount(() => {
 .tenant-picker {
   position: relative;
   flex: 1;
-  max-width: 520px;
+  width: 100%;
+  max-width: 720px;
 }
 
 .tenant-trigger {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 14px;
   width: 100%;
-  min-height: 48px;
-  padding: 6px 12px;
+  min-height: 72px;
+  padding: 12px 16px;
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-bg-secondary);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-tertiary);
   color: var(--color-text);
   cursor: pointer;
   text-align: left;
@@ -215,12 +235,12 @@ onBeforeUnmount(() => {
   flex: none;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
-  border-radius: 8px;
-  background: var(--color-bg-tertiary);
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: var(--color-bg-secondary);
   color: var(--color-text-secondary);
-  font-size: 15px;
+  font-size: 21px;
 
   &.group {
     background: var(--color-primary-soft);
@@ -232,22 +252,23 @@ onBeforeUnmount(() => {
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: 2px;
+  gap: 5px;
   min-width: 0;
 }
 
 .tenant-current-name {
   overflow: hidden;
-  font-size: 13px;
+  font-size: 16px;
   font-weight: 600;
+  letter-spacing: -0.01em;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .tenant-current-meta {
   overflow: hidden;
-  color: var(--color-text-tertiary);
-  font-size: 11px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -344,6 +365,13 @@ onBeforeUnmount(() => {
       color: var(--color-primary);
     }
   }
+}
+
+.tenant-option .tenant-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  font-size: 15px;
 }
 
 .tenant-option-main {

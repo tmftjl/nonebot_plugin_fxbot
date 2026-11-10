@@ -14,6 +14,7 @@ from ..utils.paths import config_dir
 
 PERSONA = "persona"
 PROVIDER = "provider"
+TALK_VALUE = "talk_value"
 
 
 def _bindings_path() -> Path:

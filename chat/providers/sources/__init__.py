@@ -6,7 +6,7 @@ from importlib import import_module
 
 from nonebot import logger
 
-_SOURCE_MODULES = ("openai", "anthropic", "gemini", "vertex")
+_SOURCE_MODULES = ("openai", "openai_responses", "anthropic", "gemini", "vertex")
 
 
 def import_provider_sources() -> dict[str, Exception]:

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 from nonebot import logger
 from sqlmodel import select
-from sqlalchemy import func, delete, update
+from sqlalchemy import case, func, delete, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
@@ -43,6 +43,15 @@ def _json_strings(value: object) -> set[str]:
     except (TypeError, ValueError):
         return set()
     return {str(item) for item in items} if isinstance(items, list) else set()
+
+
+def _json_len(value: object) -> int:
+    """解析 JSON 数组长度；坏数据按 0 处理。"""
+    try:
+        items = json.loads(str(value or "[]"))
+    except (TypeError, ValueError):
+        return 0
+    return len(items) if isinstance(items, list) else 0
 
 
 def _batch_range(value: object) -> tuple[str, int, int] | None:
@@ -535,6 +544,112 @@ class ChatRepository:
             }
             for tenant in sorted(tenants, key=lambda item: (-counts.get(item, 0), item))
         ]
+
+    @with_session
+    async def session_digest(self, session: AsyncSession, tenant: str) -> dict[str, object]:
+        """汇总会话生命周期、学习资产与轮次状态，供控制台单次读取。"""
+        state = (await ChatSessionState.select_rows(tenant=tenant, session=session) or [None])[0]
+        style = (await ChatStyle.select_rows(tenant=tenant, session=session) or [None])[0]
+        jargon_rows = (
+            await session.execute(
+                select(ChatJargon.status, func.count(ChatJargon.id))
+                .where(ChatJargon.tenant == tenant)
+                .group_by(ChatJargon.status)
+            )
+        ).all()
+        expression_row = (
+            await session.execute(
+                select(
+                    func.count(ChatExpression.id),
+                    func.sum(case((ChatExpression.checked.is_(True), 1), else_=0)),
+                    func.sum(case((ChatExpression.rejected.is_(True), 1), else_=0)),
+                ).where(ChatExpression.tenant == tenant)
+            )
+        ).one()
+        emoji_row = (
+            await session.execute(
+                select(
+                    func.count(ChatEmoji.id),
+                    func.sum(case((ChatEmoji.enabled.is_(True), 1), else_=0)),
+                ).where(ChatEmoji.tenant == tenant)
+            )
+        ).one()
+        turn_rows = (
+            await session.execute(
+                select(ChatTurn.status, func.count(ChatTurn.id))
+                .where(ChatTurn.tenant == tenant)
+                .group_by(ChatTurn.status)
+            )
+        ).all()
+        cursor_rows = (
+            (
+                await session.execute(
+                    select(ChatJobCursor).where(
+                        ChatJobCursor.tenant == tenant, ChatJobCursor.job.in_(("expression", "jargon"))
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        cursors = {}
+        for cursor in cursor_rows:
+            backlog = (
+                await session.execute(
+                    select(func.count(ChatMessage.id)).where(
+                        ChatMessage.tenant == tenant,
+                        ChatMessage.kind == "user",
+                        ChatMessage.deleted.is_(False),
+                        ChatMessage.id > cursor.cursor_seq,
+                    )
+                )
+            ).scalar_one()
+            cursors[cursor.job] = {
+                "cursor_seq": int(cursor.cursor_seq or 0),
+                "backlog": int(backlog or 0),
+                "fail_count": int(cursor.fail_count or 0),
+                "next_retry_at": cursor.next_retry_at,
+                "last_error": str(cursor.last_error or ""),
+            }
+        latest_activity = (
+            await session.execute(
+                select(func.max(ChatMessage.occurred_at)).where(
+                    ChatMessage.tenant == tenant,
+                    ChatMessage.kind == "user",
+                    ChatMessage.deleted.is_(False),
+                )
+            )
+        ).scalar_one()
+        return {
+            "state": {
+                "generation": int(getattr(state, "generation", 0) or 0),
+                "cleared_at": getattr(state, "cleared_at", None),
+                "updated_at": getattr(state, "updated_at", None),
+                "last_active_at": latest_activity,
+                "learn_enabled": getattr(state, "learn_enabled", None),
+                "proactive_enabled": getattr(state, "proactive_enabled", None),
+            },
+            "style": None
+            if style is None
+            else {
+                "version": int(getattr(style, "version", 0) or 0),
+                "summary": str(getattr(style, "summary", "") or ""),
+                "rules": _json_len(getattr(style, "rules", "[]")),
+                "examples": _json_len(getattr(style, "examples", "[]")),
+                "learn_count": int(getattr(style, "learn_count", 0) or 0),
+                "use_count": int(getattr(style, "use_count", 0) or 0),
+                "last_used_at": getattr(style, "last_used_at", None),
+            },
+            "jargon": {str(status): int(count or 0) for status, count in jargon_rows},
+            "expressions": {
+                "total": int(expression_row[0] or 0),
+                "checked": int(expression_row[1] or 0),
+                "rejected": int(expression_row[2] or 0),
+            },
+            "emoji": {"total": int(emoji_row[0] or 0), "enabled": int(emoji_row[1] or 0)},
+            "turns": {str(status): int(count or 0) for status, count in turn_rows},
+            "cursors": cursors,
+        }
 
     @with_session
     async def messages_after(

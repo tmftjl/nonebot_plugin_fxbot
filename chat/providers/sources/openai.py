@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import json
 from typing import Any
 from collections.abc import AsyncGenerator
@@ -14,6 +15,36 @@ from ..entities import LLMResponse, ProviderType
 from ..register import register_provider
 
 EMBED_BATCH_LIMIT = 25
+_THINK_PATTERN = re.compile(
+    r"<think>(?P<think>.*?)</think>(?P<content>.*)|<think>(?P<think_unclosed>.*)|(?P<content_only>.+)",
+    re.DOTALL,
+)
+
+
+def _reasoning_of(message: Any) -> str:
+    """读取兼容接口附带的思考内容；SDK 未建模该字段时会落在 model_extra。"""
+    extra = getattr(message, "model_extra", None) or {}
+    for name in ("reasoning_content", "reasoning"):
+        value = getattr(message, name, None)
+        if value is None:
+            value = extra.get(name)
+        if value:
+            return str(value)
+    return ""
+
+
+def _inline_reasoning(content: str, reasoning: str) -> tuple[str, str]:
+    """兼容把思考写进正文的模型；已有原生思考时不解析内联块。"""
+    if reasoning or not content.startswith("<think>"):
+        return reasoning, content
+    match = _THINK_PATTERN.match(content)
+    if not match:
+        return reasoning, content
+    if match.group("think") is not None:
+        return match.group("think").strip(), (match.group("content") or "").strip()
+    if match.group("think_unclosed") is not None:
+        return match.group("think_unclosed").strip(), ""
+    return reasoning, (match.group("content_only") or "").strip()
 
 
 @register_provider(
@@ -70,7 +101,13 @@ class OpenAIProvider(ChatProvider):
             raise
 
         msg = resp.choices[0].message
-        response = LLMResponse(role="assistant", content=msg.content or "", raw_response=resp)
+        reasoning, content = _inline_reasoning(msg.content or "", _reasoning_of(msg))
+        response = LLMResponse(
+            role="assistant",
+            content=content,
+            reasoning_content=reasoning,
+            raw_response=resp,
+        )
         if msg.tool_calls:
             response.tool_calls = [
                 {
@@ -111,12 +148,14 @@ class OpenAIProvider(ChatProvider):
         try:
             stream = await self.client.chat.completions.create(**params)
             full_content = ""
+            full_reasoning = ""
             calls: dict[int, dict[str, Any]] = {}
             try:
                 async for chunk in stream:
                     if not chunk.choices:
                         continue
                     delta = chunk.choices[0].delta
+                    full_reasoning += _reasoning_of(delta)
                     for fragment in delta.tool_calls or []:
                         call = calls.setdefault(
                             fragment.index,
@@ -133,9 +172,11 @@ class OpenAIProvider(ChatProvider):
             finally:
                 await stream.close()
             tool_calls = [calls[index] for index in sorted(calls)]
+            reasoning, content = _inline_reasoning(full_content, full_reasoning)
             yield LLMResponse(
                 role="assistant",
-                content=full_content,
+                content=content,
+                reasoning_content=reasoning,
                 tool_calls=tool_calls,
                 tool_call_ids=[call["id"] for call in tool_calls],
             )

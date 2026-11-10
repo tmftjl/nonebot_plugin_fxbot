@@ -31,6 +31,7 @@ from .providers import LLMResponse
 from .heart_flow import plan_flow, conversation
 from .memory.inject import learning_context
 from .session_hooks import session_policy, direct_reply_mode
+from .trace_context import bind_turn, unbind_turn
 from .work_schedule import can_reply
 from .behavior.quote import forget_counter
 from .amemorix.inject import memory_block
@@ -350,9 +351,9 @@ class ChatService:
             return
         await self._hydrate(session_id, history_limit(chat_cfg, is_group))
 
-    async def clear_session(self, session_id: str) -> None:
-        """通知插件清理会话资源，保留学习与长期记忆。"""
-        await self._notify_clear(session_id, full=False)
+    async def clear_session(self, session_id: str) -> bool:
+        """通知插件清理会话资源，返回短期历史是否已确认持久化清空。"""
+        return await self._notify_clear(session_id, full=False)
 
     async def reset_session(self, session_id: str) -> bool:
         """销毁会话：清空短期历史与长期记忆，保留学习记录，再按空会话继续。"""
@@ -381,11 +382,13 @@ class ChatService:
         default_debounce_registry.clear(session_id)
         default_reply_gate_registry.clear(session_id)
         forget_counter(session_id)
+        focus_cleared = True
         try:
             from .focus import focus_mode_manager
 
             await focus_mode_manager.clear_context(session_id)
         except Exception:
+            focus_cleared = False
             logger.opt(exception=True).warning("[Chat] 清理 Focus 上下文失败")
         async with self.session_store.lock(session_id):
             subagent_module.subagent_tasks.cancel_session(session_id)
@@ -406,7 +409,7 @@ class ChatService:
                     return False
                 self.session_store.set_epoch(session_id, generation)
         if not full:
-            return True
+            return memory_state.is_ready() and focus_cleared
         return await self._clear_durable_memory(session_id, persons)
 
     async def _clear_durable_memory(self, session_id: str, persons: tuple[str, ...]) -> bool:
@@ -614,6 +617,7 @@ class ChatService:
         started = time.monotonic()
         error = ""
         providers: TaskProvider | None = None
+        context_token = bind_turn(request.session_id, request.turn_id)
         try:
             async with TaskProvider(candidates, task="reply") as providers:
                 return await self._process_with_provider(
@@ -623,6 +627,7 @@ class ChatService:
             error = f"{type(exc).__name__}: {exc}"
             raise
         finally:
+            unbind_turn(context_token)
             provider_name = providers.name if providers is not None else candidates[0]
             if focus_instruction is not None or request.metadata.get("_direct_llm"):
                 state.add_stage(

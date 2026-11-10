@@ -295,6 +295,66 @@ export interface ChatTenant {
   use_count?: number
 }
 
+export interface ChatSessionChoice {
+  bound: string
+  effective: string
+  options: string[]
+}
+
+export interface ChatSessionSettings {
+  tenant: string
+  provider: ChatSessionChoice
+  persona: ChatSessionChoice
+  talk_value: {
+    bound: number | null
+    effective: number
+  }
+  proactive: {
+    switch: boolean | null
+  }
+}
+
+export interface ChatRecentMessage {
+  role: string
+  content: string
+  timestamp: string | null
+  sender_id: string
+  sender_name: string
+  at_bot: boolean
+  quote: string
+}
+
+export interface ChatSessionDigest {
+  state: {
+    generation: number
+    cleared_at: string | null
+    updated_at: string | null
+    last_active_at: string | null
+    learn_enabled: boolean | null
+    proactive_enabled: boolean | null
+  }
+  style: {
+    version: number
+    summary: string
+    rules: number
+    examples: number
+    learn_count: number
+    use_count: number
+    last_used_at: string | null
+  } | null
+  jargon: Record<string, number>
+  expressions: { total: number; checked: number; rejected: number }
+  emoji: { total: number; enabled: number }
+  turns: Record<string, number>
+  cursors: Record<string, {
+    cursor_seq: number
+    backlog: number
+    fail_count: number
+    next_retry_at: string | null
+    last_error: string
+  }>
+}
+
 export interface ChatStyleExample {
   text: string
   seq: number
@@ -470,6 +530,22 @@ export interface ChatTrace {
   latency_ms: number
   error: string
   created_at: string | null
+}
+
+export interface ChatModelTrace {
+  path: string
+  category: string
+  created_at: string
+  size: number
+  model_name: string
+  provider: string
+  turn_id: string
+  task: string
+  duration_ms: number
+  status: string
+  output_title: string
+  reasoning_preview: string
+  reply_preview: string
 }
 
 // A_Memorix 长期记忆

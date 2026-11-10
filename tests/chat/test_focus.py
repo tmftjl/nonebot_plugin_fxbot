@@ -73,6 +73,50 @@ def _focus_config(**values: object) -> dict[str, object]:
     return config
 
 
+class FocusTraceContextTests(unittest.IsolatedAsyncioTestCase):
+    """共享规划绑定组身份和参与成员，成功、失败与取消后都恢复外层上下文。"""
+
+    async def test_group_context_is_bound_and_restored(self) -> None:
+        from src.plugins.nonebot_plugin_fxbot.chat.providers import LLMResponse
+        from src.plugins.nonebot_plugin_fxbot.chat.trace_context import bind_turn, unbind_turn, current_turn
+
+        for failure in (None, RuntimeError("failed"), asyncio.CancelledError()):
+            with self.subTest(failure=failure):
+                seen = []
+
+                async def chat(**kwargs):
+                    seen.append(current_turn())
+                    if failure is not None:
+                        raise failure
+                    return LLMResponse(content="ok")
+
+                provider = SimpleNamespace(provider_id="p", get_model=lambda: "m", chat=chat)
+                lease = MagicMock()
+                lease.__aenter__.return_value = provider
+                lease.__aexit__.return_value = False
+                group = FocusGroupRuntime("group:shared-trace")
+                group.members = {SESSION: _member(_request()), OTHER: _member(_request(session_id=OTHER))}
+                token = bind_turn("outer", "outer-turn")
+                try:
+                    with (
+                        patch.object(group_runtime_module, "fallback_provider", return_value=lease),
+                        patch.object(group_runtime_module, "guard", AsyncMock(return_value=True)),
+                        patch.object(group_runtime_module, "planner_snapshot", return_value={}),
+                    ):
+                        if failure is None:
+                            await group._chat([], [])
+                        else:
+                            with self.assertRaises(type(failure)):
+                                await group._chat([], [])
+                    self.assertEqual(current_turn().session_id, "outer")
+                finally:
+                    unbind_turn(token)
+                self.assertEqual(len(seen), 1)
+                self.assertEqual(seen[0].session_id, group.scope_id)
+                self.assertEqual(seen[0].related_sessions, (SESSION, OTHER))
+                self.assertTrue(seen[0].turn_id)
+
+
 class FocusSystemPromptTests(unittest.IsolatedAsyncioTestCase):
     """共享规划只贡献一次系统段，参考资料不混入系统指令。"""
 
