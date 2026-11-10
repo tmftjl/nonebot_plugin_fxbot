@@ -286,8 +286,21 @@ class ConsoleConfigSaveTests(unittest.IsolatedAsyncioTestCase):
             result = await config_routes.update_config(
                 {"example": {"enabled": False}, "base_revisions": revisions, "unknown": {}}
             )
-        self.assertEqual(result, {"success": True})
+        self.assertTrue(result["success"])
         self.assertEqual(self.plugin.load(), {"enabled": False})
+        self.assertEqual(result["revisions"], {"example": sha1(self.plugin.path.read_bytes()).hexdigest()})
+
+    async def test_save_returns_revisions_for_immediate_resave(self) -> None:
+        """保存后用回传的修订号可以立刻再保存一次；沿用旧修订号才会冲突。"""
+        payload = self.manager.get_console_configs()
+        base_revisions = payload.pop("revisions")
+        with patch.object(config_routes, "get_manager", return_value=self.manager):
+            first = await config_routes.update_config({**payload, "base_revisions": base_revisions})
+            second = await config_routes.update_config({**payload, "base_revisions": first["revisions"]})
+            with self.assertRaises(HTTPException) as raised:
+                await config_routes.update_config({**payload, "base_revisions": base_revisions})
+        self.assertTrue(second["success"])
+        self.assertEqual(raised.exception.status_code, 409)
 
     async def test_save_without_base_revisions_preserves_legacy_behavior(self) -> None:
         payload = self.manager.get_console_configs()
@@ -295,7 +308,7 @@ class ConsoleConfigSaveTests(unittest.IsolatedAsyncioTestCase):
         self.plugin.save({"enabled": False})
         with patch.object(config_routes, "get_manager", return_value=self.manager):
             result = await config_routes.update_config(payload)
-        self.assertEqual(result, {"success": True})
+        self.assertTrue(result["success"])
         self.assertEqual(self.plugin.load(), {"enabled": True})
 
     async def test_provider_delete_rejects_dangling_task_reference(self) -> None:

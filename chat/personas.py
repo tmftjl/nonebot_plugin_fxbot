@@ -143,6 +143,12 @@ def load_personas() -> dict[str, PersonaItem]:
     return dict(personas)
 
 
+def reload_personas() -> dict[str, str]:
+    """丢弃缓存并重新扫描人格目录，用于拾取磁盘上手工改动的人格文件。"""
+    cache.pop(("personas",))
+    return list_personas()
+
+
 def get_persona_text(name: str | None = None) -> str:
     """读取指定人格内容，未知名称回退默认人格。"""
     persona_name = str(name or "").strip() or DEFAULT_PERSONA

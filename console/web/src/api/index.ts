@@ -122,20 +122,35 @@ export const dataApi = {
 }
 
 // 配置 API
-let configRevisions: Record<string, string> | undefined
+// 修订号跟着配置快照走：全局变量会被别的页面刷新，导致同一个快照拿新修订号去提交旧数据
+const REVISIONS = Symbol('fxbot.config.revisions')
+
+type ConfigRevisions = Record<string, string> | undefined
+
+const getRevisions = (configs: Record<string, any>): ConfigRevisions => (configs as any)[REVISIONS]
+
+const setRevisions = (configs: Record<string, any>, revisions: ConfigRevisions) => {
+  // Vue 的响应式代理会透传 symbol 属性；写符号键不会被 JSON 或对象展开带走
+  ;(configs as any)[REVISIONS] = revisions
+}
 
 export const configApi = {
   getAll: async () => {
     const { revisions, ...configs } = await api.get<Record<string, any>>('/config')
-    configRevisions = revisions
+    setRevisions(configs, revisions)
     return configs
   },
   getTabs: () => api.get<any[]>('/config/tabs'),
   getChatTab: () => api.get<any>('/config/chat'),
-  save: (configs: Record<string, any>) => api.put<ApiResponse>('/config', {
-    ...configs,
-    base_revisions: configRevisions,
-  }),
+  save: async (configs: Record<string, any>) => {
+    const result = await api.put<ApiResponse & { revisions?: Record<string, string> }>('/config', {
+      ...configs,
+      base_revisions: getRevisions(configs),
+    })
+    // 保存成功后服务端会重写文件，快照要换成新的修订号，否则再次保存必被判为冲突
+    if (result?.revisions) setRevisions(configs, { ...getRevisions(configs), ...result.revisions })
+    return result
+  },
 }
 
 // 权限 API
@@ -492,8 +507,10 @@ export const metaApi = {
       bots: (data.bots || []).map((item) => typeof item === 'string' ? item : item.self_id)
     }
   },
-  getPersonas: () =>
-    api.get<{ items: Record<string, string>; default: string }>('/ai_chat/personas'),
+  getPersonas: (refresh = false) =>
+    api.get<{ items: Record<string, string>; default: string }>(
+      `/ai_chat/personas${refresh ? '?refresh=true' : ''}`,
+    ),
   createPersona: (key: string, desc: string) =>
     api.post<{ success: boolean; message?: string }>('/ai_chat/persona', { key, desc }),
   updatePersona: (key: string, desc: string) =>

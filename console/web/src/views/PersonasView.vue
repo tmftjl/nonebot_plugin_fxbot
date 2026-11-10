@@ -97,10 +97,10 @@ const {
 
 const initial = (key: string): string => (key ? key.slice(0, 1).toUpperCase() : '?')
 
-const loadPersonas = async () => {
+const loadPersonas = async (refresh = false) => {
   loading.value = true
   try {
-    const res = await metaApi.getPersonas()
+    const res = await metaApi.getPersonas(refresh)
     defaultPersona.value = res?.default || ''
     personas.value = Object.entries(res?.items || {}).map(([key, desc]) => ({
       key,
@@ -273,7 +273,9 @@ onMounted(() => {
       :subtitle="`共 ${personas.length} 个人格 · 群聊可用 /人格 名称 覆盖，私聊按用户生效`"
     >
       <template #actions>
-        <button class="btn btn-secondary" @click="loadPersonas">刷新</button>
+        <button class="btn btn-secondary" :disabled="loading" @click="loadPersonas(true)">
+          {{ loading ? '刷新中…' : '刷新' }}
+        </button>
         <button class="btn btn-primary" @click="openCreateDialog">+ 新增人格</button>
       </template>
     </PageHeader>

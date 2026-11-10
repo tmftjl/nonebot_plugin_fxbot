@@ -1280,9 +1280,10 @@ async def get_config() -> dict[str, Any]:
 @router.put("")
 async def update_config(payload: dict[str, Any]) -> dict[str, Any]:
     """保存控制台配置。"""
+    manager = get_manager()
     try:
         base_revisions = payload.pop("base_revisions", None)
-        get_manager().save_console_configs(payload, base_revisions=base_revisions)
+        manager.save_console_configs(payload, base_revisions=base_revisions)
     except ConfigConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
@@ -1290,4 +1291,5 @@ async def update_config(payload: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:
         logger.opt(exception=True).error("[Console] 保存配置失败")
         raise HTTPException(status_code=500, detail="保存失败，请稍后再试") from exc
-    return {"success": True}
+    # 回传保存后的修订号，客户端可以直接基于自己的快照继续提交，不必先重新拉一次配置
+    return {"success": True, "revisions": manager.revisions(payload)}

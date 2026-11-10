@@ -8,7 +8,7 @@ from fastapi import Depends, APIRouter
 from nonebot import logger
 
 from ..auth import bearer_auth
-from ...chat.personas import DEFAULT_PERSONA, list_personas, delete_persona, save_persona_text
+from ...chat.personas import DEFAULT_PERSONA, list_personas, reload_personas, delete_persona, save_persona_text
 from ...plugin.builder import get_plugin_display_names, get_command_display_names
 from ...chat.providers.usage import get_model_task_usage
 from ...system_control.bot_status import get_today_stats, get_stats_history
@@ -47,9 +47,9 @@ async def get_model_usage(hours: int = 24) -> dict[str, Any]:
 
 
 @router.get("/ai_chat/personas")
-async def get_ai_personas() -> dict[str, Any]:
-    """获取 AI 人格列表与不可删除的默认人格名。"""
-    return {"items": list_personas(), "default": DEFAULT_PERSONA}
+async def get_ai_personas(refresh: bool = False) -> dict[str, Any]:
+    """获取 AI 人格列表与不可删除的默认人格名；refresh=true 时绕过缓存重新扫描磁盘。"""
+    return {"items": reload_personas() if refresh else list_personas(), "default": DEFAULT_PERSONA}
 
 
 @router.post("/ai_chat/persona")

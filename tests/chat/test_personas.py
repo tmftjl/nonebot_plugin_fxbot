@@ -104,6 +104,20 @@ class ConsolePersonaRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result["success"])
         self.assertEqual(result["message"], "人格不存在")
 
+    async def test_refresh_bypasses_cached_persona_list(self) -> None:
+        """磁盘上新增的人格默认走缓存看不到，refresh=true 才重新扫描。"""
+        from src.plugins.nonebot_plugin_fxbot.console.routes import meta
+        from src.plugins.nonebot_plugin_fxbot.chat.personas import get_personas_dir, reload_personas
+
+        reload_personas()
+        name = f"disk-{uuid4().hex}"
+        path = get_personas_dir() / f"{name}.md"
+        path.write_text("磁盘新增", encoding="utf-8")
+        self.addCleanup(path.unlink, True)
+
+        self.assertNotIn(name, (await meta.get_ai_personas())["items"])
+        self.assertIn(name, (await meta.get_ai_personas(refresh=True))["items"])
+
 
 if __name__ == "__main__":
     unittest.main()
