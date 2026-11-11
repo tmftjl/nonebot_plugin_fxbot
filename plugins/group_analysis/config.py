@@ -1,0 +1,59 @@
+"""群聊日报配置。"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from ...config import get_manager
+from .ui_schema import DEFAULTS
+
+
+def validate_config(value: dict[str, Any]) -> None:
+    """拒绝把非布尔值当成开关，避免字符串 "false" 静默启用。"""
+    for key in ("enabled", "filter_self"):
+        if key in value and not isinstance(value[key], bool):
+            raise ValueError(f"{key} 必须是布尔值")
+    sections = value.get("sections")
+    if not isinstance(sections, dict):
+        raise ValueError("sections 必须是对象")
+    for key, enabled in sections.items():
+        if not isinstance(enabled, bool):
+            raise ValueError(f"sections.{key} 必须是布尔值")
+
+
+REG = get_manager().register("group_analysis", DEFAULTS, clean_extra=True, validator=validate_config)
+
+
+def get_config() -> dict[str, Any]:
+    """每次生成前重新读取，保存后下一份日报生效。"""
+    return REG.load()
+
+
+def is_enabled() -> bool:
+    return get_config()["enabled"] is True
+
+
+def allowed_groups() -> set[str]:
+    """空列表表示所有群都允许。"""
+    return {str(item).strip() for item in get_config().get("groups") or [] if str(item).strip()}
+
+
+def group_allowed(group_id: str) -> bool:
+    groups = allowed_groups()
+    return not groups or str(group_id) in groups
+
+
+def section_enabled(name: str) -> bool:
+    return bool((get_config().get("sections") or {}).get(name))
+
+
+def auto_groups() -> list[str]:
+    return [str(item).strip() for item in get_config().get("auto_groups") or [] if str(item).strip()]
+
+
+def bounded_days(value: int | None) -> int:
+    """手动天数限制在 1 到 max_days，避免回溯过久拖垮协议端。"""
+    config = get_config()
+    maximum = max(1, int(config.get("max_days") or 1))
+    days = int(value if value is not None else config.get("days") or 1)
+    return min(max(days, 1), maximum)

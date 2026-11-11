@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 import asyncio
 from typing import Any
@@ -11,7 +12,7 @@ from nonebot import logger
 from nonebot.adapters import Bot
 from nonebot.adapters.onebot.v11 import Bot as OneBotV11Bot
 
-from ..core.bot import ReplyInfo, RecallInfo, PlatformAdapter, UnsupportedCapability, _image_bytes
+from ..core.bot import ReplyInfo, RecallInfo, HistoryMessage, PlatformAdapter, UnsupportedCapability, _image_bytes
 
 
 def _member_role(member: Any, user_id: str) -> str | None:
@@ -151,6 +152,46 @@ class OneBotV11MessageAdapter(PlatformAdapter):
         except Exception:
             payload = await self._api(bot, "get_forward_msg", message_id=str(forward_id))
         return _parse_forward_nodes(payload)
+
+    async def fetch_group_history(
+        self,
+        bot: Bot,
+        group_id: str,
+        *,
+        start_time: int | None = None,
+        limit: int = 1000,
+    ) -> list[HistoryMessage]:
+        """按锚点回溯群历史，兼容标准实现与 sl 的分页差异。"""
+        dialect = await _history_dialect(self, bot)
+        start_timestamp = int(start_time or 0)
+        collected: dict[str, dict[str, Any]] = {}
+        anchor: Any = None
+        while len(collected) < limit:
+            count = min(_HISTORY_PAGE_SIZE, limit - len(collected))
+            params = _history_params(group_id, count, anchor, dialect)
+            page = await _history_page(self, bot, params, group_id)
+            if not page:
+                break
+            timed = [(raw, int(raw.get("time"))) for raw in page if _history_message(raw) is not None]
+            if not timed:
+                break
+            earliest_raw, earliest_time = min(timed, key=lambda pair: pair[1])
+            for raw, timestamp in timed:
+                identifier = _history_id(raw)
+                if not identifier or identifier in collected:
+                    continue
+                if start_timestamp <= timestamp <= int(time.time()):
+                    collected[identifier] = raw
+            next_anchor = _history_anchor(earliest_raw, dialect)
+            if earliest_time <= start_timestamp or next_anchor is None:
+                break
+            if anchor is not None and str(next_anchor) == str(anchor):
+                break
+            anchor = next_anchor
+            await asyncio.sleep(0.05)
+        messages = [message for raw in collected.values() if (message := _history_message(raw)) is not None]
+        messages.sort(key=lambda message: message.timestamp)
+        return messages[-limit:]
 
     def extract_recall(self, event: Any) -> RecallInfo | None:
         """识别 group_recall / friend_recall 通知。"""
@@ -354,6 +395,143 @@ class OneBotV11MessageAdapter(PlatformAdapter):
             await self._api(bot, "send_private_forward_msg", user_id=int(user_id_value), messages=nodes)
             return True
         return False
+
+
+_HISTORY_PAGE_SIZE = 100
+_HISTORY_RETRIES = 3
+_HISTORY_DIALECT_CACHE: dict[str, tuple[float, str]] = {}
+_CQ_PATTERN = re.compile(r"\[CQ:([a-zA-Z_]+)(?:,[^\]]*)?\]")
+_CQ_PLACEHOLDERS = {
+    "image": "[图片]",
+    "face": "[表情]",
+    "mface": "[表情]",
+    "record": "[语音]",
+    "video": "[视频]",
+    "forward": "[转发]",
+    "json": "[卡片]",
+    "xml": "[卡片]",
+    "at": "@",
+    "reply": "",
+}
+
+
+async def _history_dialect(adapter: "OneBotV11MessageAdapter", bot: Bot) -> str:
+    """按协议端名称选择分页方言；探测失败按标准实现处理。"""
+    key = f"{getattr(bot, 'self_id', '')}:{type(bot).__module__}"
+    cached = _HISTORY_DIALECT_CACHE.get(key)
+    if cached and cached[0] > time.time():
+        return cached[1]
+    dialect = "standard"
+    try:
+        info = await asyncio.wait_for(adapter._api(bot, "get_version_info"), timeout=3)
+    except Exception:
+        info = None
+    if isinstance(info, dict):
+        data = info.get("data") if isinstance(info.get("data"), dict) else {}
+        name = str(info.get("app_name") or info.get("impl") or data.get("app_name") or data.get("impl") or "").lower()
+        if name == "sl" or "snowluma" in name:
+            dialect = "sl"
+    _HISTORY_DIALECT_CACHE[key] = (time.time() + 600, dialect)
+    return dialect
+
+
+def _history_params(group_id: str, count: int, anchor: Any, dialect: str) -> dict[str, Any]:
+    """标准实现用 message_seq 且接受 reverseOrder，sl 只认 message_id。"""
+    params: dict[str, Any] = {"group_id": int(group_id), "count": count}
+    if dialect == "sl":
+        if anchor is not None:
+            params["message_id"] = anchor
+        return params
+    params["reverseOrder"] = True
+    if anchor is not None:
+        params["message_seq"] = anchor
+    return params
+
+
+def _history_anchor(raw: dict[str, Any], dialect: str) -> Any:
+    """从最旧消息提取下一页锚点，缺失时返回 None。"""
+    if dialect == "sl":
+        value = raw.get("message_id")
+    else:
+        value = raw.get("message_seq") or raw.get("real_id") or raw.get("seq") or raw.get("message_id")
+    return value if isinstance(value, (int, str)) and value != "" else None
+
+
+def _history_id(raw: dict[str, Any]) -> str:
+    """优先平台消息 ID，缺失时用时间、发送者和正文拼出稳定去重键。"""
+    value = raw.get("message_id") or raw.get("message_seq") or raw.get("real_id")
+    if value is not None and value != "":
+        return str(value)
+    return f"fallback:{raw.get('time')}:{raw.get('user_id')}:{raw.get('raw_message') or raw.get('message')}"
+
+
+async def _history_page(
+    adapter: "OneBotV11MessageAdapter", bot: Bot, params: dict[str, Any], group_id: str
+) -> list[dict[str, Any]]:
+    """单页最多重试三次；重试耗尽后返回空页，由调用方处理已取到的消息。"""
+    for attempt in range(1, _HISTORY_RETRIES + 1):
+        try:
+            result = await adapter._api(bot, "get_group_msg_history", **params)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            if attempt >= _HISTORY_RETRIES:
+                logger.warning(f"[adapter] 拉取群 {group_id} 历史消息失败，已停止回溯: {exc}")
+                return []
+            await asyncio.sleep(attempt)
+            continue
+        raw_messages = result.get("messages") if isinstance(result, dict) else result
+        if not isinstance(raw_messages, list):
+            return []
+        return [item for item in raw_messages if isinstance(item, dict)]
+    return []
+
+
+def _cq_text(raw: str) -> str:
+    return _CQ_PATTERN.sub(lambda match: _CQ_PLACEHOLDERS.get(match.group(1), ""), raw).strip()
+
+
+def _history_content(content: Any) -> tuple[str, int]:
+    """把消息内容归一为正文和图片数，不保留原始 CQ 码。"""
+    if isinstance(content, str):
+        return _cq_text(content), content.count("[CQ:image")
+    parts: list[str] = []
+    images = 0
+    for segment in _segments(content):
+        kind = str(_field(segment, "type") or "")
+        data = _field(segment, "data")
+        data = data if isinstance(data, dict) else {}
+        if kind == "text":
+            parts.append(str(data.get("text") or ""))
+            continue
+        if kind == "image":
+            images += 1
+        if kind == "at":
+            parts.append(f"@{data.get('name') or data.get('qq') or ''}")
+            continue
+        parts.append(_CQ_PLACEHOLDERS.get(kind, ""))
+    return "".join(parts).strip(), images
+
+
+def _history_message(raw: dict[str, Any]) -> HistoryMessage | None:
+    """跳过无时间和无内容的消息，正文缺失时回退到 raw_message。"""
+    timestamp = raw.get("time")
+    if not isinstance(timestamp, (int, float)) or timestamp <= 0:
+        return None
+    text, images = _history_content(raw.get("message"))
+    if not text and not images:
+        text, images = _history_content(raw.get("raw_message"))
+    if not text and not images:
+        return None
+    sender = raw.get("sender") if isinstance(raw.get("sender"), dict) else {}
+    return HistoryMessage(
+        message_id=_history_id(raw),
+        timestamp=int(timestamp),
+        user_id=str(raw.get("user_id") or sender.get("user_id") or ""),
+        user_name=str(sender.get("card") or sender.get("nickname") or raw.get("user_id") or ""),
+        text=text,
+        images=images,
+    )
 
 
 def _segments(content: Any) -> list[Any]:

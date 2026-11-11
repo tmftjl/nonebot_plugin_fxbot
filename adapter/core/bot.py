@@ -42,6 +42,18 @@ class RecallInfo:
     operator_id: str = ""
 
 
+@dataclass(slots=True)
+class HistoryMessage:
+    """平台无关的群历史消息，只保留统计与摘要需要的字段。"""
+
+    message_id: str
+    timestamp: int
+    user_id: str = ""
+    user_name: str = ""
+    text: str = ""
+    images: int = 0
+
+
 _SCENE_TYPES = frozenset({"group", "private", "channel", "guild"})
 
 
@@ -241,6 +253,17 @@ class PlatformAdapter(ABC):
 
     async def get_group_list(self, bot: Any) -> Any:
         return await self._unsupported("获取群列表")
+
+    async def fetch_group_history(
+        self,
+        bot: Any,
+        group_id: str,
+        *,
+        start_time: int | None = None,
+        limit: int = 1000,
+    ) -> list[HistoryMessage]:
+        """回溯群历史消息，按时间升序返回；平台不支持时抛 UnsupportedCapability。"""
+        return await self._unsupported("获取群历史消息")
 
     async def get_user(self, bot: Any, user_id: str) -> Any:
         return await self._unsupported("获取用户信息")
@@ -647,6 +670,11 @@ class PlatformBot:
 
     async def get_group_list(self):
         return await self.adapter.get_group_list(self.raw)
+
+    async def fetch_group_history(
+        self, group_id: str, *, start_time: int | None = None, limit: int = 1000
+    ) -> list[HistoryMessage]:
+        return await self.adapter.fetch_group_history(self.raw, str(group_id), start_time=start_time, limit=limit)
 
     async def get_user(self, user_id: str):
         return await self.adapter.get_user(self.raw, str(user_id))

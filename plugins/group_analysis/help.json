@@ -1,0 +1,18 @@
+{
+  "title": "群聊日报帮助",
+  "sub_title": "群消息统计 / AI 日报",
+  "key": "群聊日报",
+  "aliases": ["群聊分析", "group_analysis"],
+  "footer": "FxBot 群聊日报",
+  "col_count": 2,
+  "groups": [
+    {
+      "group": "群聊日报",
+      "list": [
+        {"icon": 1, "title": "/群聊分析", "desc": "分析最近 24 小时并发送日报长图"},
+        {"icon": 2, "title": "/群聊分析 3", "desc": "分析最近 3 天的群消息"},
+        {"icon": 3, "title": "自动日报", "desc": "在控制台配置群号与推送时间，每天分析前一天"}
+      ]
+    }
+  ]
+}

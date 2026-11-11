@@ -36,6 +36,7 @@ from .core.bot import (
     RecallInfo,
     PlatformBot,
     PlatformError,
+    HistoryMessage,
     PlatformAdapter,
     UnsupportedCapability,
     selfBot,
@@ -268,6 +269,11 @@ async def send_message_to_target(bot, target, message):
     return await get_platform_adapter(bot).send_message_to_target(bot, target, message)
 
 
+async def fetch_group_history(bot, group_id, *, start_time=None, limit=1000):
+    """回溯群历史消息；平台不支持时抛 UnsupportedCapability。"""
+    return await get_platform_adapter(bot).fetch_group_history(bot, str(group_id), start_time=start_time, limit=limit)
+
+
 async def send_text_to_target(bot, target, text):
     return await get_platform_adapter(bot).send_text_to_target(bot, target, text)
 
@@ -330,6 +336,7 @@ __all__ = [
     "extract_recall",
     "extract_reply_message_id",
     "fetch_image_bytes",
+    "fetch_group_history",
     "get_message_adapter",
     "get_replied_message",
     "image_sources_from_event_or_reply",
@@ -344,6 +351,7 @@ __all__ = [
     "PlatformAdapter",
     "ReplyInfo",
     "RecallInfo",
+    "HistoryMessage",
     "PlatformError",
     "UnsupportedCapability",
     "get_platform_adapter",
