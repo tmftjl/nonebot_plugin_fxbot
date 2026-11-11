@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, patch
 
+from src.plugins.nonebot_plugin_fxbot.chat.trace import TurnTrace
 from src.plugins.nonebot_plugin_fxbot.chat.types import ChatRequest, ChatResponse
 from src.plugins.nonebot_plugin_fxbot.chat.session import ChatSessionStore
 from src.plugins.nonebot_plugin_fxbot.chat.providers import LLMResponse
@@ -81,6 +82,17 @@ class ConversationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.execute.await_args.args[2].session_id, "tenant-a")
         self.service._send_generated.assert_awaited_once()
         self.assertEqual(self.service._process_locked.await_args.kwargs["focus_instruction"], "说明查到的天气")
+
+    async def test_planner_trace_records_called_tools(self) -> None:
+        state = TurnTrace(self.request.turn_id)
+        self.request.metadata["_turn_trace"] = state
+        self.provider.chat.side_effect = [
+            LLMResponse(tool_calls=[call("lookup", query="天气")]),
+            LLMResponse(tool_calls=[call("stop")]),
+        ]
+        await conversation.run(self.service, self.context)
+        stages = [stage for stage in state.stages if stage["kind"] == "planner"]
+        self.assertEqual([stage["tools"] for stage in stages], [["lookup"], ["stop"]])
 
     async def test_plain_planner_text_does_not_trigger_reply(self) -> None:
         self.provider.chat.return_value = LLMResponse(content="暂时没有必要发言")

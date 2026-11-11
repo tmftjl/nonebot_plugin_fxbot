@@ -66,7 +66,7 @@ def control_tools(passive: bool) -> list[dict[str, Any]]:
         reply_options["attach_emoji"] = {
             "type": "integer",
             "minimum": 0,
-            "description": "候选图中的表情工具编号，0 表示不附加",
+            "description": "从 show_emoji_list 的拼图选择一个表情包，填写图片序号后随回复发送；0 或不填表示不发送。",
         }
     if reply_at_enabled():
         reply_options["attach_at"] = {
@@ -78,7 +78,13 @@ def control_tools(passive: bool) -> list[dict[str, Any]]:
         ("wait", "等待后重新查看聊天并思考。", {"seconds": {"type": "integer", "minimum": 0}}, ["seconds"]),
         ("stop", "结束本轮思考并等待新消息。", {}, []),
         ("send_emoji", "发送一个表情包来表达情绪，参与聊天。", {"msg_id": {"type": "string"}}, []),
-        ("show_emoji_list", "查看表情候选图，仅供规划器选择，不发送给聊天对象。", {}, []),
+        (
+            "show_emoji_list",
+            "查看随机抽取的表情包选择拼图。图片会进入你的上下文，不会发送给聊天对象。"
+            "调用 reply 时将选中图片的序号填入 attach_emoji；历史拼图的序号也可使用。",
+            {},
+            [],
+        ),
     ]
     if passive:
         definitions.append(("set_reply_options", "设置下一次回复的附加选项，不直接发言。", reply_options, []))
@@ -392,8 +398,11 @@ async def run(service: Any, context: Any) -> ChatResponse:
                 request_messages.append({"role": "user", "content": reminder})
             started = perf_counter()
             failure = ""
+            called: list[str] = []
             try:
                 response = await interruptible_step(service, context, provider, request_messages, tools)
+                tool_calls = getattr(response, "tool_calls", None) or []
+                called = [str((call.get("function") or {}).get("name") or "") for call in tool_calls]
             except Exception:
                 failure = "规划请求失败"
                 raise
@@ -405,6 +414,7 @@ async def run(service: Any, context: Any) -> ChatResponse:
                         int((perf_counter() - started) * 1000),
                         provider=str(getattr(provider, "provider_id", "")),
                         error=failure,
+                        tools=called,
                     )
             if response is None:
                 break
@@ -413,7 +423,7 @@ async def run(service: Any, context: Any) -> ChatResponse:
             if reminder and messages and messages[-1].get("content") == reminder:
                 messages.pop()
             if not request.metadata.get("planner_sampled"):
-                names_called = [call.get("function", {}).get("name") for call in response.tool_calls]
+                names_called = called
                 action = (
                     "text_reply"
                     if "reply" in names_called or (passive and response.content and not names_called)
