@@ -4,29 +4,27 @@ import { computed, ref, watch } from 'vue'
 import { Clock, Search } from '@element-plus/icons-vue'
 import { chatApi } from '@/api'
 import type { ChatModelTrace } from '@/types/api'
-import { filterModelTraces, traceDuration, traceStage, type TraceRecord } from '@/utils/modelTrace'
+import { filterTraceGroups, groupModelTraces, traceDuration, type TraceRecord } from '@/utils/modelTrace'
 import ModelTraceDetail from './ModelTraceDetail.vue'
 
 const props = defineProps<{ tenant: string; items: ChatModelTrace[]; loading: boolean }>()
 const query = ref('')
-const stage = ref('')
 const status = ref('')
 const page = ref(1)
-const selectedPath = ref('')
-const detail = ref<TraceRecord | null>(null)
+const selectedKey = ref('')
+const snapshots = ref<TraceRecord[]>([])
 const detailLoading = ref(false)
 const detailError = ref(false)
 const PAGE_SIZE = 15
 let detailRequest = 0
 
-const stages = computed(() => [...new Set(props.items.map((item) => item.task || item.category))])
-const filtered = computed(() => filterModelTraces(props.items, query.value, stage.value, status.value))
+const groups = computed(() => groupModelTraces(props.items))
+const filtered = computed(() => filterTraceGroups(groups.value, query.value, status.value))
 const pageCount = computed(() => Math.max(1, Math.ceil(filtered.value.length / PAGE_SIZE)))
 const currentPage = computed(() => Math.min(page.value, pageCount.value))
 const rows = computed(() => filtered.value.slice((currentPage.value - 1) * PAGE_SIZE, currentPage.value * PAGE_SIZE))
-const selected = computed(() => rows.value.find((item) => item.path === selectedPath.value) || rows.value[0] || null)
+const selected = computed(() => rows.value.find((item) => item.key === selectedKey.value) || rows.value[0] || null)
 
-const recordTitle = (item: ChatModelTrace) => item.reply_preview || item.reasoning_preview || '本次调用没有可见文字'
 const timeLabel = (value: string) => {
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', {
@@ -36,19 +34,21 @@ const timeLabel = (value: string) => {
 
 const loadDetail = async () => {
   const request = ++detailRequest
-  const path = selected.value?.path
+  const paths = selected.value?.paths || []
+  const key = selected.value?.key
   const tenant = props.tenant
-  detail.value = null
+  snapshots.value = []
   detailError.value = false
-  detailLoading.value = !!path && !!tenant
-  if (!path || !tenant) return
+  detailLoading.value = !!paths.length && !!tenant
+  if (!paths.length || !tenant) return
   try {
-    const result = await chatApi.getModelTrace(path)
-    if (request === detailRequest && tenant === props.tenant && path === selected.value?.path) {
-      detail.value = result.snapshot
-    }
+    const results = await Promise.allSettled(paths.map((path) => chatApi.getModelTrace(path)))
+    if (request !== detailRequest || tenant !== props.tenant || key !== selected.value?.key) return
+    const loaded = results.flatMap((result) => result.status === 'fulfilled' ? [result.value.snapshot] : [])
+    if (loaded.length) snapshots.value = loaded
+    else detailError.value = true
   } catch (error) {
-    if (request === detailRequest && tenant === props.tenant && path === selected.value?.path) {
+    if (request === detailRequest && tenant === props.tenant && key === selected.value?.key) {
       console.error('读取思考过程失败', error)
       detailError.value = true
     }
@@ -57,58 +57,58 @@ const loadDetail = async () => {
   }
 }
 
-watch([query, stage, status, () => props.tenant], () => {
+watch([query, status, () => props.tenant], () => {
   page.value = 1
-  selectedPath.value = ''
+  selectedKey.value = ''
 })
-watch(() => [props.tenant, selected.value?.path, selected.value?.created_at, selected.value?.size], loadDetail, { immediate: true })
+watch(
+  () => [props.tenant, selected.value?.key, selected.value?.items.map((item) => `${item.path}:${item.size}`).join('|')],
+  loadDetail,
+  { immediate: true },
+)
 </script>
 
 <template>
   <section class="reasoning-workspace" aria-label="思考过程浏览器">
     <div class="reasoning-toolbar">
-      <div><h3>调用记录</h3><p>选择一次调用，阅读输出、思考与完整上下文。</p></div>
+      <div><h3>调用记录</h3><p>选择一次处理，阅读完整的思考、工具调用与回复。</p></div>
     </div>
     <div class="reasoning-layout">
       <aside class="record-sidebar">
         <div class="record-filters">
           <el-input v-model="query" :prefix-icon="Search" placeholder="搜索回复、思考或模型…" aria-label="搜索思考记录" clearable />
           <div class="filter-row">
-            <el-select v-model="stage" placeholder="全部阶段" aria-label="按调用阶段筛选">
-              <el-option label="全部阶段" value="" />
-              <el-option v-for="value in stages" :key="value" :value="value" :label="traceStage(value)" />
-            </el-select>
-            <el-select v-model="status" placeholder="全部状态" aria-label="按调用状态筛选">
+            <el-select v-model="status" placeholder="全部状态" aria-label="按处理状态筛选">
               <el-option label="全部状态" value="" />
               <el-option label="完成" value="completed" />
               <el-option label="失败" value="failed" />
             </el-select>
           </div>
         </div>
-        <nav class="record-list" aria-label="模型调用记录" :aria-busy="loading">
+        <nav class="record-list" aria-label="模型处理记录" :aria-busy="loading">
           <button
-            v-for="item in rows" :key="item.path" type="button" class="record-card"
-            :class="{ selected: item.path === selected?.path }" :aria-pressed="item.path === selected?.path"
-            @click="selectedPath = item.path"
+            v-for="item in rows" :key="item.key" type="button" class="record-card"
+            :class="{ selected: item.key === selected?.key }" :aria-pressed="item.key === selected?.key"
+            @click="selectedKey = item.key"
           >
-            <div class="record-topline"><span class="record-stage">{{ traceStage(item.task || item.category) }}</span><span class="record-result" :class="{ failed: item.status === 'failed' }">{{ item.status === 'failed' ? '失败' : item.status === 'completed' ? '完成' : '未知' }}</span></div>
-            <p class="record-title">{{ recordTitle(item) }}</p>
-            <div class="record-model" :title="item.output_title">{{ item.model_name || item.provider || '未知模型' }}</div>
-            <div class="record-foot"><time>{{ timeLabel(item.created_at) }}</time><span><el-icon><Clock /></el-icon>{{ traceDuration(item.duration_ms) }}</span></div>
+            <div class="record-topline"><span class="record-count">{{ item.count }} 次调用</span><span class="record-result" :class="{ failed: item.status === 'failed' }">{{ item.status === 'failed' ? '失败' : item.status === 'completed' ? '完成' : '未知' }}</span></div>
+            <p class="record-title">{{ item.title }}</p>
+            <div class="record-model" :title="item.models.join(' · ')">{{ item.models.join(' · ') || '未知模型' }}</div>
+            <div class="record-foot"><time>{{ timeLabel(item.createdAt) }}</time><span><el-icon><Clock /></el-icon>{{ traceDuration(item.duration) }}</span></div>
           </button>
-          <div v-if="!rows.length" class="records-empty">{{ loading ? '正在读取记录…' : items.length ? '没有匹配的记录，试试其他筛选条件。' : '此会话暂无模型记录。启用模型快照后，新调用会出现在这里。' }}</div>
+          <div v-if="!rows.length" class="records-empty">{{ loading ? '正在读取记录…' : items.length ? '没有匹配的记录，试试其他筛选条件。' : '此会话暂无模型记录。启用模型快照后，新的处理会出现在这里。' }}</div>
         </nav>
         <footer class="record-pager">
-          <button type="button" aria-label="上一页记录" :disabled="currentPage <= 1" @click="page = currentPage - 1">‹</button>
-          <span>{{ filtered.length }} 条 · {{ currentPage }} / {{ pageCount }} 页</span>
-          <button type="button" aria-label="下一页记录" :disabled="currentPage >= pageCount" @click="page = currentPage + 1">›</button>
+          <button type="button" aria-label="上一页处理记录" :disabled="currentPage <= 1" @click="page = currentPage - 1">‹</button>
+          <span>{{ filtered.length }} 次处理 · {{ currentPage }} / {{ pageCount }} 页</span>
+          <button type="button" aria-label="下一页处理记录" :disabled="currentPage >= pageCount" @click="page = currentPage + 1">›</button>
         </footer>
       </aside>
       <section class="record-reader" :aria-busy="detailLoading" aria-label="当前思考记录详情">
         <div v-if="detailLoading" class="reader-placeholder" role="status"><div class="loading-line" /><div class="loading-line short" /><p>正在读取完整思考过程…</p></div>
         <div v-else-if="detailError" class="reader-placeholder" role="alert"><strong>这条记录暂时无法读取</strong><p>记录可能已被清理，刷新列表或重新加载后再试。</p><el-button @click="loadDetail">重新加载</el-button></div>
-        <ModelTraceDetail v-else-if="detail" :snapshot="detail" />
-        <div v-else class="reader-placeholder"><el-icon class="reader-empty-icon"><Search /></el-icon><strong>每一次思考，都有迹可循</strong><p>选择左侧记录，在这里阅读输出、思考过程和完整调用链。</p></div>
+        <ModelTraceDetail v-else-if="snapshots.length" :snapshots="snapshots" />
+        <div v-else class="reader-placeholder"><el-icon class="reader-empty-icon"><Search /></el-icon><strong>每一次处理，都有迹可循</strong><p>选择左侧处理记录，在这里阅读完整思考、工具调用与回复。</p></div>
       </section>
     </div>
   </section>
@@ -164,10 +164,11 @@ watch(() => [props.tenant, selected.value?.path, selected.value?.created_at, sel
 }
 
 .filter-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
   margin-top: 10px;
+}
+
+.filter-row :deep(.el-select) {
+  width: 100%;
 }
 
 .record-list {
@@ -214,8 +215,8 @@ watch(() => [props.tenant, selected.value?.path, selected.value?.created_at, sel
   font-size: 10px;
 }
 
-.record-stage {
-  color: var(--color-primary);
+.record-count {
+  color: var(--color-text-secondary);
   font-weight: 600;
 }
 

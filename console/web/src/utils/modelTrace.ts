@@ -8,11 +8,68 @@ export function traceRecords(value: unknown): TraceRecord[] {
     : []
 }
 
-export function traceStage(task: unknown): string {
-  const key = String(task || '')
-  return ({ reply: '回复器', replyer: '回复器', planner: '规划器', utils: '辅助任务',
-    fast_model: '快速模型', vision: '视觉理解', memory: '记忆整理', embedding: '向量嵌入',
-    learner: '学习器' } as Record<string, string>)[key] || key || '模型调用'
+export interface TraceGroup {
+  key: string
+  turnId: string
+  paths: string[]
+  items: ChatModelTrace[]
+  title: string
+  models: string[]
+  createdAt: string
+  duration: number
+  status: string
+  count: number
+}
+
+export interface TraceStep {
+  index: number
+  metadata: TraceRecord
+  model: string
+  provider: string
+  duration: number
+  tokens: number | null
+  status: string
+  error: string
+  attempts: TraceRecord[]
+  requestItems: TraceRecord[]
+  outputItems: TraceRecord[]
+  toolDefinitions: TraceRecord[]
+}
+
+const asRecord = (value: unknown): TraceRecord =>
+  value && typeof value === 'object' && !Array.isArray(value) ? value as TraceRecord : {}
+
+const byCreated = (left: ChatModelTrace, right: ChatModelTrace): number =>
+  (left.created_at || '').localeCompare(right.created_at || '') || left.path.localeCompare(right.path)
+
+/** 同一次触发产生的模型调用按轮次合并，避免按规划器/回复器拆成多条记录。 */
+export function groupModelTraces(items: ChatModelTrace[]): TraceGroup[] {
+  const buckets = new Map<string, ChatModelTrace[]>()
+  for (const item of items) {
+    const key = item.turn_id ? `turn:${item.turn_id}` : `path:${item.path}`
+    const bucket = buckets.get(key)
+    if (bucket) bucket.push(item)
+    else buckets.set(key, [item])
+  }
+  return [...buckets.entries()].map(([key, members]) => {
+    members.sort(byCreated)
+    const first = members[0]
+    const last = members[members.length - 1]
+    const preview = (field: 'reply_preview' | 'reasoning_preview') =>
+      [...members].reverse().find((member) => member[field])?.[field] || ''
+    return {
+      key,
+      turnId: first.turn_id,
+      paths: members.map((member) => member.path),
+      items: members,
+      title: preview('reply_preview') || preview('reasoning_preview') || '本次处理没有可见文字',
+      models: [...new Set(members.map((member) => member.model_name || member.provider).filter(Boolean))],
+      createdAt: first.created_at,
+      duration: members.reduce((total, member) => total + (Number(member.duration_ms) || 0), 0),
+      status: members.some((member) => member.status === 'failed') ? 'failed' : last.status,
+      count: members.length,
+    }
+  }).sort((left, right) => (right.createdAt || '').localeCompare(left.createdAt || '') || right.key.localeCompare(left.key))
 }
 
 export function traceDuration(value: unknown): string {
@@ -96,21 +153,69 @@ export function traceFields(value: unknown): Array<{ key: string; value: string 
     .map(([key, item]) => ({ key, value: traceReadable(item, 1) || '—' }))
 }
 
-export function traceReasoning(snapshot: TraceRecord): TraceRecord[] {
-  const attempts = traceRecords(snapshot.generation_attempts)
-  const reasoning = attempts.flatMap((attempt, index) => {
-    const normalized = traceRecords(attempt.output_items).filter((item) => item.type === 'reasoning')
-    const items = normalized.length ? normalized
-      : traceRecords(attempt.provider_output_items).filter((item) => item.type === 'reasoning')
-    return items.map((item): TraceRecord => ({ ...item, attemptLabel: traceAttemptLabel(attempt, index) }))
-  })
-  return reasoning.length ? reasoning : traceRecords(snapshot.output_items).filter((item) => item.type === 'reasoning')
+export function filterTraceGroups(groups: TraceGroup[], query: string, status: string): TraceGroup[] {
+  const search = query.trim().toLocaleLowerCase()
+  return groups.filter((group) => (!status || group.status === status)
+    && (!search || [group.title, group.turnId, ...group.models,
+      ...group.items.flatMap((item) => [item.reply_preview, item.reasoning_preview])]
+      .join(' ').toLocaleLowerCase().includes(search)))
 }
 
-export function filterModelTraces(items: ChatModelTrace[], query: string, stage: string, status: string): ChatModelTrace[] {
-  const search = query.trim().toLocaleLowerCase()
-  return items.filter((item) => (!stage || (item.task || item.category) === stage)
-    && (!status || item.status === status)
-    && (!search || [item.model_name, item.provider, item.turn_id, item.reply_preview, item.reasoning_preview,
-      traceStage(item.task || item.category)].join(' ').toLocaleLowerCase().includes(search)))
+/** 把一次处理里的多份快照按时间展开成调用步骤。 */
+export function traceSteps(snapshots: TraceRecord[]): TraceStep[] {
+  return snapshots.map((snapshot, index) => {
+    const metadata = asRecord(snapshot.metadata)
+    const attempts = traceRecords(snapshot.generation_attempts)
+    const last = attempts[attempts.length - 1] || {}
+    const totalTokens = metadata.total_tokens
+    return {
+      index,
+      metadata,
+      model: String(metadata.model_name || ''),
+      provider: String(metadata.provider || ''),
+      duration: Number(metadata.duration_ms) || 0,
+      tokens: typeof totalTokens === 'number' ? totalTokens : null,
+      status: String(last.status || ''),
+      error: String(metadata.error || last.error || ''),
+      attempts,
+      requestItems: traceRecords(snapshot.request_items),
+      outputItems: traceRecords(attempts.length ? last.output_items : snapshot.output_items),
+      toolDefinitions: traceRecords(snapshot.tool_definitions),
+    }
+  })
+}
+
+const stepOutputItems = (step: TraceStep): TraceRecord[] =>
+  step.attempts.length ? step.attempts.flatMap((attempt) => traceRecords(attempt.output_items)) : step.outputItems
+
+/** 合并所有步骤的输出；工具结果插在产生它的下一次请求之前，保持真实发生顺序。 */
+export function traceProcessing(steps: TraceStep[]): { timeline: TraceRecord[]; replies: TraceRecord[] } {
+  const calls = new Set<string>()
+  const results = new Set<string>()
+  const timeline: TraceRecord[] = []
+  const replies: TraceRecord[] = []
+  for (const step of steps) {
+    for (const message of step.requestItems) {
+      if (message.role !== 'tool' && message.type !== 'function_call_output') continue
+      const id = String(message.tool_call_id || message.call_id || '')
+      if (!id || results.has(id) || !calls.has(id)) continue
+      results.add(id)
+      timeline.push({
+        type: 'function_call_output',
+        role: 'tool',
+        name: String(message.name || ''),
+        output: message.content ?? message.output ?? message.text,
+      })
+    }
+    for (const item of stepOutputItems(step)) {
+      if (item.type === 'message') {
+        replies.push(item)
+        continue
+      }
+      timeline.push(item)
+      const id = String(item.call_id || '')
+      if (item.type === 'function_call' && id) calls.add(id)
+    }
+  }
+  return { timeline, replies }
 }

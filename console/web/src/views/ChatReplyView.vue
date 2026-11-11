@@ -10,6 +10,7 @@ import ChatTenantPicker from '@/components/ChatTenantPicker.vue'
 import ModelTraceBrowser from '@/components/ModelTraceBrowser.vue'
 import ModelTraceDetail from '@/components/ModelTraceDetail.vue'
 import { chatApi } from '@/api'
+import { groupModelTraces } from '@/utils/modelTrace'
 import type {
   ChatTenant,
   ChatSessionDigest,
@@ -31,7 +32,7 @@ const tabs = [
   { key: 'planner', label: '规划样本', hint: 'Planner 首轮动作' },
   { key: 'gate', label: '主动接话门控', hint: 'reply 概率与窗口' },
   { key: 'trace', label: '轮次追踪', hint: '每轮注入与耗时' },
-  { key: 'snapshot', label: '思考过程', hint: '按阶段阅读输出、思考与调用链' },
+  { key: 'snapshot', label: '思考过程', hint: '一次处理一条记录，阅读完整思考' },
 ] as const
 
 type TabKey = (typeof tabs)[number]['key']
@@ -75,7 +76,7 @@ const modelTraces = ref<ChatModelTrace[]>([])
 const modelTraceLoading = ref(false)
 const snapshotDialog = ref(false)
 const snapshotLoading = ref(false)
-const snapshotDetail = ref<Record<string, any> | null>(null)
+const snapshotDetail = ref<Record<string, any>[]>([])
 const loaded = ref(false)
 const emptySessionForm = () => ({ persona: '', provider: '', talkOverride: false, talkValue: 100 })
 const sessionSettings = ref<ChatSessionSettings | null>(null)
@@ -477,15 +478,16 @@ let snapshotRequest = 0
 const openSnapshot = async (row: ChatModelTrace) => {
   const request = ++snapshotRequest
   const target = tenant.value
+  const group = groupModelTraces(modelTraces.value).find((item) => item.paths.includes(row.path))
+  const paths = group?.paths || [row.path]
   snapshotDialog.value = true
   snapshotLoading.value = true
-  snapshotDetail.value = null
+  snapshotDetail.value = []
   try {
-    const result = await chatApi.getModelTrace(row.path)
-    if (request === snapshotRequest && target === tenant.value) snapshotDetail.value = result.snapshot
-  } catch (error) {
-    console.error('读取模型快照失败', error)
-    if (request === snapshotRequest && target === tenant.value) {
+    const results = await Promise.allSettled(paths.map((path) => chatApi.getModelTrace(path)))
+    if (request !== snapshotRequest || target !== tenant.value) return
+    snapshotDetail.value = results.flatMap((result) => result.status === 'fulfilled' ? [result.value.snapshot] : [])
+    if (!snapshotDetail.value.length) {
       ElMessage.error('读取模型快照失败，请重试')
       snapshotDialog.value = false
     }
@@ -515,7 +517,7 @@ const refresh = async () => {
 const onTenantChange = async () => {
   snapshotRequest++
   snapshotDialog.value = false
-  snapshotDetail.value = null
+  snapshotDetail.value = []
   snapshotLoading.value = false
   sessionDigest.value = null
   recentMessages.value = []
@@ -1123,7 +1125,7 @@ onMounted(() => {
 
     <el-dialog v-model="snapshotDialog" title="思考过程" width="min(1120px, calc(100vw - 32px))" top="5vh">
       <div v-loading="snapshotLoading" class="snapshot-body">
-        <ModelTraceDetail v-if="snapshotDetail" :snapshot="snapshotDetail" />
+        <ModelTraceDetail v-if="snapshotDetail.length" :snapshots="snapshotDetail" />
       </div>
     </el-dialog>
   </div>
