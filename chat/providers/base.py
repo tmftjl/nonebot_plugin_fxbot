@@ -104,9 +104,9 @@ class ChatProvider(BaseProvider):
         response = await self.chat(messages, model, temperature=0.1)
         try:
             return json.loads(response.content)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as exc:
             logger.warning(f"[{self.provider_id}] JSON 解析失败")
-            return {}
+            raise ValueError(f"[{self.provider_id}] JSON 解析失败") from exc
 
     async def test(self, timeout: float = 30.0) -> bool:
         """测试 Provider 连接。"""

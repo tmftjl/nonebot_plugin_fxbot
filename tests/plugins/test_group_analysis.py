@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 os.environ.setdefault("LOG_LEVEL", "INFO")
 
@@ -19,6 +21,7 @@ except ValueError:
 nonebot.load_plugin("src.plugins.nonebot_plugin_fxbot.plugins.group_analysis")
 
 from src.plugins.nonebot_plugin_fxbot.config.proxy import ConfigProxy  # noqa: E402
+from src.plugins.nonebot_plugin_fxbot.plugins.group_analysis import analyzer  # noqa: E402
 from src.plugins.nonebot_plugin_fxbot.adapter.platforms.onebot11 import (  # noqa: E402
     OneBotV11MessageAdapter,
     _cq_text,
@@ -123,9 +126,11 @@ class ReportDataTests(unittest.TestCase):
             HistoryMessage("1", 1000, "a", "小明", "你好", 0),
             HistoryMessage("2", 2000, "a", "小明", "再见", 0),
             HistoryMessage("3", 3000, "c", "阿巴", "[图片]", 1),
+            HistoryMessage("4", 4000, "c", "阿巴", "哈哈[表情]", 0),
         ]
         stats = build_stats(messages)
-        self.assertEqual((stats["total"], stats["participants"], stats["images"]), (3, 2, 1))
+        self.assertEqual((stats["total"], stats["participants"], stats["images"]), (4, 2, 1))
+        self.assertEqual((stats["emojis"], stats["characters"]), (1, 6))
         self.assertEqual(stats["top_speakers"][0], {"name": "小明", "count": 2})
         transcript = build_transcript(messages)
         self.assertIn("小明: 你好", transcript)
@@ -140,14 +145,27 @@ class ReportDataTests(unittest.TestCase):
                 ],
                 "titles": [{"name": "小明", "title": "称号", "reason": "理由"}, "bad"],
                 "quotes": [{"content": "原话", "sender": "小明", "reason": "理由"}],
-                "quality": {"score": 150, "comment": "不错", "highlights": ["亮点"], "suggestions": None},
+                "quality": {
+                    "title": "锐评",
+                    "subtitle": "副标题",
+                    "dimensions": [
+                        {"name": "日常水群", "percentage": 80, "comment": "点评"},
+                        {"name": "技术讨论", "percentage": 60, "comment": "点评"},
+                        {"name": "", "percentage": 5, "comment": "缺名称"},
+                    ],
+                    "summary": "总结",
+                },
             }
         )
         self.assertEqual(len(cleaned["topics"]), 1)
         self.assertEqual(cleaned["topics"][0]["participants"], [])
         self.assertEqual(len(cleaned["titles"]), 1)
-        self.assertEqual(cleaned["quality"]["score"], 100)
-        self.assertEqual(cleaned["quality"]["suggestions"], [])
+        self.assertEqual([item["name"] for item in cleaned["quality"]["dimensions"]], ["日常水群", "技术讨论"])
+        self.assertEqual(
+            [item["percentage"] for item in cleaned["quality"]["dimensions"]],
+            [57.1, 42.9],
+        )
+        self.assertEqual(cleaned["quality"]["summary"], "总结")
         self.assertEqual(_clean(None)["topics"], [])
 
     def test_days_are_bounded_by_config(self) -> None:
@@ -166,13 +184,105 @@ class ReportDataTests(unittest.TestCase):
                     "topics": [{"title": "<img src=x>", "summary": "摘要", "keywords": [], "participants": []}],
                     "titles": [],
                     "quotes": [],
-                    "quality": {"score": 10, "comment": "", "highlights": [], "suggestions": []},
+                    "quality": {"title": "", "subtitle": "", "dimensions": [], "summary": ""},
                 },
             }
         )
         self.assertNotIn("<script>", html)
         self.assertNotIn("<img src=x>", html)
         self.assertIn("&lt;script&gt;", html)
+
+
+def _report(analysis: dict) -> dict:
+    return {
+        "group_id": "1",
+        "group_name": "测试群",
+        "label": "最近 24 小时",
+        "stats": {"total": 1, "participants": 1, "images": 0, "hours": [], "top_speakers": []},
+        "analysis": analysis,
+    }
+
+
+class RenderEmptyAnalysisTests(unittest.TestCase):
+    def test_empty_analysis_renders_one_compact_notice(self) -> None:
+        html = _build_html(_report(_clean(None)))
+        for title in ("热门话题", "群友称号", "当日金句", "群聊锐评"):
+            self.assertNotIn(title, html)
+        self.assertIn("仅展示群聊统计", html)
+
+    def test_sections_with_content_are_rendered(self) -> None:
+        analysis = _clean(
+            {
+                "topics": [{"title": "话题", "summary": "摘要", "keywords": [], "participants": []}],
+                "quality": {"summary": "不错", "dimensions": [{"name": "水群", "percentage": 100, "comment": "很水"}]},
+            }
+        )
+        html = _build_html(_report(analysis))
+        self.assertIn("热门话题", html)
+        self.assertIn("群聊锐评", html)
+        self.assertNotIn("群友称号", html)
+        self.assertNotIn("仅展示群聊统计", html)
+
+
+class _Model:
+    def __init__(self, structured: object = None, plain: list[object] | None = None) -> None:
+        self.chat_json = AsyncMock(side_effect=self._structured)
+        self.chat = AsyncMock(side_effect=self._chat)
+        self._structured_result = structured if structured is not None else {}
+        self._plain = list(plain or [])
+
+    async def _structured(self, **kwargs: object) -> dict:
+        if isinstance(self._structured_result, Exception):
+            raise self._structured_result
+        return self._structured_result
+
+    async def _chat(self, *args: object, **kwargs: object) -> SimpleNamespace:
+        item = self._plain.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return SimpleNamespace(content=item)
+
+    async def __aenter__(self) -> "_Model":
+        return self
+
+    async def __aexit__(self, *args: object) -> bool:
+        return False
+
+
+async def _analyze(model: _Model) -> dict:
+    with patch.object(analyzer, "fallback_provider", lambda task: model):
+        return await analyzer.analyze("1", "最近 24 小时", {"total": 1, "participants": 1, "images": 0}, "小明: 你好")
+
+
+class AnalyzeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_uses_structured_output_when_provider_supports_it(self) -> None:
+        model = _Model(structured={"topics": [{"title": "话题"}]})
+        result = await _analyze(model)
+        self.assertEqual(result["topics"][0]["title"], "话题")
+        model.chat.assert_not_awaited()
+
+    async def test_degrades_to_prompt_json_when_response_format_is_unsupported(self) -> None:
+        model = _Model(
+            structured=RuntimeError("This response_format type is unavailable now"),
+            plain=['```json\n{"topics": [{"title": "降级话题"}]}\n```'],
+        )
+        result = await _analyze(model)
+        self.assertEqual(result["topics"][0]["title"], "降级话题")
+        model.chat.assert_awaited_once()
+
+    async def test_repairs_when_plain_output_is_not_json(self) -> None:
+        model = _Model(
+            structured=RuntimeError("response_format not supported"),
+            plain=["不是 JSON", '{"topics": [{"title": "修复后"}]}'],
+        )
+        result = await _analyze(model)
+        self.assertEqual(result["topics"][0]["title"], "修复后")
+        self.assertEqual(model.chat.await_count, 2)
+
+    async def test_model_failure_degrades_to_empty_analysis(self) -> None:
+        model = _Model(structured=RuntimeError("connection reset"), plain=[RuntimeError("connection reset")])
+        result = await _analyze(model)
+        self.assertEqual(result, analyzer._clean(None))
 
 
 class ConfigShapeTests(unittest.TestCase):

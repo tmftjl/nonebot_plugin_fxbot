@@ -47,9 +47,11 @@ def build_stats(messages: list[HistoryMessage]) -> dict[str, Any]:
     """本地统计不依赖模型，模型失败时仍能出概览。"""
     speakers: dict[str, dict[str, Any]] = {}
     hours = [0] * 24
-    images = 0
+    images = emojis = characters = 0
     for message in messages:
         images += message.images
+        emojis += message.text.count("[表情]")
+        characters += len(message.text.replace("[图片]", "").replace("[表情]", "").strip())
         name = message.user_name or message.user_id or "未知成员"
         speaker = speakers.setdefault(message.user_id or name, {"name": name, "count": 0})
         speaker["count"] += 1
@@ -61,6 +63,8 @@ def build_stats(messages: list[HistoryMessage]) -> dict[str, Any]:
         "total": len(messages),
         "participants": len(speakers),
         "images": images,
+        "emojis": emojis,
+        "characters": characters,
         "top_speakers": ranked[:5],
         "hours": hours,
         "peak_hour": peak_hour,

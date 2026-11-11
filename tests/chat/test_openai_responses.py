@@ -223,6 +223,18 @@ class ResponsesJsonTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, {})
         self.assertEqual(create.await_args.kwargs["text"]["format"], {"type": "json_object"})
 
+    async def test_chat_json_propagates_request_errors(self) -> None:
+        create = AsyncMock(side_effect=RuntimeError("This response_format type is unavailable now"))
+        with unittest.mock.patch.object(self.provider.client.responses, "create", create):
+            with self.assertRaises(RuntimeError):
+                await self.provider.chat_json([{"role": "user", "content": "hi"}])
+
+    async def test_chat_json_propagates_parse_errors(self) -> None:
+        create = await self._create("not json")
+        with unittest.mock.patch.object(self.provider.client.responses, "create", create):
+            with self.assertRaises(ValueError):
+                await self.provider.chat_json([{"role": "user", "content": "hi"}])
+
 
 class ResponsesContinuationTests(unittest.IsolatedAsyncioTestCase):
     """续写把上一轮原始输出条目追加回 input。"""

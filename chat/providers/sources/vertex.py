@@ -286,14 +286,13 @@ class VertexAIProvider(ChatProvider):
             response.raise_for_status()
             data = response.json()
             if not data.get("candidates"):
-                logger.warning(f"[{self.provider_id}] Vertex AI 返回结果为空")
-                return {}
+                raise ValueError(f"[{self.provider_id}] 返回结果为空")
             content_parts = data["candidates"][0].get("content", {}).get("parts", [])
             text = content_parts[0].get("text", "{}") if content_parts else "{}"
             return json.loads(text)
         except json.JSONDecodeError as exc:
             logger.warning(f"[{self.provider_id}] JSON 解析失败: {exc}")
-            return {}
+            raise ValueError(f"[{self.provider_id}] JSON 解析失败: {exc}") from exc
         except Exception as exc:
             logger.error(f"[{self.provider_id}] chat_json 失败: {exc}")
-            return {}
+            raise

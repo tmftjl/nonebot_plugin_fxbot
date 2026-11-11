@@ -264,7 +264,7 @@ class AnthropicProvider(ChatProvider):
             return json.loads(content)
         except json.JSONDecodeError as exc:
             logger.warning(f"[{self.provider_id}] JSON 解析失败: {exc}")
-            return {}
+            raise ValueError(f"[{self.provider_id}] JSON 解析失败: {exc}") from exc
         except Exception as exc:
             logger.error(f"[{self.provider_id}] chat_json 失败: {exc}")
-            return {}
+            raise

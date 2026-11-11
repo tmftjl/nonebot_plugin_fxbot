@@ -238,16 +238,15 @@ class GeminiProvider(ChatProvider):
                 config=config,
             )
             if not resp.candidates:
-                logger.warning(f"[{self.provider_id}] Gemini 返回结果为空")
-                return {}
+                raise ValueError(f"[{self.provider_id}] 返回结果为空")
             content = resp.candidates[0].content.parts[0].text
             return json.loads(content)
         except json.JSONDecodeError as exc:
             logger.warning(f"[{self.provider_id}] JSON 解析失败: {exc}")
-            return {}
+            raise ValueError(f"[{self.provider_id}] JSON 解析失败: {exc}") from exc
         except Exception as exc:
             logger.error(f"[{self.provider_id}] chat_json 失败: {exc}")
-            return {}
+            raise
 
     async def get_models(self) -> list[str]:
         """获取可用模型列表。"""
