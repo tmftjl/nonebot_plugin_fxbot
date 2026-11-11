@@ -121,20 +121,15 @@ def _stats_panel(stats: dict[str, Any]) -> str:
 
 
 def _build_html(report: dict[str, Any]) -> str:
-    sections = report.get("sections") or {}
     stats = report.get("stats") or {}
     analysis = report.get("analysis") or {}
-    blocks: list[str] = []
-    if sections.get("stats"):
-        blocks.append("<section><h2><i></i>群聊概览</h2>" + _stats_panel(stats) + "</section>")
-    if sections.get("topics"):
-        blocks.append("<section><h2><i></i>热门话题</h2>" + _topic_cards(analysis.get("topics") or []) + "</section>")
-    if sections.get("titles"):
-        blocks.append("<section><h2><i></i>群友称号</h2>" + _title_cards(analysis.get("titles") or []) + "</section>")
-    if sections.get("quotes"):
-        blocks.append("<section><h2><i></i>当日金句</h2>" + _quotes(analysis.get("quotes") or []) + "</section>")
-    if sections.get("quality"):
-        blocks.append("<section><h2><i></i>群聊质量</h2>" + _quality(analysis.get("quality") or {}) + "</section>")
+    blocks = [
+        "<section><h2><i></i>群聊概览</h2>" + _stats_panel(stats) + "</section>",
+        "<section><h2><i></i>热门话题</h2>" + _topic_cards(analysis.get("topics") or []) + "</section>",
+        "<section><h2><i></i>群友称号</h2>" + _title_cards(analysis.get("titles") or []) + "</section>",
+        "<section><h2><i></i>当日金句</h2>" + _quotes(analysis.get("quotes") or []) + "</section>",
+        "<section><h2><i></i>群聊质量</h2>" + _quality(analysis.get("quality") or {}) + "</section>",
+    ]
     title = _escape(report.get("group_name") or report.get("group_id"))
     return f"""<!doctype html>
 <html><head><meta charset='utf-8'/>

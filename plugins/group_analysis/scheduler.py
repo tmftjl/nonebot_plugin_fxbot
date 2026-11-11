@@ -64,9 +64,9 @@ def setup_group_analysis_tasks() -> None:
     except Exception:
         logger.warning("[group_analysis] nonebot-plugin-apscheduler 未安装或未加载，跳过定时任务")
         return
-    config = get_config()
-    hour = max(0, min(23, _coerce_int(config.get("auto_hour"), 8)))
-    minute = max(0, min(59, _coerce_int(config.get("auto_minute"), 0)))
+    auto = get_config()["auto"]
+    hour = max(0, min(23, _coerce_int(auto.get("auto_hour"), 8)))
+    minute = max(0, min(59, _coerce_int(auto.get("auto_minute"), 0)))
     scheduler.add_job(
         _scheduled_report,
         trigger="cron",

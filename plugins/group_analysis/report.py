@@ -86,22 +86,22 @@ async def generate(
         return ReportResult(False, reason="busy")
     _RUNNING.add(group_id)
     try:
-        config = get_config()
+        basic = get_config()["basic"]
         window = HistoryWindow(start=end - days * 86400, end=end, label=label, days=days)
         try:
             messages = await collect_messages(
                 bot,
                 group_id,
                 window,
-                limit=max(1, int(config.get("max_messages") or 1000)),
-                filter_self=bool(config.get("filter_self", True)),
+                limit=max(1, int(basic.get("max_messages") or 1000)),
+                filter_self=bool(basic.get("filter_self", True)),
             )
         except UnsupportedCapability:
             return ReportResult(False, reason="unsupported")
         except Exception:
             logger.opt(exception=True).warning(f"[group_analysis] 群 {group_id} 拉取历史消息失败")
             return ReportResult(False, reason="fetch_failed")
-        if len(messages) < int(config.get("min_messages") or 0):
+        if len(messages) < int(basic.get("min_messages") or 0):
             return ReportResult(False, reason="too_few")
         stats = build_stats(messages)
         analysis = await analyze(group_id, label, stats, build_transcript(messages))
@@ -111,7 +111,6 @@ async def generate(
             "label": label,
             "stats": stats,
             "analysis": analysis,
-            "sections": {key: bool(value) for key, value in (config.get("sections") or {}).items()},
         }
         image = await render_report(report)
         path = data_dir("group_analysis") / "images" / f"{group_id}_{report_date}.png"

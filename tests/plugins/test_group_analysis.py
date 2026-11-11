@@ -18,12 +18,17 @@ except ValueError:
 
 nonebot.load_plugin("src.plugins.nonebot_plugin_fxbot.plugins.group_analysis")
 
+from src.plugins.nonebot_plugin_fxbot.config.proxy import ConfigProxy  # noqa: E402
 from src.plugins.nonebot_plugin_fxbot.adapter.platforms.onebot11 import (  # noqa: E402
     OneBotV11MessageAdapter,
     _cq_text,
     _history_message,
 )
-from src.plugins.nonebot_plugin_fxbot.plugins.group_analysis.config import bounded_days  # noqa: E402
+from src.plugins.nonebot_plugin_fxbot.plugins.group_analysis.config import (  # noqa: E402
+    DEFAULTS,
+    bounded_days,
+    validate_config,
+)
 from src.plugins.nonebot_plugin_fxbot.plugins.group_analysis.history import (  # noqa: E402
     HistoryMessage,
     build_stats,
@@ -31,6 +36,7 @@ from src.plugins.nonebot_plugin_fxbot.plugins.group_analysis.history import (  #
 )
 from src.plugins.nonebot_plugin_fxbot.plugins.group_analysis.analyzer import _clean  # noqa: E402
 from src.plugins.nonebot_plugin_fxbot.plugins.group_analysis.renderer import _build_html  # noqa: E402
+from src.plugins.nonebot_plugin_fxbot.plugins.group_analysis.ui_schema import get_ui_schema  # noqa: E402
 
 
 class FakeBot:
@@ -162,12 +168,29 @@ class ReportDataTests(unittest.TestCase):
                     "quotes": [],
                     "quality": {"score": 10, "comment": "", "highlights": [], "suggestions": []},
                 },
-                "sections": {"stats": True, "topics": True, "titles": True, "quotes": True, "quality": True},
             }
         )
         self.assertNotIn("<script>", html)
         self.assertNotIn("<img src=x>", html)
         self.assertIn("&lt;script&gt;", html)
+
+
+class ConfigShapeTests(unittest.TestCase):
+    def test_saved_groups_survive_reload(self) -> None:
+        proxy = ConfigProxy("group_analysis_test", DEFAULTS, validator=validate_config)
+        proxy.save({"basic": {"days": 3, "max_days": 5}, "auto": {"auto_hour": 9}})
+        loaded = proxy.load()
+        self.assertEqual((loaded["basic"]["days"], loaded["basic"]["max_days"]), (3, 5))
+        self.assertEqual(loaded["auto"]["auto_hour"], 9)
+        self.assertEqual(loaded["basic"]["max_messages"], 1000)
+
+    def test_ui_schema_fields_match_defaults(self) -> None:
+        for card in get_ui_schema()["cards"]:
+            group = DEFAULTS
+            for part in card["key"].split(".")[1:]:
+                group = group[part]
+            for item in card["schemas"]:
+                self.assertIn(item["field"], group)
 
 
 if __name__ == "__main__":
