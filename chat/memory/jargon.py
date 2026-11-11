@@ -15,6 +15,7 @@ from .prompts import learning_prompt
 from .learning import tenant_target, learning_flags
 from .filtering import should_learn, sanitize_line
 from .repository import chat_repository
+from .write_hooks import write_learning
 from ..providers.routing import routed_task, fallback_provider
 
 INFERENCE_THRESHOLDS = (4, 8, 25, 100)
@@ -91,12 +92,18 @@ async def learn_jargon(tenant: str, *, provider: Any = None, source_messages: li
             ]
             if row.normalized and identifiers:
                 candidates.setdefault(row.term, identifiers)
-        saved = await chat_repository.save_jargon_batch(
+        saved = await write_learning(
             tenant,
-            candidates,
+            "jargon",
+            lambda: chat_repository.save_jargon_batch(
+                tenant,
+                candidates,
+                cursor_seq=int(raw[-1].id or 0),
+                expected_cursor=after,
+                evidence_ids=tuple(source),
+            ),
+            candidates=candidates,
             cursor_seq=int(raw[-1].id or 0),
-            expected_cursor=after,
-            evidence_ids=tuple(source),
         )
         if not saved:
             return False
@@ -121,10 +128,17 @@ async def learn_jargon(tenant: str, *, provider: Any = None, source_messages: li
                 continue
             meaning = sanitize_line(contextual.get("meaning"), 1000)
             if contextual.get("no_info") or not meaning:
-                await chat_repository.save_jargon_inference(
+                await write_learning(
                     tenant,
-                    int(row.id or 0),
-                    expected_count=row.count,
+                    "jargon_inference",
+                    lambda: chat_repository.save_jargon_inference(
+                        tenant,
+                        int(row.id or 0),
+                        expected_count=row.count,
+                        meaning="",
+                        accepted=False,
+                    ),
+                    item_id=int(row.id or 0),
                     meaning="",
                     accepted=False,
                 )
@@ -142,10 +156,17 @@ async def learn_jargon(tenant: str, *, provider: Any = None, source_messages: li
             )
             if not isinstance(compared, dict) or not isinstance(compared.get("is_similar"), bool):
                 continue
-            await chat_repository.save_jargon_inference(
+            await write_learning(
                 tenant,
-                int(row.id or 0),
-                expected_count=row.count,
+                "jargon_inference",
+                lambda: chat_repository.save_jargon_inference(
+                    tenant,
+                    int(row.id or 0),
+                    expected_count=row.count,
+                    meaning=meaning,
+                    accepted=not compared["is_similar"],
+                ),
+                item_id=int(row.id or 0),
                 meaning=meaning,
                 accepted=not compared["is_similar"],
             )

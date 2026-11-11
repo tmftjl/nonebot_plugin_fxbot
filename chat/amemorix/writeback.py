@@ -73,6 +73,9 @@ class ChatWriteback:
         from ..behavior.turn_scheduler import normal_scheduler
 
         normal_scheduler.stopping = False
+        from ..continuation import reply_scheduler
+
+        reply_scheduler.stopping = False
         await image_writeback.start()
         if self._summary_task is None or self._summary_task.done():
             self._summary_task = asyncio.create_task(self._summary_loop(), name="amemorix_summary_writeback")

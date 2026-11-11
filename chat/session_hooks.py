@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from typing import Any
-from inspect import isawaitable, iscoroutinefunction
+from inspect import isawaitable
 from dataclasses import dataclass
 from collections.abc import Callable
 
 from nonebot import logger
+
+from .hook_registry import CallbackRegistry, ordered_callbacks, register_callback
 
 SessionResolver = Callable[[Any, Any, str], str | None]
 
@@ -27,43 +29,25 @@ class SessionPolicy:
 
 
 PolicyResolver = Callable[[str], SessionPolicy | None]
-_resolvers: dict[str, SessionResolver] = {}
-_policies: dict[str, PolicyResolver] = {}
+_resolvers = CallbackRegistry()
+_policies = CallbackRegistry()
 _EVENT_ATTR = "_fxbot_resolved_sessions"
 
 
-def register_session_resolver(name: str, resolver: SessionResolver) -> Callable[[], None]:
+def register_session_resolver(name: str, resolver: SessionResolver, *, priority: int = 100) -> Callable[[], None]:
     """按注册顺序添加同步解析器，同名替换不改优先级，返回精确注销句柄。"""
-    if not isinstance(name, str) or not name.strip() or not callable(resolver) or iscoroutinefunction(resolver):
-        raise ValueError("会话解析器需要名称和可调用对象")
-    _resolvers[name] = resolver
-
-    def unregister() -> None:
-        """只移除本次注册，避免旧插件清理移除热重载后的新实现。"""
-        if _resolvers.get(name) is resolver:
-            _resolvers.pop(name)
-
-    return unregister
+    return register_callback(_resolvers, name, resolver, priority=priority, synchronous=True)
 
 
-def register_session_policy(name: str, resolver: PolicyResolver) -> Callable[[], None]:
+def register_session_policy(name: str, resolver: PolicyResolver, *, priority: int = 100) -> Callable[[], None]:
     """注册同步策略解析器，策略每次使用重新读取以支持撤权和配置热更新。"""
-    if not isinstance(name, str) or not name.strip() or not callable(resolver) or iscoroutinefunction(resolver):
-        raise ValueError("会话策略需要名称和可调用对象")
-    _policies[name] = resolver
-
-    def unregister() -> None:
-        """只注销当前实现。"""
-        if _policies.get(name) is resolver:
-            _policies.pop(name)
-
-    return unregister
+    return register_callback(_policies, name, resolver, priority=priority, synchronous=True)
 
 
 def session_policy(session_id: str) -> SessionPolicy:
     """合并所有限制，策略异常时关闭受控能力，禁止降级到无限制。"""
     result = SessionPolicy()
-    for name, resolver in tuple(_policies.items()):
+    for name, resolver in ordered_callbacks(_policies):
         try:
             policy = resolver(session_id)
             if isawaitable(policy):
@@ -129,7 +113,7 @@ def resolve_session_id(bot: Any, event: Any, base_session_id: str) -> str:
         # 先占位阻止解析器递归调用 session_id_for_event；失败占位也不会退回普通会话。
         values[base_session_id] = None
         object.__setattr__(event, _EVENT_ATTR, values)
-        for resolver in tuple(_resolvers.values()):
+        for _, resolver in ordered_callbacks(_resolvers):
             candidate = resolver(bot, event, base_session_id)
             if isawaitable(candidate):
                 close = getattr(candidate, "close", None)

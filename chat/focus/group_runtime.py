@@ -225,6 +225,22 @@ class FocusGroupRuntime:
             await self.checkpoint()
         return removed
 
+    async def record_extension_part(self, request: ChatRequest, index: int, text: str, message_id: str | None) -> None:
+        """只记录真实已发正文，包含部分发送；旧规划快照作废但不主动唤醒规划。"""
+        session_id = request.session_id
+        if not self._remember(session_id, f"extension:{request.turn_id}:{index}"):
+            return
+        self.entries.append(
+            FocusEntry(
+                [{"role": "assistant", "content": f"[{session_id}] {text}"}],
+                {session_id},
+                sources={session_id: [message_id]} if message_id else {},
+            )
+        )
+        self._generation += 1
+        self._planner_snapshot = None
+        await self.checkpoint()
+
     async def purge_session(self, session_id: str) -> None:
         """丢弃某个聊天留在共享时间线上的全部痕迹。"""
         self._generation += 1
@@ -621,6 +637,20 @@ class FocusGroupRuntime:
         return next(iter(self.members), "")
 
     async def _chat(self, messages: list[dict[str, Any]], definitions: list[dict[str, Any]]) -> tuple[Any, str, str]:
+        """以组级身份执行共享规划阶段，不开放任一成员的可写身份。"""
+        from ..stages import execute_stage
+
+        return await execute_stage(
+            "planner",
+            ChatHookContext(self.scope_id, phase="focus_planner"),
+            lambda: self._chat_guarded(messages, definitions),
+            rejected=(LLMResponse(content=""), "", ""),
+        )
+
+    async def _chat_guarded(
+        self, messages: list[dict[str, Any]], definitions: list[dict[str, Any]]
+    ) -> tuple[Any, str, str]:
+        """共享规划仍逐一检查成员守卫，不以组级扩展覆盖成员拒绝。"""
         for member in list(self.members.values()):
             if not await guard(
                 "request_guard",

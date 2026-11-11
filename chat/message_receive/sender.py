@@ -193,7 +193,7 @@ async def send_voice(
     runtime: Any, matcher: Any, text: str, alive: Any = None, *, context: ChatHookContext | None = None
 ) -> bool:
     """给刚发出的文字补一条同内容语音；未开启、失败或轮次已失效时只跳过。"""
-    if not tts_enabled():
+    if getattr(runtime, "bot", None) is None or not tts_enabled():
         return False
     if not await guard("send_guard", context or ChatHookContext("", phase="send"), kind="voice", text=text):
         return False

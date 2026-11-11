@@ -18,8 +18,9 @@ from nonebot import logger
 from .hooks import ChatHookContext, guard, notify, hook_context, filter_reply_text, system_prompt_sections
 from .tools import ToolRuntime, subagent as subagent_module, tool_result_store
 from .trace import TurnTrace, turn_trace
-from .types import MentionRef, ChatRequest, ChatResponse, is_proactive
+from .types import MentionRef, ChatRequest, ChatResponse, is_proactive, is_continuation
 from .memory import state as memory_state
+from .stages import execute_stage
 from .vision import describe_images, vision_configured
 from ..config import get_manager as get_config_manager
 from .replyer import prompt, generator
@@ -101,7 +102,9 @@ async def _wait_image_descriptions(task: asyncio.Task | None) -> list[str]:
 async def _memory_block(request: ChatRequest, query: str = "", trace: dict[str, Any] | None = None) -> str:
     """读取 A_Memorix 长期记忆，学习参考按 Planner 和 Replyer 分别组装。"""
     try:
-        block = await memory_block(request)
+        block = await execute_stage(
+            "memory_retrieval", hook_context(request), lambda: memory_block(request), rejected="", query=query
+        )
     except Exception:
         logger.opt(exception=True).debug("[Chat] 长期记忆读取失败，本轮不注入")
         block = ""
@@ -122,13 +125,19 @@ async def _learning_reference(
     intent_text = "\n".join(f"{key}：{value}" for key, value in intent.items()) if isinstance(intent, dict) else ""
     query = "\n\n".join(part for part in (intent_text, reply_reference or "") if part)
     try:
-        return await learning_context(
-            request.session_id,
-            query,
-            phase="planner" if reply_reference is None else "reply",
-            history=history,
-            references=request.metadata.setdefault("planner_jargon_references", {}),
-            trace=trace,
+        return await execute_stage(
+            "learning_reference",
+            hook_context(request, phase="planner" if reply_reference is None else "reply"),
+            lambda: learning_context(
+                request.session_id,
+                query,
+                phase="planner" if reply_reference is None else "reply",
+                history=history,
+                references=request.metadata.setdefault("planner_jargon_references", {}),
+                trace=trace,
+            ),
+            rejected="",
+            query=query,
         )
     except Exception:
         logger.opt(exception=True).debug("[Chat] 学习参考读取失败，本轮不注入")
@@ -316,6 +325,9 @@ class ChatService:
         # 异步守卫期间可能清空会话，不能再发起旧轮次。
         if not self.is_current(request.session_id, request.accepted_epoch):
             return ChatResponse(text="", epoch=request.accepted_epoch)
+        from .continuation import reply_scheduler
+
+        reply_scheduler.remember(self, request, runtime)
         try:
             await notify("request_start", hook)
             if not self.is_current(request.session_id, request.accepted_epoch):
@@ -373,9 +385,11 @@ class ChatService:
 
     async def _clear_session(self, session_id: str, *, full: bool = False) -> bool:
         """清空会话历史；内存、数据库、待合并批次与在途轮次一起失效。"""
+        from .continuation import reply_scheduler
         from .memory.trimmed import trimmed_learning
         from .behavior.turn_scheduler import normal_scheduler
 
+        reply_scheduler.cancel(session_id=session_id)
         normal_scheduler.clear(session_id)
         trimmed_learning.clear(session_id)
         self._active_requests.pop(session_id, None)
@@ -500,6 +514,16 @@ class ChatService:
             content=content,
             limit=history_limit(chat_cfg, request.is_group),
         )
+        if request.metadata.get("_extension_owner") and self.is_current(request.session_id, response.epoch):
+            from .focus import focus_mode_manager
+
+            try:
+                await focus_mode_manager.record_extension_part(
+                    request, index, content if content is not None else response.text, platform_message_id
+                )
+            except Exception:
+                # 共享检查点故障不能把已经发出的正文改判为发送失败。
+                logger.opt(exception=True).warning("[ChatExtension] 已发正文同步共享上下文失败")
 
     async def mark_send_aborted(
         self, request: ChatRequest, response: ChatResponse, index: int = 0, error: str = "发送前已被新触发取代"
@@ -745,6 +769,9 @@ class ChatService:
         chat_cfg = get_config_manager().get_system()["chat"]
         if request.metadata.get("_direct_llm"):
             return await self._direct_reply(request, runtime, provider)
+        continuation = is_continuation(request)
+        if continuation and (not focus_instruction or not focus_instruction.strip()):
+            raise ValueError("系统续话必须提供续话指令")
         if focus_instruction is None:
             request.metadata["planner_loop"] = True
         behavior = chat_cfg.get("behavior") or {}
@@ -752,7 +779,7 @@ class ChatService:
         if trace is not None:
             trace["budget"] = {"max_context_size": limit}
         runtime = runtime or ToolRuntime()
-        proactive = is_proactive(request) and focus_instruction is None
+        proactive = is_proactive(request)
         user_content = prompt.build_user_content(request)
         current_content = prompt.truncate_content(user_content)
         request.metadata["bot_group_role"] = await get_bot_group_role(getattr(runtime, "bot", None), request.group_id)
@@ -782,33 +809,37 @@ class ChatService:
                     if request.accepted_epoch is not None
                     else self.session_store.epoch(request.session_id)
                 )
-                entry = prompt.strip_images([{"role": "user", "content": user_content}])[0]
-                entry["_sender_id"] = request.user_id
-                entry.update(
-                    message_metadata(
-                        timestamp=request.occurred_at,
-                        sender_id=request.user_id,
-                        sender_name=request.user_name,
-                        quote_id=request.reply_to_message_id or "",
-                        at_bot=bool(request.metadata.get("has_at_bot")),
-                        sender_role=request.metadata.get("sender_role") if request.is_group else None,
-                        quote_snapshot=request.metadata.get("quote_snapshot"),
+                entry = {}
+                if not continuation:
+                    entry = prompt.strip_images([{"role": "user", "content": user_content}])[0]
+                    entry["_sender_id"] = request.user_id
+                    entry.update(
+                        message_metadata(
+                            timestamp=request.occurred_at,
+                            sender_id=request.user_id,
+                            sender_name=request.user_name,
+                            quote_id=request.reply_to_message_id or "",
+                            at_bot=bool(request.metadata.get("has_at_bot")),
+                            sender_role=request.metadata.get("sender_role") if request.is_group else None,
+                            quote_snapshot=request.metadata.get("quote_snapshot"),
+                        )
                     )
-                )
-                source_ids = request.source_message_ids or ([request.message_id] if request.message_id else [])
-                if source_ids:
-                    # 撤回通知按平台消息 ID 找到并丢弃这一条
-                    entry["_source_ids"] = [str(value) for value in source_ids]
-                recorded = request.metadata.get("history_recorded") or request.metadata.get("history_appended")
-                if not recorded:
-                    # Focus 上下文消息已由 record_group_message 写入，等待后重新规划也不重复写内存历史
-                    self.session_store.append(request.session_id, entry, limit=limit)
-                    request.metadata["history_appended"] = True
+                    source_ids = request.source_message_ids or ([request.message_id] if request.message_id else [])
+                    if source_ids:
+                        # 撤回通知按平台消息 ID 找到并丢弃这一条
+                        entry["_source_ids"] = [str(value) for value in source_ids]
+                    recorded = request.metadata.get("history_recorded") or request.metadata.get("history_appended")
+                    if not recorded:
+                        # Focus 上下文消息已由 record_group_message 写入，等待后重新规划也不重复写内存历史
+                        self.session_store.append(request.session_id, entry, limit=limit)
+                        request.metadata["history_appended"] = True
                 dropped = self.session_store.take_dropped(request.session_id)
-            descriptions = _cached_image_descriptions(request, history)
+            descriptions = [] if continuation else _cached_image_descriptions(request, history)
             if descriptions is None and vision_configured(chat_cfg) and request.images:
                 description_task = asyncio.create_task(_describe_images(request))
-            persisted = await self._persist_turn_start(request, str(entry["content"]), epoch)
+            persisted = await self._persist_turn_start(
+                request, focus_instruction if continuation else str(entry["content"]), epoch
+            )
             if not self._alive(request, epoch):
                 await self._mark_turn_aborted(request, "生成前已被新触发取代")
                 return ChatResponse(text="", epoch=epoch)
@@ -843,14 +874,27 @@ class ChatService:
             )
             learning_history = list(history)
             current_ids = set(entry.get("_source_ids", []))
-            if not current_ids or not any(current_ids.intersection(item.get("_source_ids", [])) for item in history):
+            if not continuation and (
+                not current_ids or not any(current_ids.intersection(item.get("_source_ids", [])) for item in history)
+            ):
                 learning_history.append(entry)
             reference = await _learning_reference(
                 request, learning_history, reply_reference=focus_instruction, trace=trace
             )
             if reference:
                 messages.append({"role": "user", "content": reference})
-            if focus_instruction:
+            if continuation:
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "[主动续话任务]\n本轮由系统调度发起，没有新的用户消息。\n"
+                            f"{focus_instruction.strip()}\n"
+                            "请结合本会话真实历史自然续话，只输出实际要发送的正文。"
+                        ),
+                    }
+                )
+            elif focus_instruction:
                 messages.append({"role": "user", "content": focus_instruction.strip()})
                 is_self = bool(request.metadata.get("bot_id")) and request.user_id == request.metadata["bot_id"]
                 target_id = request.message_id or request.dedupe_key
@@ -940,7 +984,7 @@ class ChatService:
                 persisted,
                 response,
                 provider_name,
-                str(entry["content"]),
+                str(entry.get("content", "")),
                 descriptions,
                 parts,
                 generated_text,

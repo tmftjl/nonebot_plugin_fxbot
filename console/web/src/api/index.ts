@@ -102,6 +102,40 @@ class ApiClient {
     return response.data
   }
 
+  async stream<T>(url: string, data: unknown, onEvent: (event: T) => void, signal: AbortSignal): Promise<void> {
+    const response = await fetch(`/fxbot${url}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getToken()}` },
+      body: JSON.stringify(data),
+      signal,
+    })
+    if (response.status === 401 || response.status === 403) clearToken('登录已过期，请重新登录')
+    if (!response.ok || !response.body) throw new Error('对话请求未成功')
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let pending = ''
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        pending += decoder.decode(value, { stream: !done })
+        if (pending.length > 1_000_000) throw new Error('对话响应超过限制')
+        let newline: number
+        while ((newline = pending.indexOf('\n')) >= 0) {
+          const line = pending.slice(0, newline).trim()
+          pending = pending.slice(newline + 1)
+          if (line) onEvent(JSON.parse(line) as T)
+        }
+        if (done) {
+          if (pending.trim()) onEvent(JSON.parse(pending) as T)
+          return
+        }
+      }
+    } finally {
+      await reader.cancel().catch(() => undefined)
+      reader.releaseLock()
+    }
+  }
+
   async put<T = any>(url: string, data?: any): Promise<T> {
     const response: AxiosResponse<T> = await this.client.put(url, data)
     return response.data

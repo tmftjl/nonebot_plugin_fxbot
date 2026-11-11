@@ -1,4 +1,29 @@
 // -*- coding: utf-8 -*-
+export interface LocalChatMessage {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  timestamp?: string
+}
+
+export interface LocalChatState {
+  conversation: string
+  tenant: string
+  items: LocalChatMessage[]
+  running: boolean
+  message_id: string | null
+  persona: string
+  provider: string
+  effective_persona: string
+  can_chat: boolean
+}
+
+export interface LocalChatEvent {
+  type: 'accepted' | 'message' | 'status' | 'error' | 'done' | 'heartbeat'
+  id?: string
+  content?: string
+}
+
 export interface ApiResponse<T = any> {
   success: boolean
   data?: T

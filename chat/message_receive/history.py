@@ -14,7 +14,7 @@ from datetime import datetime
 
 from nonebot import logger
 
-from ..types import MentionRef, ChatRequest, ChatResponse, speaker_label
+from ..types import MentionRef, ChatRequest, ChatResponse, speaker_label, is_continuation
 from .sender import parts, item_id
 from ..memory import state as memory_state
 from ..vision import describe_sources, vision_configured
@@ -173,13 +173,14 @@ async def persist_turn_start(request: ChatRequest, content: str, epoch: int) -> 
     if not memory_state.is_ready() or not history_enabled(request.is_group):
         return None
     reuse_turn = bool(request.metadata.get("planner_parent_turn_id"))
-    if not reuse_turn:
+    continuation = is_continuation(request)
+    if not reuse_turn and not continuation:
         await _prepare_image_memory(request)
     if request.accepted_epoch is None:
         request.accepted_epoch = epoch
     payload = json.dumps({"has_image": True}) if request.images else "{}"
-    trigger_ids = request.source_message_ids or [request.message_id or request.dedupe_key]
-    author_ids = request.source_author_ids or [request.user_id]
+    trigger_ids = [] if continuation else request.source_message_ids or [request.message_id or request.dedupe_key]
+    author_ids = [] if continuation else request.source_author_ids or [request.user_id]
     turn = ChatTurn(
         tenant=request.session_id,
         turn_key=request.turn_id,
@@ -195,8 +196,8 @@ async def persist_turn_start(request: ChatRequest, content: str, epoch: int) -> 
         turn_id = await chat_repository.upsert_turn(turn)
         if turn_id is None:
             return None
-        if reuse_turn:
-            # Planner 回复子请求沿用父轮次：轮次行与首条用户消息已存在，只补生成结果
+        if reuse_turn or continuation:
+            # Planner 子回复复用父轮次，系统续话没有用户输入；两者都只补助手生成与发送结果。
             return turn_id, None
         # 合并批次的原始消息已由 persist_batch 写入，这里只写合并后的 user 条目
         recorded = request.batched or bool(request.metadata.get("history_recorded"))

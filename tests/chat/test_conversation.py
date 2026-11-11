@@ -88,6 +88,16 @@ class ConversationTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(response.metadata["planner_sent"])
         self.service._process_locked.assert_not_awaited()
 
+    async def test_transport_restrictions_hide_and_reject_internal_media_tools(self) -> None:
+        self.context.runtime.allowed_tools = frozenset({"reply", "stop", "wait"})
+        self.provider.chat.return_value = LLMResponse(tool_calls=[call("send_emoji"), call("lookup"), call("stop")])
+        with patch.object(conversation.emoji_tools, "send_selected", AsyncMock()) as emoji:
+            await conversation.run(self.service, self.context)
+        emoji.assert_not_called()
+        self.execute.assert_not_called()
+        definitions = self.provider.chat.await_args.kwargs["tools"]
+        self.assertNotIn("send_emoji", [item["function"]["name"] for item in definitions])
+
     async def test_repeated_target_without_new_information_stops(self) -> None:
         self.provider.chat.side_effect = [
             LLMResponse(tool_calls=[call("reply", msg_id="m1", reply_reference="回答")]),

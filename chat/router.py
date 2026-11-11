@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import re
+import asyncio
 from typing import Any
+from contextvars import ContextVar
 
 from nonebot import logger, on_message
 from nonebot.rule import Rule
@@ -12,8 +14,10 @@ from nonebot.adapters import Bot, Event
 
 from . import emoji as emoji_module
 from .focus import focus_mode_manager
+from .hooks import ChatHookContext, guard, notify, has_chat_hooks
 from .types import ChatRequest, TriggerKind
 from .voice import transcribe_event, audio_sources_for_event
+from .access import id_allowlist as _id_allowlist
 from ..config import get_manager as get_config_manager
 from .service import chat_service, history_limit
 from ..adapter import (
@@ -38,6 +42,7 @@ from .message_adapter import (
     mention_flags,
     event_identity,
     collect_mentions,
+    platform_for_bot,
     adapt_message_event,
     message_occurred_at,
     read_quote_snapshot,
@@ -78,14 +83,6 @@ def _chat_cfg() -> dict[str, Any]:
     """读取 AI 配置。"""
     cfg = get_config_manager().get_system()
     return cfg["chat"]
-
-
-def _id_allowlist(cfg: dict[str, Any], key: str) -> set[str]:
-    """读取 ID 白名单；空集合表示不限制。"""
-    value = cfg[key]
-    if not isinstance(value, (list, tuple, set)):
-        return set()
-    return {str(item).strip() for item in value if item is not None and str(item).strip()}
 
 
 def _has_image(event: Any) -> bool:
@@ -210,7 +207,7 @@ async def _ai_fallback_rule(bot: Bot, event: Event) -> bool:
     text = message_text(event)
     if not text and not _has_image(event) and not _has_voice(event):
         return False
-    return True
+    return await _ingress_allowed(bot, event, path="reply")
 
 
 async def _context_rule(bot: Bot, event: Event) -> bool:
@@ -229,7 +226,60 @@ async def _context_rule(bot: Bot, event: Event) -> bool:
     has_voice = _has_voice(event)
     if not text and not has_image and not has_voice:
         return False
-    return True
+    return await _ingress_allowed(bot, event, path="context")
+
+
+async def _ingress_allowed(bot: Bot, event: Event, *, path: str) -> bool:
+    """同一事件与会话只判定一次，首个路由路径确定通知语义，后续询问复用结果。"""
+    decisions = getattr(event, _INGRESS_ATTR, None)
+    hooks_enabled = has_chat_hooks("ingress_guard", "observer")
+    if not hooks_enabled and not isinstance(decisions, dict):
+        return True
+    session_id = session_id_for_event(bot, event)
+    platform = platform_for_bot(bot)
+    key = (platform, str(getattr(bot, "self_id", "")), session_id)
+    if not isinstance(decisions, dict):
+        decisions = {}
+        try:
+            object.__setattr__(event, _INGRESS_ATTR, decisions)
+        except (AttributeError, TypeError):
+            logger.opt(exception=True).warning("[Chat] 无法保存入站判定，拒绝接收")
+            return False
+    existing = decisions.get(key)
+    pending_key = (id(event), key)
+    if isinstance(existing, asyncio.Future):
+        if not existing.done() and pending_key in _INGRESS_PENDING.get():
+            raise RuntimeError("入站守卫不能递归判定同一事件")
+        # 取消重复询问者不能取消首个路由仍在运行的守卫。
+        return await asyncio.shield(existing)
+    if not hooks_enabled:
+        return True
+    decision = asyncio.get_running_loop().create_future()
+    decisions[key] = decision
+    token = _INGRESS_PENDING.set(_INGRESS_PENDING.get() | {pending_key})
+    try:
+        context = ChatHookContext(
+            session_id,
+            normalize_id(event_user_id(event)) or "",
+            normalize_id(event_group_id(event)),
+            platform=platform,
+            phase="ingress",
+        )
+        allowed = await guard("ingress_guard", context, path=path, text=message_text(event))
+        await notify("ingress_accepted" if allowed else "ingress_rejected", context, path=path)
+    except BaseException:
+        decision.cancel()
+        raise
+    finally:
+        _INGRESS_PENDING.reset(token)
+    decision.set_result(allowed)
+    return allowed
+
+
+_INGRESS_ATTR = "_fxbot_chat_ingress_decisions"
+_INGRESS_PENDING: ContextVar[frozenset[tuple[int, tuple[str, str, str]]]] = ContextVar(
+    "chat_ingress_pending", default=frozenset()
+)
 
 
 # 优先级高于 AI 兜底：先记录群聊上下文，再由兜底决定是否回复

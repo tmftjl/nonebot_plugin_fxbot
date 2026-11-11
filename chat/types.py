@@ -41,6 +41,11 @@ def is_proactive(request: ChatRequest) -> bool:
     return request.proactive or request.trigger_kind == "proactive"
 
 
+def is_continuation(request: ChatRequest) -> bool:
+    """系统续话没有新的用户输入，不得作为用户消息或学习证据处理。"""
+    return request.metadata.get("continuation") is True
+
+
 def speaker_label(user_id: str, user_name: str) -> str:
     """生成发言人标识，用于区分同一会话里的不同成员。"""
     user_id = str(user_id or "").strip()

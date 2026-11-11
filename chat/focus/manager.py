@@ -158,6 +158,15 @@ class FocusModeManager:
                 removed = await group.discard_message(session_id, message_id) or removed
             return removed
 
+    async def record_extension_part(self, request: Any, index: int, text: str, message_id: str | None) -> None:
+        """把插件实际发送的正文同步到当前有效共享组，不把它当新用户输入。"""
+        scope = self._scope_by_session.get(request.session_id)
+        group = self.groups.get(scope)
+        member = group.members.get(request.session_id) if group is not None else None
+        if member is None or not group.is_member_valid(member):
+            return
+        await group.record_extension_part(request, index, text, message_id)
+
     async def clear_context(self, session_id: str) -> None:
         """清空聊天时把涉及它的共享上下文一并丢弃。"""
         async with self._lock:

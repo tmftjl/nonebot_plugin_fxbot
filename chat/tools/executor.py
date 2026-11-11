@@ -19,6 +19,9 @@ from ...permission import check_permission
 
 async def tool_allowed(spec: ToolSpec, runtime: ToolRuntime, *, session_id: str = "") -> bool:
     """判断当前调用者是否有权使用该工具；无 bot/event 时按无权限处理。"""
+    runtime_tools = getattr(runtime, "allowed_tools", None)
+    if runtime_tools is not None and spec.name not in runtime_tools:
+        return False
     identity = ChatHookContext(
         session_id=session_id,
         user_id=str(event_user_id(runtime.event) or "") if runtime.event is not None else "",

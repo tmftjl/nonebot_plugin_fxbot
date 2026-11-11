@@ -50,16 +50,22 @@ class ShutdownTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(list(reversed(hooks)), [plugin._fxbot_shutdown, stats, early])
 
     async def test_cleanup_order_and_each_failure_is_logged(self) -> None:
+        from src.plugins.nonebot_plugin_fxbot.chat import audit
         from src.plugins.nonebot_plugin_fxbot.utils import http
         from src.plugins.nonebot_plugin_fxbot.chat.focus import focus_mode_manager
         from src.plugins.nonebot_plugin_fxbot.chat.providers import provider_manager
+        from src.plugins.nonebot_plugin_fxbot.chat.continuation import reply_scheduler
+        from src.plugins.nonebot_plugin_fxbot.console.chat_channel import console_chat
         from src.plugins.nonebot_plugin_fxbot.chat.amemorix.runtime import amemorix_runtime
         from src.plugins.nonebot_plugin_fxbot.chat.amemorix.writeback import chat_writeback
 
         steps = [
+            (console_chat, "stop"),
+            (reply_scheduler, "stop"),
             (focus_mode_manager, "stop_all"),
             (subagent.subagent_tasks, "cancel_all"),
             (chat_writeback, "stop"),
+            (audit, "stop_audit_observers"),
             (amemorix_runtime, "stop"),
             (provider_manager, "reset"),
             (http, "close_shared_async_client"),

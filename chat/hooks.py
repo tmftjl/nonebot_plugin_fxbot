@@ -7,28 +7,67 @@ import inspect
 from copy import deepcopy
 from math import isfinite
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Literal, get_args
 from dataclasses import dataclass
-from collections.abc import Callable
+from collections.abc import Callable, Collection, MutableMapping
 
 from nonebot import logger
 
+from .hook_registry import Registration, CallbackRegistry, ordered_callbacks, register_callback
+
 HOOK_TIMEOUT_SECONDS = 5.0
-_hooks: dict[str, dict[str, Callable[..., Any]]] = {}
-_KINDS = frozenset(
-    {"request_guard", "persona", "system_prompt", "prompt", "tool_guard", "reply_text", "send_guard", "observer"}
-)
+_IMMUTABLE_SCALARS = frozenset({str, int, float, bool, bytes, type(None)})
+_hooks: dict[str, MutableMapping[str, Callable[..., Any]]] = {}
+HookKind = Literal[
+    "request_guard",
+    "persona",
+    "system_prompt",
+    "prompt",
+    "tool_guard",
+    "reply_text",
+    "send_guard",
+    "observer",
+    "stage_guard",
+    "ingress_guard",
+    "session_resolver",
+    "session_policy",
+]
+_KINDS = frozenset(get_args(HookKind))
 
 
-def _snapshot(value: Any) -> Any:
-    """递归冻结常见容器，通知不能通过嵌套参数回写执行状态。"""
+def _freeze(value: Any) -> tuple[Any, bool]:
+    """冻结常见容器并标记是否可安全共享，未知对象仍保留逐订阅者深拷贝。"""
+    if type(value) in _IMMUTABLE_SCALARS:
+        return value, True
     if isinstance(value, dict):
-        return MappingProxyType({key: _snapshot(item) for key, item in value.items()})
+        frozen = {}
+        shared = True
+        for key, item in value.items():
+            frozen[key], item_shared = _freeze(item)
+            shared = shared and item_shared and type(key) in _IMMUTABLE_SCALARS
+        return MappingProxyType(frozen), shared
     if isinstance(value, (list, tuple)):
-        return tuple(_snapshot(item) for item in value)
+        pairs = [_freeze(item) for item in value]
+        return tuple(item for item, _ in pairs), all(shared for _, shared in pairs)
     if isinstance(value, (set, frozenset)):
-        return frozenset(_snapshot(item) for item in value)
-    return deepcopy(value)
+        pairs = [_freeze(item) for item in value]
+        return frozenset(item for item, _ in pairs), all(shared for _, shared in pairs)
+    return deepcopy(value), False
+
+
+class _DetailsSnapshot:
+    """一次派发只冻结一次纯数据；含可变对象时维持各订阅者独立快照。"""
+
+    def __init__(self, details: dict[str, Any]) -> None:
+        self.details = details
+        self.shared = False
+        self.value: Any = None
+
+    def get(self) -> Any:
+        """按需准备快照，无匹配订阅者时不遍历载荷。"""
+        if not self.shared:
+            self.value, self.shared = _freeze(self.details)
+        return self.value
 
 
 @dataclass(frozen=True)
@@ -42,6 +81,7 @@ class ChatHookContext:
     turn_id: str = ""
     phase: str = "reply"
     epoch: int | None = None
+    source: str = "message"
 
 
 @dataclass(frozen=True)
@@ -64,6 +104,11 @@ class ChatHookError(RuntimeError):
     """阻止有风险的回调失败继续生成或发送。"""
 
 
+def has_chat_hooks(*kinds: str) -> bool:
+    """无订阅时跳过额外身份解析，不改变原路由的廉价匹配路径。"""
+    return any(_hooks.get(kind) for kind in kinds)
+
+
 def hook_context(request: Any, *, phase: str | None = None) -> ChatHookContext:
     """从真实请求提取身份，不向插件传递可改写的原对象。"""
     return ChatHookContext(
@@ -77,24 +122,43 @@ def hook_context(request: Any, *, phase: str | None = None) -> ChatHookContext:
             "planner" if request.metadata.get("planner_loop") and not request.metadata.get("planner_reply") else "reply"
         ),
         epoch=request.accepted_epoch,
+        source=str(request.metadata.get("_extension_owner") or "message"),
     )
 
 
-def register_chat_hook(kind: str, name: str, callback: Callable[..., Any]) -> Callable[[], None]:
+def register_chat_hook(
+    kind: HookKind,
+    name: str,
+    callback: Callable[..., Any],
+    *,
+    priority: int = 100,
+    events: Collection[str] | None = None,
+) -> Callable[[], None]:
     """按类型和插件名称注册，稳定排序、同名替换并返回精确注销句柄。"""
-    if kind not in _KINDS or not isinstance(name, str) or not name.strip() or not callable(callback):
+    if events is not None:
+        if (
+            kind != "observer"
+            or not isinstance(events, Collection)
+            or isinstance(events, str)
+            or any(not isinstance(event, str) or not event.strip() for event in events)
+        ):
+            raise ValueError("事件筛选只支持通知且需要事件名称集合")
+        events = frozenset(events)
+    if kind in {"session_resolver", "session_policy"}:
+        from .session_hooks import register_session_policy, register_session_resolver
+
+        register = register_session_resolver if kind == "session_resolver" else register_session_policy
+        return register(name, callback, priority=priority)
+    if kind not in _KINDS:
         raise ValueError("聊天 hook 类型、名称或回调无效")
-    if kind in {"persona", "system_prompt", "prompt", "reply_text"} and inspect.iscoroutinefunction(callback):
-        raise ValueError("人格、提示和正文过滤器必须同步")
-    entries = _hooks.setdefault(kind, {})
-    entries[name] = callback
-
-    def unregister() -> None:
-        """旧注销句柄不能移除热重载后的新实现。"""
-        if entries.get(name) is callback:
-            entries.pop(name)
-
-    return unregister
+    return register_callback(
+        _hooks.setdefault(kind, CallbackRegistry()),
+        name,
+        callback,
+        priority=priority,
+        synchronous=kind in {"persona", "system_prompt", "prompt", "reply_text"},
+        events=events,
+    )
 
 
 def _sync(callback: Callable[..., Any], *args: Any) -> Any:
@@ -116,11 +180,15 @@ async def _call(callback: Callable[..., Any], *args: Any) -> Any:
 
 async def guard(hook_kind: str, context: ChatHookContext, **details: Any) -> bool:
     """拒绝优先，None 表示不干预；异常、超时或非法返回均拒绝。"""
-    if hook_kind not in {"request_guard", "tool_guard", "send_guard"}:
+    if hook_kind not in {"request_guard", "tool_guard", "send_guard", "stage_guard", "ingress_guard"}:
         raise ValueError("无效的守卫类型")
-    for name, callback in tuple(_hooks.get(hook_kind, {}).items()):
+    callbacks = ordered_callbacks(_hooks.get(hook_kind, {}))
+    if not callbacks:
+        return True
+    snapshot = _DetailsSnapshot(details)
+    for name, callback in callbacks:
         try:
-            value = await _call(callback, context, _snapshot(details))
+            value = await _call(callback, context, snapshot.get())
             if value is False:
                 return False
             if value is not None and value is not True:
@@ -133,7 +201,7 @@ async def guard(hook_kind: str, context: ChatHookContext, **details: Any) -> boo
 
 def resolve_persona(context: ChatHookContext, name: str, text: str) -> tuple[str, str]:
     """依次应用明确的人格覆盖值，错误时终止而非套用其他人格。"""
-    for label, callback in tuple(_hooks.get("persona", {}).items()):
+    for label, callback in ordered_callbacks(_hooks.get("persona", {})):
         try:
             value = _sync(callback, context, name, text)
             if value is None:
@@ -161,7 +229,7 @@ def resolve_persona(context: ChatHookContext, name: str, text: str) -> tuple[str
 def system_prompt_sections(context: ChatHookContext) -> str:
     """独立解析并排序系统段，空贡献不改变原模板，失败时中止生成。"""
     sections: list[tuple[float, str, str]] = []
-    for name, callback in tuple(_hooks.get("system_prompt", {}).items()):
+    for name, callback in ordered_callbacks(_hooks.get("system_prompt", {})):
         try:
             section = _sync(callback, context)
             if section is None:
@@ -185,7 +253,7 @@ def system_prompt_sections(context: ChatHookContext) -> str:
 def prompt_notes(context: ChatHookContext) -> list[str]:
     """只追加独立参考，不允许改写历史、系统身份或工具协议。"""
     notes = []
-    for name, callback in tuple(_hooks.get("prompt", {}).items()):
+    for name, callback in ordered_callbacks(_hooks.get("prompt", {})):
         try:
             note = _sync(callback, context)
             if note is None:
@@ -202,7 +270,7 @@ def prompt_notes(context: ChatHookContext) -> list[str]:
 
 def filter_reply_text(context: ChatHookContext, text: str) -> str:
     """在断句和持久化前过滤生成正文，空串表示丢弃回复。"""
-    for name, callback in tuple(_hooks.get("reply_text", {}).items()):
+    for name, callback in ordered_callbacks(_hooks.get("reply_text", {})):
         try:
             result = _sync(callback, context, text)
             if result is not None:
@@ -216,9 +284,15 @@ def filter_reply_text(context: ChatHookContext, text: str) -> str:
 
 
 async def notify(event: str, context: ChatHookContext, **details: Any) -> None:
-    """生命周期通知不影响核心结果，每个订阅者收到独立快照。"""
-    for name, callback in tuple(_hooks.get("observer", {}).items()):
+    """按事件筛选通知，共享不可变快照，可变对象隔离，失败不影响核心结果。"""
+    callbacks = ordered_callbacks(_hooks.get("observer", {}))
+    if not callbacks:
+        return
+    snapshot = _DetailsSnapshot(details)
+    for name, callback in callbacks:
+        if isinstance(callback, Registration) and callback.events is not None and event not in callback.events:
+            continue
         try:
-            await _call(callback, event, context, _snapshot(details))
+            await _call(callback, event, context, snapshot.get())
         except Exception:
             logger.opt(exception=True).warning(f"[ChatHook] 通知失败: {event}/{name}")

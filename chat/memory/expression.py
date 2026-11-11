@@ -19,6 +19,7 @@ from .prompts import learning_prompt
 from .learning import tenant_target, learning_flags
 from .filtering import SENSITIVE, text_hash, should_learn, sanitize_line, normalize_expression_style
 from .repository import chat_repository
+from .write_hooks import write_learning
 from .expression_vector import select_by_vectors
 from ..providers.routing import routed_task, fallback_provider
 
@@ -367,13 +368,21 @@ async def learn_expressions(
     seq_end = int(raw[-1].id or 0)
     clean = _clean_messages(raw, tenant)
     if not clean:
-        return await chat_repository.save_expressions(
+        return await write_learning(
             tenant,
-            [],
-            {},
+            "expression",
+            lambda: chat_repository.save_expressions(
+                tenant,
+                [],
+                {},
+                cursor_seq=seq_end,
+                expected_cursor=after,
+                source_batch_id=expression_batch_id(int(raw[0].id or 0), seq_end),
+            ),
+            new_items=[],
+            updates={},
+            updated_items=[],
             cursor_seq=seq_end,
-            expected_cursor=after,
-            source_batch_id=expression_batch_id(int(raw[0].id or 0), seq_end),
         )
     selected = clean
     seq_start = int(selected[0].id or 0)
@@ -409,14 +418,26 @@ async def learn_expressions(
                 "learn_count": int(item["learn"]),
             }
         )
-    return await chat_repository.save_expressions(
+    return await write_learning(
         tenant,
-        inserts,
-        updates,
+        "expression",
+        lambda: chat_repository.save_expressions(
+            tenant,
+            inserts,
+            updates,
+            cursor_seq=seq_end,
+            expected_cursor=after,
+            source_batch_id=batch_id,
+            evidence_ids=tuple(int(message.id or 0) for message in clean),
+        ),
+        new_items=inserts,
+        updates=updates,
+        updated_items=[
+            {"id": row.id, "situation": row.situation, "style": row.style, "type": row.type}
+            for row in existing
+            if row.id in updates
+        ],
         cursor_seq=seq_end,
-        expected_cursor=after,
-        source_batch_id=batch_id,
-        evidence_ids=tuple(int(message.id or 0) for message in clean),
     )
 
 

@@ -1,6 +1,9 @@
 # 会话扩展 hook
 
 `chat/session_hooks.py` 为插件提供同步会话解析器和会话策略。核心不识别具体业务插件或命名空间标记。
+新插件可统一使用 `chat/extensions.py` 的 `ChatExtension.on("session_resolver", callback)` 和
+`on("session_policy", callback)`，与聊天过滤器、守卫、通知一起关闭；旧接口保持可用。
+两种接口均接受整数 `priority=100`，较小值优先，相同值按注册顺序，同名替换保留位置。
 
 ## 会话解析
 

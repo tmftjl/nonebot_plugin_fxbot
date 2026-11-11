@@ -20,6 +20,7 @@ from .routes import (
     config,
     system as system_routes,
     amemorix,
+    local_chat,
     membership,
     permissions,
     ai_providers,
@@ -55,6 +56,7 @@ def mount_console() -> None:
     router.include_router(cache_routes.router)
     router.include_router(chat.router)
     router.include_router(chat.image_router)
+    router.include_router(local_chat.router)
     router.include_router(amemorix.router)
     router.include_router(amemorix.file_router)
 

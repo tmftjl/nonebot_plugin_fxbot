@@ -8,6 +8,7 @@ from typing import Any
 from nonebot import logger
 
 from ..web import web_runtime
+from ..hooks import ChatHookContext, hook_context
 from ..tools import (
     SUBAGENT_TOOL_NAMES,
     SUBAGENT_STOP_TOOL_NAME,
@@ -19,6 +20,7 @@ from ..tools import (
     default_registry,
 )
 from ..types import ChatRequest
+from ..stages import execute_stage
 from ..providers import LLMResponse
 from ..capabilities import capabilities_config
 from ..amemorix.runtime import amemorix_runtime
@@ -90,6 +92,26 @@ async def allowed_tools(
 
 
 async def generate(
+    service: Any,
+    request: ChatRequest,
+    runtime: ToolRuntime,
+    provider: Any,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None,
+    allowed_names: set[str],
+    epoch: int,
+    limit: int,
+) -> LLMResponse:
+    """在正式阶段边界执行回复生成，插件拒绝时不调用模型。"""
+    return await execute_stage(
+        "reply",
+        hook_context(request, phase="reply") if request is not None else ChatHookContext("", phase="reply"),
+        lambda: _generate(service, request, runtime, provider, messages, tools, allowed_names, epoch, limit),
+        rejected=LLMResponse(content=""),
+    )
+
+
+async def _generate(
     service: Any,
     request: ChatRequest,
     runtime: ToolRuntime,

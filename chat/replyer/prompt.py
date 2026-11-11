@@ -11,7 +11,7 @@ from typing import Any
 from datetime import datetime
 
 from ..hooks import hook_context, prompt_notes, resolve_persona, system_prompt_sections
-from ..types import ChatRequest, speaker_label
+from ..types import ChatRequest, speaker_label, is_continuation
 from ..bindings import PERSONA, get_binding
 from ..personas import DEFAULT_PERSONA, get_persona_text, compose_persona_prompt
 from ...utils.tz import as_shanghai
@@ -145,7 +145,7 @@ def assemble_messages(
     if context_summary:
         messages.append({"role": "system", "content": f"{SUMMARY_HEADER}\n{context_summary}"})
     messages.extend(public_history)
-    if not current_present:
+    if not current_present and not is_continuation(request):
         messages.append(
             _public(
                 {
@@ -220,6 +220,8 @@ def truncate_content(content: Any, limit: int = MAX_CURRENT_CHARS) -> Any:
 
 def build_user_content(request: ChatRequest) -> str | list[dict[str, Any]]:
     """构造用户消息内容，带上发言人标识，引用、@ 目标和图片一并附带。"""
+    if is_continuation(request):
+        return ""
     text = request.text
     if request.quoted_text and not request.metadata.get("quote_snapshot"):
         text = f"{request.quoted_text}\n{text}" if text else request.quoted_text
@@ -358,6 +360,8 @@ def build_persona_text(
     scene = (
         f"当前是群聊，群 ID：{request.group_id}。按消息来源区分发言人。"
         if request.is_group
+        else "当前是本私聊会话的主动续话，没有新的用户消息；参与者身份以本会话真实历史为准。"
+        if is_continuation(request)
         else f"当前是你与用户 {request.user_id} 的一对一私聊，不是群聊，没有其他参与者。"
     )
     persona_text = (

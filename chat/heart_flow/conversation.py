@@ -14,9 +14,11 @@ from nonebot import logger
 
 from . import plan_flow, emoji_tools
 from ..emoji import emoji_config
+from ..hooks import hook_context
 from ..tools import ToolContext, execute_tool
 from ..trace import turn_trace
 from ..types import ChatResponse, speaker_label
+from ..stages import execute_stage
 from ..planner import Plan, plan_features, planner_config, record_plan_sample
 from ...utils.tz import now
 from ..providers import LLMResponse
@@ -136,7 +138,17 @@ async def interruptible_step(service: Any, context: Any, provider: Any, messages
             request.message_id or request.dedupe_key,
         )
         steering = plan_flow.steering_enabled()
-        task = asyncio.create_task(asyncio.wait_for(request_step(provider, messages, tools, stream=steering), 180))
+        task = asyncio.create_task(
+            asyncio.wait_for(
+                execute_stage(
+                    "planner",
+                    hook_context(request, phase="planner"),
+                    lambda: request_step(provider, messages, tools, stream=steering),
+                    rejected=LLMResponse(content=""),
+                ),
+                180,
+            )
+        )
         try:
             while not task.done():
                 done, _ = await asyncio.wait({task}, timeout=0.1)
@@ -370,7 +382,11 @@ async def run(service: Any, context: Any) -> ChatResponse:
                 messages[:] = [*rebuilt, *request.metadata["planner_instruction"]]
             sync_discovered(request.session_id, messages)
             names, tools = await allowed_tools(context.runtime, session_id=request.session_id)
-            tools = [*control_tools(passive), *tools]
+            controls = control_tools(passive)
+            runtime_tools = getattr(context.runtime, "allowed_tools", None)
+            if runtime_tools is not None:
+                controls = [item for item in controls if item["function"]["name"] in runtime_tools]
+            tools = [*controls, *tools]
             request_messages = list(messages)
             if reminder := deferred_reminder(names, request.session_id):
                 request_messages.append({"role": "user", "content": reminder})
@@ -447,6 +463,8 @@ async def run(service: Any, context: Any) -> ChatResponse:
                         or not can_reply(session_id=request.session_id)
                     ):
                         result = {"ok": False, "error": "本轮已暂停或结束，工具未执行"}
+                    elif runtime_tools is not None and name not in runtime_tools:
+                        result = {"ok": False, "error": "当前聊天渠道不支持该工具"}
                     elif name == "reply" and not passive:
                         result, generated = await reply(arguments)
                         stopped = bool(result.get("duplicate_reply"))

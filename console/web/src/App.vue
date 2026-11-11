@@ -34,6 +34,7 @@ import CacheView from '@/views/CacheView.vue'
 import AmemorixView from '@/views/AmemorixView.vue'
 import ChatMemoryView from '@/views/ChatMemoryView.vue'
 import ChatReplyView from '@/views/ChatReplyView.vue'
+import LocalChatView from '@/views/LocalChatView.vue'
 import ChatSettingsView from '@/views/ChatSettingsView.vue'
 import LoginView from '@/views/LoginView.vue'
 import PasswordDialog from '@/components/PasswordDialog.vue'
@@ -92,6 +93,7 @@ const fixedSections: NavSection[] = [
     key: 'ai',
     title: 'AI 对话',
     items: [
+      { index: 'local-chat', label: '直接对话', icon: ChatLineSquare },
       { index: 'chat-memory', label: '学习', icon: ChatDotRound },
       { index: 'amemorix', label: '长期记忆', icon: Collection },
       { index: 'chat-reply', label: '接话与运行', icon: ChatLineSquare },
@@ -399,6 +401,7 @@ onUnmounted(() => {
         <CacheView v-else-if="activeMenu === 'cache'" />
         <ChatMemoryView v-else-if="activeMenu === 'chat-memory'" />
         <ChatReplyView v-else-if="activeMenu === 'chat-reply'" />
+        <LocalChatView v-else-if="activeMenu === 'local-chat'" />
         <AmemorixView v-else-if="activeMenu === 'amemorix'" />
         <ChatSettingsView v-else-if="activeMenu === 'chat-settings'" />
         <PermissionsView v-else-if="activeMenu === 'permissions'" />

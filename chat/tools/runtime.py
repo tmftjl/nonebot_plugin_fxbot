@@ -13,6 +13,7 @@ class ToolRuntime:
     bot: Any = None
     event: Any = None
     matcher: Any = None
+    allowed_tools: frozenset[str] | None = None
 
     def require_bot(self) -> Any:
         """获取 bot，不存在时抛错。"""
