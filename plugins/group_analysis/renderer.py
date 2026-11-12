@@ -18,7 +18,10 @@ from .atri import build_atri_html
 from ...utils.tz import SHANGHAI_TZ
 from ...utils.fonts import load_font, get_shared_font_path
 
-_RENDER_SEM = asyncio.Semaphore(2)
+_RENDER_SEM = asyncio.Semaphore(1)
+_SCALES = {"miku": 2.0, "atri": 1.5}
+_LOAD_TIMEOUT = 30.0
+_SHOT_TIMEOUT = 45.0
 _ASSETS = Path(__file__).with_name("resources") / "miku"
 _TOPIC_IMAGES = (
     "retouch_2026032810150449.png",
@@ -389,14 +392,16 @@ def _fallback_image(report: dict[str, Any]) -> bytes:
     for topic in (analysis.get("topics") or [])[:3]:
         draw.text((48, y), f"- {topic.get('title', '')}", fill=(44, 62, 80), font=text_font)
         y += 40
+    draw.text((48, 592), "长图生成失败 已降级为摘要图", fill=(150, 150, 150), font=text_font)
     buffer = io.BytesIO()
     image.save(buffer, format="PNG")
     return buffer.getvalue()
 
 
-async def render_report(report: dict[str, Any], *, theme: str = "miku", scale: float = 2.0) -> bytes:
+async def render_report(report: dict[str, Any], *, theme: str = "miku", scale: float | None = None) -> bytes:
     """优先用 Playwright 出长图，失败时退化为统计摘要图。"""
     html = build_atri_html(report) if theme == "atri" else _build_html(report)
+    scale = scale or _SCALES.get(theme, 2.0)
     try:
         from playwright.async_api import async_playwright
     except Exception:
@@ -409,11 +414,13 @@ async def render_report(report: dict[str, Any], *, theme: str = "miku", scale: f
                 try:
                     page = await browser.new_page(device_scale_factor=scale)
                     try:
-                        await asyncio.wait_for(page.set_content(html, wait_until="load"), timeout=20.0)
+                        await asyncio.wait_for(page.set_content(html, wait_until="load"), timeout=_LOAD_TIMEOUT)
                         element = await page.query_selector(".container")
                         if element:
-                            return await asyncio.wait_for(element.screenshot(type="png"), timeout=20.0)
-                        return await asyncio.wait_for(page.screenshot(type="png", full_page=True), timeout=20.0)
+                            return await asyncio.wait_for(element.screenshot(type="png"), timeout=_SHOT_TIMEOUT)
+                        return await asyncio.wait_for(
+                            page.screenshot(type="png", full_page=True), timeout=_SHOT_TIMEOUT
+                        )
                     finally:
                         await page.close()
                 finally:
@@ -421,5 +428,5 @@ async def render_report(report: dict[str, Any], *, theme: str = "miku", scale: f
             finally:
                 await pw.stop()
     except Exception as exc:
-        logger.warning(f"[group_analysis] 长图渲染失败，回退到摘要图: {exc}")
+        logger.opt(exception=True).warning(f"[group_analysis] 长图渲染失败，回退到摘要图: {type(exc).__name__}: {exc}")
         return _fallback_image(report)
