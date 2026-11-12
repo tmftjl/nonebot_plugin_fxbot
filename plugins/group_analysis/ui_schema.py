@@ -13,11 +13,24 @@ DEFAULTS: dict[str, Any] = {
         "max_messages": 1000,
         "min_messages": 30,
         "filter_self": True,
+        "theme": "miku",
     },
     "auto": {
         "auto_groups": [],
         "auto_hour": 8,
         "auto_minute": 0,
+    },
+    "analysis_features": {
+        "topic_analysis_enabled": True,
+        "user_title_analysis_enabled": True,
+        "golden_quote_analysis_enabled": True,
+        "chat_quality_analysis_enabled": True,
+        "max_topics": 5,
+        "max_user_titles": 8,
+        "max_golden_quotes": 5,
+        "keep_original_persona": False,
+        "use_plugin_specific_persona": False,
+        "plugin_specific_persona_id": "",
     },
 }
 
@@ -84,6 +97,19 @@ def get_ui_schema() -> dict[str, Any]:
                         "component": "Switch",
                         "default": DEFAULTS["basic"]["filter_self"],
                         "helpMessage": "开启后机器人自己的消息不计入统计和分析。",
+                    },
+                    {
+                        "field": "theme",
+                        "label": "日报模板",
+                        "component": "Select",
+                        "default": DEFAULTS["basic"]["theme"],
+                        "helpMessage": "选择生成日报使用的主题样式。",
+                        "componentProps": {
+                            "options": [
+                                {"label": "初音未来", "value": "miku"},
+                                {"label": "亚托莉", "value": "atri"},
+                            ]
+                        },
                     },
                 ],
             },

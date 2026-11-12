@@ -12,7 +12,7 @@ from nonebot import logger
 from google.genai import types
 
 from ..base import ChatProvider, EmbeddingProvider
-from ..entities import LLMResponse, ProviderType
+from ..entities import LLMResponse, JSONResponse, ProviderType, LLMResponseError
 from ..register import register_provider
 
 
@@ -148,7 +148,7 @@ class GeminiProvider(ChatProvider):
             raise
 
         if not resp.candidates:
-            raise ValueError("Gemini 返回结果为空")
+            raise LLMResponseError(LLMResponse(raw_response=resp), "Gemini 返回结果为空")
 
         candidate = resp.candidates[0]
         response = LLMResponse(role="assistant", raw_response=resp)
@@ -193,7 +193,10 @@ class GeminiProvider(ChatProvider):
             )
             full_content = ""
             calls: list[dict[str, Any]] = []
+            usage_chunk = None
             async for chunk in stream:
+                if getattr(chunk, "usage_metadata", None) is not None:
+                    usage_chunk = chunk
                 for candidate in chunk.candidates or []:
                     for part in candidate.content.parts or []:
                         if part.text:
@@ -210,7 +213,7 @@ class GeminiProvider(ChatProvider):
                                     },
                                 }
                             )
-            yield LLMResponse(role="assistant", content=full_content, tool_calls=calls)
+            yield LLMResponse(role="assistant", content=full_content, tool_calls=calls, raw_response=usage_chunk)
         except Exception as exc:
             logger.error(f"[{self.provider_id}] Gemini stream 失败: {exc}")
             raise
@@ -220,7 +223,7 @@ class GeminiProvider(ChatProvider):
         messages: list[dict[str, Any]],
         schema: dict[str, Any] | None = None,
         model: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> JSONResponse:
         """使用 Gemini JSON 模式请求结构化输出。"""
         system_instruction, contents = self._convert_to_gemini_format(messages)
         config: dict[str, Any] = {
@@ -237,16 +240,13 @@ class GeminiProvider(ChatProvider):
                 contents=contents,
                 config=config,
             )
-            if not resp.candidates:
-                raise ValueError(f"[{self.provider_id}] 返回结果为空")
-            content = resp.candidates[0].content.parts[0].text
-            return json.loads(content)
-        except json.JSONDecodeError as exc:
-            logger.warning(f"[{self.provider_id}] JSON 解析失败: {exc}")
-            raise ValueError(f"[{self.provider_id}] JSON 解析失败: {exc}") from exc
         except Exception as exc:
             logger.error(f"[{self.provider_id}] chat_json 失败: {exc}")
             raise
+        candidate_content = resp.candidates[0].content if resp.candidates else None
+        parts = candidate_content.parts if candidate_content is not None else []
+        content = "".join(part.text or "" for part in parts or [] if not getattr(part, "thought", False))
+        return JSONResponse.from_response(LLMResponse(content=content, raw_response=resp))
 
     async def get_models(self) -> list[str]:
         """获取可用模型列表。"""

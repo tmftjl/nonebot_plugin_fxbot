@@ -14,6 +14,7 @@ from functools import lru_cache
 from PIL import Image, ImageDraw
 from nonebot import logger
 
+from .atri import build_atri_html
 from ...utils.tz import SHANGHAI_TZ
 from ...utils.fonts import load_font, get_shared_font_path
 
@@ -393,9 +394,9 @@ def _fallback_image(report: dict[str, Any]) -> bytes:
     return buffer.getvalue()
 
 
-async def render_report(report: dict[str, Any], scale: float = 2.0) -> bytes:
+async def render_report(report: dict[str, Any], *, theme: str = "miku", scale: float = 2.0) -> bytes:
     """优先用 Playwright 出长图，失败时退化为统计摘要图。"""
-    html = _build_html(report)
+    html = build_atri_html(report) if theme == "atri" else _build_html(report)
     try:
         from playwright.async_api import async_playwright
     except Exception:

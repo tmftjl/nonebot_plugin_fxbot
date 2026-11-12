@@ -10,7 +10,7 @@ import httpx
 from nonebot import logger
 
 from ..base import ChatProvider
-from ..entities import LLMResponse
+from ..entities import LLMResponse, JSONResponse, LLMResponseError
 from ..register import register_provider
 from ....utils.http import get_shared_async_client
 
@@ -163,7 +163,7 @@ class VertexAIProvider(ChatProvider):
 
         data = response.json()
         if not data.get("candidates"):
-            raise ValueError("Vertex AI 返回结果为空")
+            raise LLMResponseError(LLMResponse(raw_response=data), "Vertex AI 返回结果为空")
 
         content_parts = data["candidates"][0].get("content", {}).get("parts", [])
         result = LLMResponse(role="assistant", raw_response=data)
@@ -216,6 +216,7 @@ class VertexAIProvider(ChatProvider):
                 full_content = ""
                 calls: list[dict[str, Any]] = []
                 original_parts: list[dict[str, Any]] = []
+                usage_chunk = None
                 async for line in response.aiter_lines():
                     if not line.startswith("data:"):
                         continue
@@ -224,7 +225,10 @@ class VertexAIProvider(ChatProvider):
                     except json.JSONDecodeError:
                         logger.warning(f"[{self.provider_id}] 无法解析流式响应: {line}")
                         continue
-                    for part in data.get("candidates", [{}])[0].get("content", {}).get("parts", []):
+                    if data.get("usageMetadata") is not None:
+                        usage_chunk = data
+                    candidates = data.get("candidates") or [{}]
+                    for part in candidates[0].get("content", {}).get("parts", []):
                         original_parts.append(part)
                         if "text" in part:
                             full_content += part["text"]
@@ -250,6 +254,7 @@ class VertexAIProvider(ChatProvider):
                     content=full_content,
                     tool_calls=calls,
                     provider_data={"vertex_parts": original_parts},
+                    raw_response=usage_chunk,
                 )
         except httpx.HTTPStatusError as exc:
             logger.error(f"[{self.provider_id}] Stream HTTP 错误: {exc.response.status_code}")
@@ -263,7 +268,7 @@ class VertexAIProvider(ChatProvider):
         messages: list[dict[str, Any]],
         schema: dict[str, Any] | None = None,
         model: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> JSONResponse:
         """请求 Vertex AI JSON 结构化输出。"""
         model_name = model or self.model_name
         request_body = self._convert_to_vertex_format(messages)
@@ -284,15 +289,11 @@ class VertexAIProvider(ChatProvider):
                 timeout=self.timeout,
             )
             response.raise_for_status()
-            data = response.json()
-            if not data.get("candidates"):
-                raise ValueError(f"[{self.provider_id}] 返回结果为空")
-            content_parts = data["candidates"][0].get("content", {}).get("parts", [])
-            text = content_parts[0].get("text", "{}") if content_parts else "{}"
-            return json.loads(text)
-        except json.JSONDecodeError as exc:
-            logger.warning(f"[{self.provider_id}] JSON 解析失败: {exc}")
-            raise ValueError(f"[{self.provider_id}] JSON 解析失败: {exc}") from exc
         except Exception as exc:
             logger.error(f"[{self.provider_id}] chat_json 失败: {exc}")
             raise
+        data = response.json()
+        candidates = data.get("candidates") or []
+        parts = candidates[0].get("content", {}).get("parts", []) if candidates else []
+        text = "".join(part.get("text", "") for part in parts if not part.get("thought"))
+        return JSONResponse.from_response(LLMResponse(content=text, raw_response=data))

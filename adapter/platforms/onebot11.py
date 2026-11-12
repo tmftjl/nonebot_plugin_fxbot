@@ -513,6 +513,20 @@ def _history_content(content: Any) -> tuple[str, int]:
     return "".join(parts).strip(), images
 
 
+def _history_reply_id(content: Any) -> str:
+    """从消息段或 CQ 码里取被引用消息的 ID。"""
+    if isinstance(content, str):
+        match = re.search(r"\[CQ:reply,[^\]]*?\bid=([^,\]]+)", content)
+        return match.group(1) if match else ""
+    for segment in _segments(content):
+        if str(_field(segment, "type") or "") != "reply":
+            continue
+        data = _field(segment, "data")
+        if isinstance(data, dict):
+            return str(data.get("id") or data.get("message_id") or "")
+    return ""
+
+
 def _history_message(raw: dict[str, Any]) -> HistoryMessage | None:
     """跳过无时间和无内容的消息，正文缺失时回退到 raw_message。"""
     timestamp = raw.get("time")
@@ -531,6 +545,7 @@ def _history_message(raw: dict[str, Any]) -> HistoryMessage | None:
         user_name=str(sender.get("card") or sender.get("nickname") or raw.get("user_id") or ""),
         text=text,
         images=images,
+        reply_to_id=_history_reply_id(raw.get("message")) or _history_reply_id(raw.get("raw_message")),
     )
 
 

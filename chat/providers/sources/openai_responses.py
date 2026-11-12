@@ -9,7 +9,7 @@ from openai import AsyncOpenAI
 from nonebot import logger
 
 from ..base import ChatProvider, local_http_client
-from ..entities import LLMResponse
+from ..entities import LLMResponse, JSONResponse, LLMResponseError
 from ..register import register_provider
 
 CLIENT_TYPE = "openai_responses"
@@ -137,9 +137,6 @@ def _reasoning_text(item: Any) -> tuple[list[str], list[str]]:
 def _parse_response(response: Any, model: str) -> LLMResponse:
     """把 Responses 响应投影成 FxBot 的 LLMResponse。"""
     status = str(_value(response, "status", "") or "")
-    if status in _FAILED_STATUS:
-        details = _value(response, "error") or _value(response, "incomplete_details") or status
-        raise RuntimeError(f"Responses 请求未完整完成: {details}")
 
     content_parts: list[str] = []
     reasoning_parts: list[str] = []
@@ -168,7 +165,10 @@ def _parse_response(response: Any, model: str) -> LLMResponse:
             call_id = str(_value(item, "call_id", "") or "").strip()
             name = str(_value(item, "name", "") or "").strip()
             if not call_id or not name:
-                raise RuntimeError("Responses function_call 缺少 call_id 或 name")
+                raise LLMResponseError(
+                    LLMResponse(content="".join(content_parts), raw_response=response),
+                    "Responses function_call 缺少 call_id 或 name",
+                )
             tool_calls.append(
                 {
                     "id": call_id,
@@ -176,7 +176,7 @@ def _parse_response(response: Any, model: str) -> LLMResponse:
                     "function": {"name": name, "arguments": str(_value(item, "arguments", "") or "")},
                 }
             )
-    return LLMResponse(
+    result = LLMResponse(
         role="assistant",
         content="".join(content_parts),
         reasoning_content="".join(reasoning_parts),
@@ -185,6 +185,10 @@ def _parse_response(response: Any, model: str) -> LLMResponse:
         provider_data={"client_type": CLIENT_TYPE, "output_items": output_items},
         raw_response=response,
     )
+    if status in _FAILED_STATUS:
+        details = _value(response, "error") or _value(response, "incomplete_details") or status
+        raise LLMResponseError(result, f"Responses 请求未完整完成: {details}")
+    return result
 
 
 @register_provider(
@@ -265,7 +269,7 @@ class OpenAIResponsesProvider(ChatProvider):
         messages: list[dict[str, Any]],
         schema: dict[str, Any] | None = None,
         model: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> JSONResponse:
         """使用 Responses 原生 text.format 请求结构化输出。"""
         text_format: dict[str, Any] = {"type": "json_object"}
         if schema:
@@ -278,14 +282,10 @@ class OpenAIResponsesProvider(ChatProvider):
                 store=False,
                 text={"format": text_format},
             )
-            parsed = _parse_response(response, model or self.model_name)
-            return json.loads(parsed.content or "{}")
-        except json.JSONDecodeError as exc:
-            logger.warning(f"[{self.provider_id}] JSON 解析失败: {exc}")
-            raise ValueError(f"[{self.provider_id}] JSON 解析失败: {exc}") from exc
         except Exception as exc:
             logger.error(f"[{self.provider_id}] chat_json 失败: {exc}")
             raise
+        return JSONResponse.from_response(_parse_response(response, model or self.model_name))
 
     async def chat_continuation(
         self,

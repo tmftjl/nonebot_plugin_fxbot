@@ -130,31 +130,8 @@ def _prune(chat_dir: Path) -> None:
 
 
 def _usage_of(response: Any) -> dict[str, int]:
-    """从各协议原生响应里提取 token 用量，缺失时返回空字典。"""
-    usage = getattr(getattr(response, "raw_response", None), "usage", None)
-    if usage is None:
-        return {}
-
-    def pick(*names: str) -> int | None:
-        for name in names:
-            value = getattr(usage, name, None)
-            if isinstance(value, int):
-                return value
-        return None
-
-    prompt = pick("prompt_tokens", "input_tokens", "prompt_token_count")
-    completion = pick("completion_tokens", "output_tokens", "candidates_token_count")
-    total = pick("total_tokens", "total_token_count")
-    if total is None and (prompt is not None or completion is not None):
-        total = (prompt or 0) + (completion or 0)
-    result: dict[str, int] = {}
-    if prompt is not None:
-        result["prompt_tokens"] = prompt
-    if completion is not None:
-        result["completion_tokens"] = completion
-    if total is not None:
-        result["total_tokens"] = total
-    return result
+    """读取 Provider 已归一化的用量，不再解析原生响应。"""
+    return response.usage.to_dict() if response is not None else {}
 
 
 def _request_items(messages: Any) -> list[dict[str, Any]]:

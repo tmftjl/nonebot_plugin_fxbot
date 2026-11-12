@@ -10,10 +10,14 @@ from .base import (
 from .manager import ProviderManager, provider_manager
 from .entities import (
     LLMRequest,
+    TokenUsage,
     LLMResponse,
+    JSONResponse,
     ProviderMeta,
     ProviderType,
+    LLMResponseError,
     ProviderMetadata,
+    JSONResponseError,
 )
 from .register import list_providers, register_provider, get_provider_class
 
@@ -21,8 +25,12 @@ __all__ = [
     "BaseProvider",
     "ChatProvider",
     "EmbeddingProvider",
+    "JSONResponse",
+    "JSONResponseError",
     "LLMRequest",
     "LLMResponse",
+    "LLMResponseError",
+    "TokenUsage",
     "ProviderManager",
     "ProviderMeta",
     "ProviderMetadata",

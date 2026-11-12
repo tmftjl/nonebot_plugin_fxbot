@@ -52,6 +52,7 @@ class HistoryMessage:
     user_name: str = ""
     text: str = ""
     images: int = 0
+    reply_to_id: str = ""
 
 
 _SCENE_TYPES = frozenset({"group", "private", "channel", "guild"})

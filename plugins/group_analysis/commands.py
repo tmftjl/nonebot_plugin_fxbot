@@ -15,6 +15,7 @@ from .report import REASON_TEXT, generate, is_running, manual_label, group_name_
 from ...adapter import build_message, event_group_id, build_message_segment
 from ...utils.tz import today_str
 from ...permission import PermLevel, PermScene
+from ...chat.message_adapter import session_id_for_event
 
 analysis_cmd = P.on_regex(
     r"^\s*[#＃/／]群聊分析(?:\s+(\d{1,2}))?\s*$",
@@ -45,6 +46,7 @@ async def _handle_analysis(bot: Bot, event: Event, matcher: Matcher, groups: tup
             label=manual_label(days),
             report_date=today_str(),
             group_name=await group_name_for(bot, str(group_id)),
+            session_id=session_id_for_event(bot, event),
         )
     except Exception:
         logger.opt(exception=True).warning(f"[group_analysis] 群 {group_id} 手动日报异常")

@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from src.plugins.nonebot_plugin_fxbot.chat.providers import routing
 from src.plugins.nonebot_plugin_fxbot.config.system_defaults import SYSTEM_DEFAULTS
+from src.plugins.nonebot_plugin_fxbot.chat.providers.entities import LLMResponse, JSONResponse
 
 
 class _FakeConfigManager:
@@ -28,17 +29,17 @@ class _Provider:
         self.error = error
         self.calls = 0
 
-    async def chat(self, *args: Any, **kwargs: Any) -> str:
+    async def chat(self, *args: Any, **kwargs: Any) -> LLMResponse:
         self.calls += 1
         if self.error is not None:
             raise self.error
-        return f"reply:{self.provider_id}"
+        return LLMResponse(content=f"reply:{self.provider_id}")
 
-    async def chat_json(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+    async def chat_json(self, *args: Any, **kwargs: Any) -> JSONResponse:
         self.calls += 1
         if self.error is not None:
             raise self.error
-        return {"provider": self.provider_id}
+        return JSONResponse(data={"provider": self.provider_id}, response=LLMResponse())
 
 
 class _StatusError(RuntimeError):
@@ -106,7 +107,7 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
             async with routing.TaskProvider(["primary"], task="utils") as provider:
                 result = await provider.chat_json(messages=[{"role": "user", "content": "你好"}])
                 self.assertEqual(provider.name, "primary")
-        self.assertEqual(result, {"provider": "primary"})
+        self.assertEqual(result.data, {"provider": "primary"})
         self.assertEqual(used, ["primary"])
 
 

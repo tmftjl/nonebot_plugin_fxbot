@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-import json
 import asyncio
 from time import perf_counter
 from typing import Any
 from contextlib import AsyncExitStack
+from collections.abc import AsyncGenerator
 
 from .usage import track_model_task_usage
 from .manager import provider_manager
 from ...config import get_manager as get_config_manager
-from .entities import LLMResponse
+from .entities import TokenUsage, LLMResponse, JSONResponse, LLMResponseError
 from ..bindings import PROVIDER, get_binding
 from ..model_trace import record_model_call
 
@@ -47,13 +47,14 @@ def routed_task(task: str, fallback: str = "") -> str:
 
 
 class TaskProvider:
-    """维护单一任务模型的租约与用量上下文，不执行故障转移。"""
+    """维护单一任务模型的租约与显式用量汇总，不执行故障转移。"""
 
     def __init__(self, candidates: list[str], *, task: str = "") -> None:
         self._name = (candidates or [""])[0]
         self._stack = AsyncExitStack()
         self._provider: Any = None
         self.task = task
+        self.usage = TokenUsage()
 
     async def __aenter__(self) -> TaskProvider:
         self._provider = await self._stack.enter_async_context(provider_manager.lease(self._name))
@@ -73,7 +74,7 @@ class TaskProvider:
             raise AttributeError(item)
         return getattr(provider, item)
 
-    async def chat(self, *args: Any, **kwargs: Any) -> Any:
+    async def chat(self, *args: Any, **kwargs: Any) -> LLMResponse:
         """使用选定 Provider 生成回复，并落一份请求快照。"""
         merge_into = str(kwargs.pop("_trace_merge", "") or "")
         workflow_purpose = str(kwargs.pop("_trace_purpose", "") or "")
@@ -86,9 +87,13 @@ class TaskProvider:
                 response = await self._provider.chat(*args, **kwargs)
             return response
         except (Exception, asyncio.CancelledError) as exc:
+            if isinstance(exc, LLMResponseError):
+                response = exc.response
             error = f"{type(exc).__name__}: {exc}"
             raise
         finally:
+            if response is not None:
+                self.usage.merge(response.usage)
             key = self._record(
                 messages=_call_argument(args, kwargs, "messages", 0),
                 tools=_call_argument(args, kwargs, "tools", 3),
@@ -103,7 +108,7 @@ class TaskProvider:
             if key and response is not None:
                 response._trace_key = key
 
-    async def chat_continuation(self, *args: Any, **kwargs: Any) -> Any:
+    async def chat_continuation(self, *args: Any, **kwargs: Any) -> LLMResponse | None:
         """续写一次「只有思考没有正文」的响应；不支持续写的 Provider 返回 None。"""
         method = getattr(self._provider, "chat_continuation", None)
         if method is None:
@@ -116,9 +121,13 @@ class TaskProvider:
                 response = await method(*args, **kwargs)
             return response
         except (Exception, asyncio.CancelledError) as exc:
+            if isinstance(exc, LLMResponseError):
+                response = exc.response
             error = f"{type(exc).__name__}: {exc}"
             raise
         finally:
+            if response is not None:
+                self.usage.merge(response.usage)
             if response is not None or error:
                 previous = _call_argument(args, kwargs, "previous", 1)
                 replay = (getattr(previous, "provider_data", None) or {}).get("output_items") or []
@@ -137,20 +146,24 @@ class TaskProvider:
                 if key and response is not None:
                     response._trace_key = key
 
-    async def chat_json(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+    async def chat_json(self, *args: Any, **kwargs: Any) -> JSONResponse:
         """使用选定 Provider 生成结构化内容。"""
         started = perf_counter()
-        result: dict[str, Any] = {}
+        response: LLMResponse | None = None
         error = ""
         try:
             async with track_model_task_usage(self.task, self._provider):
                 result = await self._provider.chat_json(*args, **kwargs)
+                response = result.response
             return result
         except (Exception, asyncio.CancelledError) as exc:
+            if isinstance(exc, LLMResponseError):
+                response = exc.response
             error = f"{type(exc).__name__}: {exc}"
             raise
         finally:
-            response = LLMResponse(content=json.dumps(result, ensure_ascii=False, default=str)) if result else None
+            if response is not None:
+                self.usage.merge(response.usage)
             self._record(
                 messages=_call_argument(args, kwargs, "messages", 0),
                 tools=None,
@@ -159,8 +172,8 @@ class TaskProvider:
                 error=error,
             )
 
-    async def chat_stream(self, *args: Any, **kwargs: Any):
-        """保留流式用量上下文，结束或取消时关闭流并落快照。"""
+    async def chat_stream(self, *args: Any, **kwargs: Any) -> AsyncGenerator[LLMResponse, None]:
+        """结束或取消时关闭流，并汇总最终响应的用量和快照。"""
         started = perf_counter()
         chunks: list[str] = []
         final: LLMResponse | None = None
@@ -178,10 +191,13 @@ class TaskProvider:
                 finally:
                     await stream.aclose()
         except (Exception, asyncio.CancelledError, GeneratorExit) as exc:
+            if isinstance(exc, LLMResponseError):
+                final = exc.response
             error = f"{type(exc).__name__}: {exc}"
             raise
         finally:
             response = final or LLMResponse(content="".join(chunks))
+            self.usage.merge(response.usage)
             key = self._record(
                 messages=_call_argument(args, kwargs, "messages", 0),
                 tools=_call_argument(args, kwargs, "tools", 3),

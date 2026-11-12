@@ -1,16 +1,14 @@
-"""群历史消息拉取与本地统计。"""
+"""群历史消息拉取、统计与分析输入。"""
 
 from __future__ import annotations
 
+import re
 from typing import Any
 from datetime import datetime
 from dataclasses import dataclass
 
 from ...adapter import HistoryMessage, fetch_group_history
 from ...utils.tz import SHANGHAI_TZ
-
-MAX_TRANSCRIPT_CHARS = 40000
-MAX_MESSAGE_CHARS = 200
 
 
 @dataclass(slots=True)
@@ -71,13 +69,75 @@ def build_stats(messages: list[HistoryMessage]) -> dict[str, Any]:
     }
 
 
-def build_transcript(messages: list[HistoryMessage]) -> str:
-    """按时间正序拼接分析文本，超长时保留最近的发言。"""
-    lines: list[str] = []
+def build_analysis_messages(messages: list[HistoryMessage], bot_ids: set[str] | None = None) -> list[dict[str, Any]]:
+    """按原版规则生成分析输入：排除机器人/命令，补引用关系。"""
+    excluded = {str(item) for item in (bot_ids or set()) if str(item)}
+    referenced_ids = {message.reply_to_id for message in messages if message.reply_to_id}
+    result: list[dict[str, Any]] = []
     for message in messages:
+        if message.user_id in excluded:
+            continue
         text = " ".join(message.text.split())
-        if len(text) > MAX_MESSAGE_CHARS:
-            text = text[:MAX_MESSAGE_CHARS] + "…"
-        stamp = datetime.fromtimestamp(message.timestamp, SHANGHAI_TZ).strftime("%H:%M")
-        lines.append(f"[{stamp}] {message.user_name or message.user_id}: {text}")
-    return "\n".join(lines)[-MAX_TRANSCRIPT_CHARS:]
+        if text.startswith("/"):
+            continue
+        if message.reply_to_id:
+            text = f"[回复:{message.reply_to_id}] {text}"
+        text = re.sub(r"[\x00-\x1f\x7f-\x9f]", "", text).strip()
+        if not text:
+            continue
+        if message.message_id in referenced_ids:
+            text = f"[消息:{message.message_id}] {text}"
+        result.append(
+            {
+                "time": datetime.fromtimestamp(message.timestamp, SHANGHAI_TZ).strftime("%H:%M"),
+                "sender": message.user_name or message.user_id,
+                "content": text,
+                "user_id": message.user_id,
+            }
+        )
+    return result
+
+
+def build_user_stats(messages: list[HistoryMessage], limit: int = 20) -> list[dict[str, Any]]:
+    """按成员聚合发言量、字数、表情、时段与回复数，供称号分析使用。"""
+    users: dict[str, dict[str, Any]] = {}
+    for message in messages:
+        key = message.user_id or message.user_name or "未知成员"
+        user = users.setdefault(
+            key,
+            {
+                "user_id": message.user_id,
+                "name": message.user_name or message.user_id or "未知成员",
+                "count": 0,
+                "chars": 0,
+                "emojis": 0,
+                "hours": {},
+                "replies": 0,
+            },
+        )
+        if message.user_name:
+            user["name"] = message.user_name
+        user["count"] += 1
+        user["chars"] += len(message.text.replace("[图片]", "").replace("[表情]", "").strip())
+        user["emojis"] += message.text.count("[表情]")
+        if message.reply_to_id:
+            user["replies"] += 1
+        hour = datetime.fromtimestamp(message.timestamp, SHANGHAI_TZ).hour
+        user["hours"][hour] = user["hours"].get(hour, 0) + 1
+    ranked = sorted(users.values(), key=lambda item: item["count"], reverse=True)
+    summaries: list[dict[str, Any]] = []
+    for user in ranked[: max(1, limit)]:
+        count = user["count"]
+        night = sum(value for hour, value in user["hours"].items() if int(hour) < 6)
+        summaries.append(
+            {
+                "name": user["name"],
+                "user_id": user["user_id"],
+                "message_count": count,
+                "avg_chars": round(user["chars"] / count, 1),
+                "emoji_ratio": round(user["emojis"] / count, 2),
+                "night_ratio": round(night / count, 2),
+                "reply_ratio": round(user["replies"] / count, 2),
+            }
+        )
+    return summaries

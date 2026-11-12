@@ -10,7 +10,7 @@ from nonebot import logger
 from anthropic import AsyncAnthropic
 
 from ..base import ChatProvider, local_http_client
-from ..entities import LLMResponse
+from ..entities import LLMResponse, JSONResponse
 from ..register import register_provider
 
 
@@ -227,6 +227,7 @@ class AnthropicProvider(ChatProvider):
                 content=full_content,
                 tool_calls=calls,
                 tool_call_ids=[call["id"] for call in calls],
+                raw_response=final,
             )
         except Exception as exc:
             logger.error(f"[{self.provider_id}] Claude stream 失败: {exc}")
@@ -237,7 +238,7 @@ class AnthropicProvider(ChatProvider):
         messages: list[dict[str, Any]],
         schema: dict[str, Any] | None = None,
         model: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> JSONResponse:
         """通过提示词约束获取 JSON 输出。"""
         enhanced_messages = [dict(message) for message in messages]
         instruction = "\n\n请以 JSON 格式输出结果。只输出 JSON，不要包含任何其他文字。"
@@ -254,17 +255,5 @@ class AnthropicProvider(ChatProvider):
                     enhanced_messages[index]["content"] = content + instruction
                 break
 
-        try:
-            response = await self.chat(enhanced_messages, model=model, temperature=0.1)
-            content = response.content.strip()
-            if content.startswith("```"):
-                lines = content.split("\n")
-                content = "\n".join(lines[1:-1]) if len(lines) > 2 else content
-                content = content.replace("```json", "").replace("```", "").strip()
-            return json.loads(content)
-        except json.JSONDecodeError as exc:
-            logger.warning(f"[{self.provider_id}] JSON 解析失败: {exc}")
-            raise ValueError(f"[{self.provider_id}] JSON 解析失败: {exc}") from exc
-        except Exception as exc:
-            logger.error(f"[{self.provider_id}] chat_json 失败: {exc}")
-            raise
+        response = await self.chat(enhanced_messages, model=model, temperature=0.1)
+        return JSONResponse.from_response(response)

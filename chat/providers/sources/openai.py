@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-import json
 from typing import Any
 from collections.abc import AsyncGenerator
 
@@ -11,7 +10,7 @@ from openai import AsyncOpenAI
 from nonebot import logger
 
 from ..base import STTProvider, TTSProvider, ChatProvider, EmbeddingProvider, local_http_client
-from ..entities import LLMResponse, ProviderType
+from ..entities import LLMResponse, JSONResponse, ProviderType, LLMResponseError
 from ..register import register_provider
 
 EMBED_BATCH_LIMIT = 25
@@ -100,6 +99,8 @@ class OpenAIProvider(ChatProvider):
             logger.error(f"[{self.provider_id}] Chat 请求失败: {exc}")
             raise
 
+        if not resp.choices:
+            raise LLMResponseError(LLMResponse(raw_response=resp), "OpenAI 返回结果为空")
         msg = resp.choices[0].message
         reasoning, content = _inline_reasoning(msg.content or "", _reasoning_of(msg))
         response = LLMResponse(
@@ -139,6 +140,7 @@ class OpenAIProvider(ChatProvider):
             ],
             "temperature": temperature,
             "stream": True,
+            "stream_options": {"include_usage": True},
         }
         if tools:
             params["tools"] = tools
@@ -150,8 +152,11 @@ class OpenAIProvider(ChatProvider):
             full_content = ""
             full_reasoning = ""
             calls: dict[int, dict[str, Any]] = {}
+            usage_chunk = None
             try:
                 async for chunk in stream:
+                    if getattr(chunk, "usage", None) is not None:
+                        usage_chunk = chunk
                     if not chunk.choices:
                         continue
                     delta = chunk.choices[0].delta
@@ -179,6 +184,7 @@ class OpenAIProvider(ChatProvider):
                 reasoning_content=reasoning,
                 tool_calls=tool_calls,
                 tool_call_ids=[call["id"] for call in tool_calls],
+                raw_response=usage_chunk,
             )
         except Exception as exc:
             logger.error(f"[{self.provider_id}] Stream 请求失败: {exc}")
@@ -189,7 +195,7 @@ class OpenAIProvider(ChatProvider):
         messages: list[dict[str, Any]],
         schema: dict[str, Any] | None = None,
         model: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> JSONResponse:
         """使用 OpenAI JSON 模式请求结构化输出。"""
         params: dict[str, Any] = {
             "model": model or self.model_name,
@@ -210,14 +216,14 @@ class OpenAIProvider(ChatProvider):
 
         try:
             resp = await self.client.chat.completions.create(**params)
-            content = resp.choices[0].message.content or "{}"
-            return json.loads(content)
-        except json.JSONDecodeError as exc:
-            logger.warning(f"[{self.provider_id}] JSON 解析失败: {exc}")
-            raise ValueError(f"[{self.provider_id}] JSON 解析失败: {exc}") from exc
         except Exception as exc:
             logger.error(f"[{self.provider_id}] chat_json 失败: {exc}")
             raise
+        if not resp.choices:
+            return JSONResponse.from_response(LLMResponse(raw_response=resp))
+        msg = resp.choices[0].message
+        reasoning, content = _inline_reasoning(msg.content or "", _reasoning_of(msg))
+        return JSONResponse.from_response(LLMResponse(content=content, reasoning_content=reasoning, raw_response=resp))
 
     async def get_models(self) -> list[str]:
         """获取可用模型列表。"""

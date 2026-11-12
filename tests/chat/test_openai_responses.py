@@ -209,7 +209,7 @@ class ResponsesJsonTests(unittest.IsolatedAsyncioTestCase):
         schema = {"type": "object", "properties": {"ok": {"type": "boolean"}}}
         with unittest.mock.patch.object(self.provider.client.responses, "create", create):
             result = await self.provider.chat_json([{"role": "user", "content": "hi"}], schema)
-        self.assertEqual(result, {"ok": True})
+        self.assertEqual(result.data, {"ok": True})
         kwargs = create.await_args.kwargs
         self.assertFalse(kwargs["store"])
         self.assertEqual(kwargs["text"]["format"]["type"], "json_schema")
@@ -220,7 +220,7 @@ class ResponsesJsonTests(unittest.IsolatedAsyncioTestCase):
         create = await self._create("{}")
         with unittest.mock.patch.object(self.provider.client.responses, "create", create):
             result = await self.provider.chat_json([{"role": "user", "content": "hi"}])
-        self.assertEqual(result, {})
+        self.assertEqual(result.data, {})
         self.assertEqual(create.await_args.kwargs["text"]["format"], {"type": "json_object"})
 
     async def test_chat_json_propagates_request_errors(self) -> None:
@@ -232,7 +232,7 @@ class ResponsesJsonTests(unittest.IsolatedAsyncioTestCase):
     async def test_chat_json_propagates_parse_errors(self) -> None:
         create = await self._create("not json")
         with unittest.mock.patch.object(self.provider.client.responses, "create", create):
-            with self.assertRaises(ValueError):
+            with self.assertRaises(RuntimeError):
                 await self.provider.chat_json([{"role": "user", "content": "hi"}])
 
 
