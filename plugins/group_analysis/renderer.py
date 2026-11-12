@@ -415,7 +415,7 @@ async def render_report(report: dict[str, Any], *, theme: str = "miku", scale: f
                     page = await browser.new_page(device_scale_factor=scale)
                     try:
                         await asyncio.wait_for(page.set_content(html, wait_until="load"), timeout=_LOAD_TIMEOUT)
-                        element = await page.query_selector(".container")
+                        element = await page.query_selector(".container, .page")
                         if element:
                             return await asyncio.wait_for(element.screenshot(type="png"), timeout=_SHOT_TIMEOUT)
                         return await asyncio.wait_for(
